@@ -288,7 +288,7 @@ function buildTouchCard(client, stage, now){
 function bustedBadgeHtml(){
   return '<div class="busted-badge">' +
       '<svg class="impact-lines" viewBox="0 0 150 150" width="150" height="150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-        '<g stroke="#d9291c" stroke-width="4" stroke-linecap="round">' +
+        '<g stroke="#dc2f4a" stroke-width="4" stroke-linecap="round">' +
           '<line x1="117" y1="75" x2="147" y2="75"/>' +
           '<line x1="105" y1="105" x2="116" y2="116"/>' +
           '<line x1="75" y1="117" x2="75" y2="147"/>' +
@@ -304,8 +304,8 @@ function bustedBadgeHtml(){
         '<ellipse cx="24" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>' +
         '<ellipse cx="40" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>' +
         '<path d="M26 39q6 5 12 0" stroke="#17171a" stroke-width="2.4" stroke-linecap="round" fill="none"/>' +
-        '<circle cx="32" cy="30" r="27" fill="none" stroke="#d9291c" stroke-width="4.5"/>' +
-        '<line x1="10" y1="10" x2="54" y2="52" stroke="#d9291c" stroke-width="4.5" stroke-linecap="round"/>' +
+        '<circle cx="32" cy="30" r="27" fill="none" stroke="#dc2f4a" stroke-width="4.5"/>' +
+        '<line x1="10" y1="10" x2="54" y2="52" stroke="#dc2f4a" stroke-width="4.5" stroke-linecap="round"/>' +
       '</svg>' +
     '</div>';
 }
