@@ -289,6 +289,21 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .status-pill.st-No-show,.status-pill.st-Ghosted{background:var(--red-soft);color:var(--red-dark);}
 .status-pill.st-Rescheduled{background:var(--amber-soft);color:var(--amber);}
 
+.recent-sends{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;}
+.recent-sends-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:none;border:none;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);cursor:pointer;}
+.recent-sends-toggle:hover{color:var(--ink);}
+.recent-sends.collapsed .recent-sends-body{display:none;}
+.recent-sends.collapsed #recent-sends-chevron{transform:rotate(-90deg);}
+#recent-sends-chevron{display:inline-block;transition:transform .15s ease;}
+.recent-sends-body{border-top:1px solid var(--border);max-height:280px;overflow-y:auto;}
+.recent-send-row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);font-size:13px;}
+.recent-send-row:last-child{border-bottom:none;}
+.recent-send-row .name{font-weight:700;flex:0 0 auto;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.recent-send-row .snippet{color:var(--ink-soft);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.recent-send-row .when{color:var(--ink-faint);font-size:11.5px;flex:0 0 auto;white-space:nowrap;}
+.recent-send-row .replied-label{display:flex;align-items:center;gap:5px;flex:0 0 auto;font-size:11.5px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
+.recent-sends-empty{padding:16px 14px;color:var(--ink-faint);font-size:13px;}
+
 /* variants tab */
 .variant-stage-block{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:14px;box-shadow:var(--shadow);}
 table.variant-table{width:100%;border-collapse:collapse;margin-top:8px;}
@@ -489,12 +504,20 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <button class="tab-btn" data-action="tab" data-tab="variants">3 · Message variants</button>
     <button class="tab-btn" data-action="tab" data-tab="weekly">4 · Weekly performance</button>
     <button class="tab-btn" data-action="tab" data-tab="calendar">5 · Calendar</button>
+    <button class="tab-btn" data-action="tab" data-tab="dead">6 · Dead clients <span id="dead-count"></span></button>
   </div>
 
   <div class="tab-panel active" id="tab-calls">
     <div class="calls-toolbar">
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>
+    </div>
+    <div class="recent-sends" id="recent-sends-block">
+      <button class="recent-sends-toggle" data-action="toggle-recent-sends" type="button">
+        <span id="recent-sends-title">Recent sends</span>
+        <span id="recent-sends-chevron">▾</span>
+      </button>
+      <div class="recent-sends-body" id="recent-sends-body"></div>
     </div>
     <div class="board board-single">
       <div class="board-col">
@@ -548,6 +571,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       </div>
     </div>
     <div id="calendar-body"></div>
+  </div>
+
+  <div class="tab-panel" id="tab-dead">
+    <p class="dead-tab-caption">Went sideways (No-show / Ghosted / Rescheduled), got a follow-up at least 14 days ago, and never rebooked. Purely computed — nothing here is deleted, and anyone who books again drops back out of this list automatically.</p>
+    <div style="overflow-x:auto;">
+      <table class="client-table">
+        <thead><tr><th>Name</th><th>Last call</th><th>Status</th><th>Last follow-up sent</th><th>Phone</th><th></th></tr></thead>
+        <tbody id="dead-table-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-note" id="dead-empty-note" style="display:none;">Nobody's gone dead — everyone who went sideways has either been rebooked or is still inside the 14-day follow-up window.</div>
   </div>
 
 </div>

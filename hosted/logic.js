@@ -21,6 +21,10 @@ var VALID_STATUSES = ['Booked','Confirmed','Reminded','Completed','No-show','Res
 
 var STOP_1TO4 = {Completed:true,'No-show':true,Ghosted:true};
 
+// How often a stalled no-show/reschedule nudge re-fires while nothing has
+// changed — a reply that never turns into an actual date doesn't stop it.
+var FOLLOWUP_REFIRE_DAYS = 4;
+
 
 /* ---------- small utils ---------- */
 function uid(){ return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -33,6 +37,22 @@ function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, function
 
 function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
 
+function normalizedPhone(phone){ return String(phone||'').replace(/\D/g,''); }
+
+// Same person booking again, not a stranger — phone AND email must both
+// match and both be present, so an empty-vs-empty pair never counts.
+// Phone number alone is the reliable identity signal here — it's literally
+// what determines who the text goes to, and real people frequently rebook
+// under a different email (personal vs. work, a typo the first time, etc).
+// Requiring both to match let real rebookings (same phone, different email)
+// slip through undetected. Only fall back to email when a phone is missing.
+function sameContact(a, b){
+  var pa = normalizedPhone(a.phone), pb = normalizedPhone(b.phone);
+  if(pa && pb) return pa === pb;
+  var ea = String(a.email||'').trim().toLowerCase(), eb = String(b.email||'').trim().toLowerCase();
+  return !!ea && ea === eb;
+}
+
 
 /* ============================================================
    1) DATA MODEL, DEFAULTS, MIGRATION
@@ -44,31 +64,50 @@ function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
 function buildDefaultVariants(){
   return {
     welcome: [
-      {id:'w1', builtin:true, text:"Hi {name}! John here with MarketMakerMGMT — excited to have you locked in for {date} at {time}. We'll map out exactly how realtors are turning YouTube into a steady stream of buyer and seller leads, and what that could look like for your business. Go ahead and block off the time — you won't want to miss this one!"},
-      {id:'w2', builtin:true, text:"Hey {name}, John here! Really looking forward to our call on {date} at {time}. We'll dig into how realtors are using YouTube to grow their clientele, and how you can do the same for your business. Save the spot on your calendar — this one's worth it."},
-      {id:'w3', builtin:true, needsChannel:true, text:"Hi {name}! John with MarketMakerMGMT — just took a look at {channel} and I'm looking forward to our call on {date} at {time}. I'll bring specific ideas for turning it into a real lead source for your business. Block off the time — worth every minute!"}
+      {id:'w1', builtin:true, text:"Hey {name}! John here — excited to have you locked in for {date} at {time}. We'll go over how realtors are using YouTube to bring in more buyer and seller leads, and what that could look like for you. Go ahead and block off the time!"},
+      {id:'w2', builtin:true, text:"Hi {name}, John here with MarketMakerMGMT. Really looking forward to our call on {date} at {time} — we'll talk through turning your channel into a real lead source for your business. Save the spot on your calendar!"},
+      {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}! John here — just took a look at {channel} and I'm excited for our call on {date} at {time}. Got a few specific ideas for turning it into a lead source for your business. Talk soon!"}
     ],
     monday: [
-      {id:'m1', builtin:true, text:"Hi {name}, quick heads up — our YouTube growth call is this {weekday} at {time}. Can't wait to show you what's possible for your channel and your business. Make sure it's locked on your calendar!"},
-      {id:'m2', builtin:true, text:"Hey {name}, John here. Reminder that our call is set for {weekday} at {time} this week — we'll be talking real strategy for turning your YouTube channel into a lead machine. Keep that time blocked!"}
+      {id:'m1', builtin:true, text:"Hey {name}, quick heads up — our call is this {weekday} at {time}. Excited to show you what's possible for your channel. Keep it on your calendar!"},
+      {id:'m2', builtin:true, text:"Hi {name}, John here. Just a reminder our call is set for {weekday} at {time} this week — we'll talk real strategy for your YouTube channel. Talk soon!"}
     ],
     midcheckin: [
-      {id:'c1', builtin:true, text:"Hi {name}, excited for our call on {date}! Still good on your end? I've got some ideas specific to growing your real estate business through YouTube that I think you'll love."},
-      {id:'c2', builtin:true, text:"Hey {name}, wanted to check in ahead of our {date} call. Really looking forward to it — we'll cover exactly how realtors are using YouTube to bring in more clients. Still on your calendar?"},
-      {id:'c3', builtin:true, needsChannel:true, text:"Hi {name}, been thinking about {channel} ahead of our {date} call — I've got a couple of specific ideas I think could really move the needle for you. Still good on your end?"}
+      {id:'c1', builtin:true, text:"Hey {name}, excited for our call on {date}! Still good on your end? Got some ideas specific to your business I think you'll like."},
+      {id:'c2', builtin:true, text:"Hi {name}, just checking in ahead of our {date} call — still looking forward to it. Let me know if anything's changed on your end!"},
+      {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, been thinking about {channel} ahead of our {date} call — got a couple ideas I think could really help. Still good on your end?"}
     ],
     dayof: [
-      {id:'d1', builtin:true, text:"Hi {name}, today's the day! Our call is at {time} — can't wait to talk through growing your clientele with YouTube. Here's the link: {link}"},
-      {id:'d2', builtin:true, text:"Hey {name}, see you at {time} today! Ready to dive into your YouTube growth strategy. Join here: {link}"}
+      {id:'d1', builtin:true, text:"Hey {name}, today's the day! Our call is at {time} — talk soon. Here's the link: {link}"},
+      {id:'d2', builtin:true, text:"Hi {name}, see you at {time} today! Here's the link: {link}"},
+      {id:'d3', builtin:true, text:"Hey {name}, today's the day! Excited to dig into your channel at {time} — here's the link: {link}"},
+      {id:'d4', builtin:true, text:"Hi {name}, see you at {time} today — got some good stuff to walk you through! Here's the link: {link}"}
     ],
     recovery: [
-      {id:'r1', builtin:true, text:"Hi {name}, haven't heard back in a bit — totally understand things get busy! Want me to send over a couple new times so we can grab 15 minutes and talk through growing your business with YouTube?"},
-      {id:'r2', builtin:true, text:"Hey {name}, just checking in — looks like we lost track of a new time for our call. No worries at all, just let me know what works and I'll get us back on the calendar."}
+      {id:'r1', builtin:true, text:"Hey {name}, haven't heard back in a bit — no worries at all, things get busy! Want me to send over a couple new times so we can grab 15 minutes?"},
+      {id:'r2', builtin:true, text:"Hi {name}, just checking in — looks like we lost track of a time for our call. No stress, just let me know what works and I'll get us back on the calendar."}
     ],
     noshow: [
-      {id:'n1', builtin:true, text:"Hi {name}, John here — looks like we missed each other for our {date} call. No stress at all, it happens! Want me to send over a couple of new times so we can still walk through the YouTube plan for your business?"},
-      {id:'n2', builtin:true, text:"Hey {name}, sorry we didn't get to connect on {date}. I'd still love to show you what's working for realtors on YouTube right now — just reply with a day that works and I'll get us back on the books."},
-      {id:'n3', builtin:true, needsChannel:true, text:"Hi {name}, we missed each other on {date} — no worries at all. I still have a few specific ideas for {channel} I think you'll want to hear. Want me to send over some new times?"}
+      {id:'n1', builtin:true, text:"Hey {name}, John here — looks like we missed each other for our {date} call. No worries at all, it happens! Want me to send over a couple new times?"},
+      {id:'n2', builtin:true, text:"Hi {name}, sorry we didn't connect on {date}. I'd still love to show you what's working for realtors on YouTube right now — just let me know a day that works and I'll get us back on the books."},
+      {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, we missed each other on {date} — no worries. Still got a few ideas for {channel} I think you'll want to hear. Want me to send over some new times?"}
+    ],
+    // Fires instead of "welcome" when a new booking is matched (by phone +
+    // email) to a contact who already exists in the system but never actually
+    // had a call with John (ghosted / no-showed / rescheduled and vanished) —
+    // someone coming back around, not a stranger, so the tone skips the
+    // introduction but still reads as a first real connection.
+    rebooked: [
+      {id:'rb1', builtin:true, text:"Hey {name}, John here — glad we're finally locked in for {date} at {time}! Looking forward to connecting and going over the YouTube plan for your business."},
+      {id:'rb2', builtin:true, text:"Hi {name}, saw we've got a new time set for {date} at {time} — excited to finally get on the phone and talk strategy."}
+    ],
+    // Fires instead of "rebooked" when the prior contact's last known status
+    // was Completed — they already had a real call with John, this is a
+    // genuine second call, and the copy should read that way (not like
+    // they're a stranger or a no-show finally showing up).
+    followup: [
+      {id:'f1', builtin:true, text:"Hey {name}, glad we're picking this back up — got you down for {date} at {time}. Looking forward to continuing where we left off!"},
+      {id:'f2', builtin:true, text:"Hi {name}, John here — excited we're back on for {date} at {time}. Let's keep building on what we talked about last time!"}
     ]
   };
 }
@@ -126,7 +165,9 @@ function sanitizeClient(raw, fallbackId){
     stalledSince: typeof raw.stalledSince === 'string' ? raw.stalledSince : null,
     ignored: !!raw.ignored,
     manuallyAdded: !!raw.manuallyAdded,
-    snoozedUntil: sanitizeSnoozedUntil(raw.snoozedUntil)
+    snoozedUntil: sanitizeSnoozedUntil(raw.snoozedUntil),
+    rebooked: !!raw.rebooked,
+    hadPriorCall: !!raw.hadPriorCall
   };
 }
 
@@ -317,7 +358,10 @@ function computeDue(client, now){
   var stopCadence = !!STOP_1TO4[client.status];
 
   if(!stopCadence){
-    if(!hasSentStage(client, 'welcome')) due.push('welcome');
+    if(client.rebooked){
+      var rebookStage = client.hadPriorCall ? 'followup' : 'rebooked';
+      if(!hasSentStage(client, rebookStage)) due.push(rebookStage);
+    } else if(!hasSentStage(client, 'welcome')) due.push('welcome');
 
     if(callDate){
       var callKey = tzDateKey(callDate, tz);
@@ -340,22 +384,33 @@ function computeDue(client, now){
     }
   }
 
+  // "Rescheduled" (or Ghosted) with no new date locked in yet — including
+  // someone who replied wanting to reschedule but never actually gave a day —
+  // gets a gentle nudge every REFIRE_DAYS, not just once. It keeps firing for
+  // as long as they sit in this status; the only things that stop it are an
+  // actual rebooking (status changes) or John manually re-logging an outcome.
   if((client.status === 'Ghosted' || client.status === 'Rescheduled') && client.stalledSince){
     var stalledMs = Date.parse(client.stalledSince);
     if(!isNaN(stalledMs)){
       var daysSinceStall = (now.getTime() - stalledMs) / 86400000;
       if(daysSinceStall >= 2){
         var lastRecovery = lastSentAtMs(client, 'recovery');
-        if(lastRecovery === null || lastRecovery < stalledMs) due.push('recovery');
+        var recoveryDueAgain = lastRecovery === null || (now.getTime() - lastRecovery) / 86400000 >= FOLLOWUP_REFIRE_DAYS;
+        if(recoveryDueAgain) due.push('recovery');
       }
     }
   }
 
+  // Same story for a straight no-show: one rescue text used to be it. Now it
+  // re-fires every REFIRE_DAYS through the 14-day window — covers exactly the
+  // "said they wanted to reschedule but never gave me a day" case, since a
+  // reply alone doesn't change their status or stop the nudges.
   if(client.status === 'No-show' && callDate){
     var daysSinceCall = (now.getTime() - callDate.getTime()) / 86400000;
     if(daysSinceCall >= 0 && daysSinceCall <= 14){
       var lastRescue = lastSentAtMs(client, 'noshow');
-      if(lastRescue === null || lastRescue < callDate.getTime()) due.push('noshow');
+      var rescueDueAgain = lastRescue === null || (now.getTime() - lastRescue) / 86400000 >= FOLLOWUP_REFIRE_DAYS;
+      if(rescueDueAgain) due.push('noshow');
     }
   }
 
@@ -466,17 +521,25 @@ function markSent(state, clientId, stage, text){
   var client = state.clients[clientId];
   if(!client) return;
   var variant = pickVariant(state, stage, client);
+  // If the text sent doesn't match what that variant actually renders to,
+  // the sender customized it by hand (or it's AI-generated from notes) — log
+  // it as 'custom' rather than crediting/debiting the underlying template's
+  // bandit stats with a send that isn't really that template's copy.
+  var wasCustomized = text !== renderTemplate(variant.text, client);
+  var loggedVariantId = wasCustomized ? 'custom' : variant.id;
   client.messageLog.push({
     stage: stage,
-    variantId: variant.id,
+    variantId: loggedVariantId,
     text: text,
     sentAt: nowISO(),
     responded: false,
     respondedAt: null
   });
-  if(!state.variantStats[stage]) state.variantStats[stage] = {};
-  if(!state.variantStats[stage][variant.id]) state.variantStats[stage][variant.id] = {sends:0,responses:0};
-  state.variantStats[stage][variant.id].sends++;
+  if(!wasCustomized){
+    if(!state.variantStats[stage]) state.variantStats[stage] = {};
+    if(!state.variantStats[stage][variant.id]) state.variantStats[stage][variant.id] = {sends:0,responses:0};
+    state.variantStats[stage][variant.id].sends++;
+  }
 
   if(!STOP_1TO4[client.status]){
     if((stage === 'monday' || stage === 'midcheckin') && client.status === 'Booked'){
@@ -677,11 +740,22 @@ function clientFromICSEvent(ev){
     name = bm ? bm[1].trim() : 'Unknown';
   }
   var phone = extractPhone(ev.description) || extractPhone(ev.summary);
-  var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){ return !/@marketmakermgmt\.com$/i.test(e); });
+  // The booking-form description always states the client's own email right
+  // after their name ("Booked by\n{name}\n{email}\n{phone}") — that's a far
+  // more reliable source than the calendar invite's attendee list, which can
+  // include internal teammates cc'd on the call using a personal (non-
+  // @marketmakermgmt.com) address that the exclusion filter can't catch.
+  // Only fall back to scraping attendees if the description doesn't have one.
+  var descEmailMatch = (ev.description||'').match(EMAIL_RE);
+  var email = descEmailMatch ? descEmailMatch[0].toLowerCase() : '';
+  if(!email){
+    var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){ return !/@marketmakermgmt\.com$/i.test(e); });
+    email = emails[0] || '';
+  }
   var bookedDate = ev.created ? (parseICSDate(ev.created) || nowISO()) : nowISO();
   return {
     googleEventId: ev.uid || null,
-    name: name, phone: phone, email: emails[0] || '',
+    name: name, phone: phone, email: email,
     youtubeLink: extractYoutube(ev.description),
     meetLink: extractMeetLink(ev.description),
     callDateTime: dtISO,
@@ -773,6 +847,24 @@ function commitImportedClients(state, parsedList){
       updated++;
     } else {
       var id = uid();
+      // A new event, but is it a stranger or someone already in the system
+      // coming back around under a fresh booking (their own event id, not a
+      // reschedule of the old one)? Same phone + email, a different call
+      // time, is enough to call it a rebooking rather than a first hello.
+      // Further split by whether a prior call actually happened: someone who
+      // ghosted/no-showed/rescheduled and is finally back on the books reads
+      // very differently from someone who already talked to John once and is
+      // coming back for a real second call — see "followup" vs "rebooked".
+      var isRebooking = false, hadPriorCall = false;
+      Object.keys(state.clients).some(function(cid){
+        var other = state.clients[cid];
+        if(!sameContact(other, p)) return false;
+        var ot = safeDate(other.callDateTime), nt = safeDate(p.callDateTime);
+        if(ot && nt && ot.getTime() === nt.getTime()) return false;
+        isRebooking = true;
+        hadPriorCall = other.status === 'Completed';
+        return true;
+      });
       state.clients[id] = {
         id: id, googleEventId: p.googleEventId || null,
         name: p.name, phone: p.phone || '', email: p.email || '',
@@ -781,7 +873,8 @@ function commitImportedClients(state, parsedList){
         timezone: timezoneForClient(p.phone, 'America/New_York'),
         status: 'Booked', messageLog: [], notes:'', recap:'',
         closeOutcome: undefined, reschedules:[], rescheduleCount:0,
-        stalledSince: null, ignored:false, manuallyAdded: !p.googleEventId, snoozedUntil:{}
+        stalledSince: null, ignored:false, manuallyAdded: !p.googleEventId, snoozedUntil:{},
+        rebooked: isRebooking, hadPriorCall: hadPriorCall
       };
       added++;
     }
@@ -855,9 +948,99 @@ function computeHealthAlerts(state){
     if(!groups[key]) groups[key] = [];
     groups[key].push(c);
   });
-  var dupGroups = Object.keys(groups).map(function(k){ return groups[k]; }).filter(function(g){ return g.length > 1; });
+  // A real "duplicate booking" is two entries for the same person within a
+  // few hours of each other — an accidental double-submit of the same slot.
+  // Two entries for the same person on genuinely different dates is a
+  // legitimate rebooking, already handled by its own rebooked/followup
+  // messaging — flagging that here too would just be permanent noise on
+  // exactly the pattern the app is now designed to expect.
+  var DUPLICATE_WINDOW_MS = 3 * 3600000;
+  var dupGroups = Object.keys(groups).map(function(k){ return groups[k]; }).filter(function(g){
+    if(g.length < 2) return false;
+    for(var i=0;i<g.length;i++){
+      for(var j=i+1;j<g.length;j++){
+        var ti = safeDate(g[i].callDateTime), tj = safeDate(g[j].callDateTime);
+        if(ti && tj && Math.abs(ti.getTime() - tj.getTime()) < DUPLICATE_WINDOW_MS) return true;
+        if(!ti && !tj) return true;
+      }
+    }
+    return false;
+  });
   if(dupGroups.length) alerts.push({type:'duplicate', groups:dupGroups});
+
+  // Once status flips to a stop-cadence status (Completed/No-show/Ghosted),
+  // computeDue permanently stops surfacing welcome/monday/midcheckin/dayof for
+  // that client — correct once they've actually been texted, but if that
+  // status landed *before* a single text ever went out, they're silently
+  // dropped forever with no further prompt to catch it.
+  var neverTexted = clients.filter(function(c){
+    return STOP_1TO4[c.status] && c.messageLog.length === 0;
+  });
+  if(neverTexted.length) alerts.push({type:'never-texted', clients:neverTexted});
+
+  // Catches the same gap BEFORE it happens instead of after: a call inside
+  // the next 48 hours where no welcome/rebooked/followup ever went out. Once
+  // the call passes and status flips to a stop-cadence value, this same
+  // client falls into "never-texted" above — this is the early-warning
+  // version, while there's still time to actually send something.
+  var imminentUntexted = clients.filter(function(c){
+    if(STOP_1TO4[c.status]) return false;
+    var d = safeDate(c.callDateTime);
+    if(!d) return false;
+    var hoursUntil = (d.getTime() - now.getTime()) / 3600000;
+    if(hoursUntil < 0 || hoursUntil > 48) return false;
+    var firstStage = c.rebooked ? (c.hadPriorCall ? 'followup' : 'rebooked') : 'welcome';
+    return !hasSentStage(c, firstStage);
+  });
+  if(imminentUntexted.length) alerts.push({type:'imminent-untexted', clients:imminentUntexted});
+
   return alerts;
+}
+
+
+var DEAD_ELIGIBLE_STATUSES = {'No-show':true, Ghosted:true, Rescheduled:true};
+
+// A client goes to the Dead tab when the "keep them interested" follow-up
+// (recovery/noshow/rebooked/followup — or, if none was ever sent, the call
+// date itself) is 14+ days in the past AND nobody has rebooked them since.
+// Purely computed, never written back to client.status — reactivating them
+// (a new booking comes in and matches by phone+email) just makes them fall
+// back out of this list on the next render, no manual "undo" needed.
+//
+// Completed-but-not-closed clients are eligible too: they had a real call,
+// it didn't close, and if two weeks pass with no follow-up call on the
+// books, that's the same "gone cold" signal as a ghost who never rebooked —
+// closed clients are never eligible, obviously.
+function isDeadClient(client, allClients, now, deadAfterDays){
+  deadAfterDays = deadAfterDays == null ? 14 : deadAfterDays;
+  if(client.ignored) return false;
+  var completedNotClosed = client.status === 'Completed' && client.closeOutcome !== 'Closed';
+  if(!DEAD_ELIGIBLE_STATUSES[client.status] && !completedNotClosed) return false;
+
+  var rebookedSince = allClients.some(function(other){
+    if(other.id === client.id) return false;
+    if(!sameContact(other, client)) return false;
+    var ot = safeDate(other.callDateTime), ct = safeDate(client.callDateTime);
+    return ot && (!ct || ot.getTime() > ct.getTime());
+  });
+  if(rebookedSince) return false;
+
+  var followUpMs = null;
+  ['recovery','noshow','rebooked','followup'].forEach(function(stage){
+    var t = lastSentAtMs(client, stage);
+    if(t !== null && (followUpMs === null || t > followUpMs)) followUpMs = t;
+  });
+  var referenceMs = followUpMs !== null ? followUpMs : (safeDate(client.callDateTime) ? safeDate(client.callDateTime).getTime() : null);
+  if(referenceMs === null) return false;
+
+  var daysSince = (now.getTime() - referenceMs) / 86400000;
+  return daysSince >= deadAfterDays;
+}
+
+function computeDeadClients(state, now, deadAfterDays){
+  now = now || new Date();
+  var all = Object.keys(state.clients).map(function(k){ return state.clients[k]; });
+  return all.filter(function(c){ return isDeadClient(c, all, now, deadAfterDays); });
 }
 
 
@@ -869,17 +1052,26 @@ function computeHealthAlerts(state){
 function getTextTodayList(state, now, searchQuery){
   now = now || new Date();
   var q = (searchQuery||'').trim().toLowerCase();
+  var allClients = Object.keys(state.clients).map(function(k){ return state.clients[k]; });
   var items = [];
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
     if(c.ignored) return;
     if(q && c.name.toLowerCase().indexOf(q) === -1) return;
+    // A client who's gone cold long enough to show up in the Dead list has,
+    // by definition, already gotten their last recovery/noshow/rebooked
+    // touch — queuing them here too would mean chasing leads forever even
+    // after they've been written off. New activity (a rebooking) clears
+    // isDeadClient's condition on its own, so this stays self-correcting.
+    if(isDeadClient(c, allClients, now)) return;
     var due = computeDue(c, now);
     due.forEach(function(stage){ items.push({client:c, stage:stage}); });
   });
   items.sort(function(a,b){
     function rank(it){
       if(it.stage === 'welcome' && !hasSentStage(it.client,'welcome')) return 0;
+      if(it.stage === 'rebooked' && !hasSentStage(it.client,'rebooked')) return 0;
+      if(it.stage === 'followup' && !hasSentStage(it.client,'followup')) return 0;
       if(it.stage === 'noshow') return 1;
       return 2;
     }
@@ -893,6 +1085,30 @@ function getTextTodayList(state, now, searchQuery){
 
 
 function byCallDate(a,b){ var da=safeDate(a.callDateTime), db=safeDate(b.callDateTime); return (da?da.getTime():0)-(db?db.getTime():0); }
+
+
+// Recently-sent messages, newest first, so "did they reply?" can be reviewed
+// in one place at the top of the Calls tab — the per-card quick-reply toggle
+// only appears once a client has a *second* touch due, so a first-touch-only
+// client (the common case right after a booking) never surfaces it there.
+function getRecentSends(state, now, days){
+  now = now || new Date();
+  days = days || 3;
+  var cutoff = now.getTime() - days * 86400000;
+  var out = [];
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    if(c.ignored) return;
+    c.messageLog.forEach(function(m, idx){
+      var t = Date.parse(m.sentAt);
+      if(!isNaN(t) && t >= cutoff && t <= now.getTime()){
+        out.push({client:c, idx:idx, message:m});
+      }
+    });
+  });
+  out.sort(function(a,b){ return Date.parse(b.message.sentAt) - Date.parse(a.message.sentAt); });
+  return out;
+}
 
 
 // Delta vs. the prior equivalent period ("today" -> yesterday, "week" -> the
@@ -1159,6 +1375,8 @@ var __LOGIC_EXPORTS__ = {
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
+  sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
+  getRecentSends: getRecentSends,
   trendHtml: trendHtml, tzChipInfo: tzChipInfo, lastMessageIndex: lastMessageIndex,
   computeRescueScorecard: computeRescueScorecard, computeInsights: computeInsights, isoWeekLabel: isoWeekLabel,
   addDays: addDays, addMonths: addMonths, startOfMonth: startOfMonth, isSameLocalDay: isSameLocalDay,

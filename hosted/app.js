@@ -8,7 +8,6 @@
    calls the logic.js globals directly, exactly as in the local build. */
 
 
-
 /* ============================================================
    6) IMPORT — .ics, bulk paste, manual add
    ============================================================ */
@@ -59,7 +58,7 @@ function slimerSvg(size){
 
 var STATE = null;
 
-var UI = {tab:'calls', statsRange:'today', callsSearch:'', clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date()};
+var UI = {tab:'calls', statsRange:'today', callsSearch:'', clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -92,10 +91,12 @@ function renderAll(){
   renderStats();
   renderTodos();
   renderCallsBoard();
+  renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
   renderWeeklyTab();
   renderCalendarTab();
+  renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;
   var eodEl = el('eod-count'); if(eodEl) eodEl.textContent = '(' + eodCount + ')';
 }
@@ -112,6 +113,24 @@ function renderHealthAlerts(){
       ]);
       div.innerHTML = '<strong>' + a.clients.length + ' upcoming client(s)</strong> have no phone number — they can\'t be texted: ' + a.clients.map(function(c){ return escapeHtml(c.name); }).join(', ');
       box.appendChild(div);
+    } else if(a.type === 'never-texted'){
+      var div2 = document.createElement('div');
+      div2.className = 'alert alert-danger';
+      var shown = a.clients.slice(0, 8);
+      var rest = a.clients.length - shown.length;
+      div2.innerHTML = '<strong>' + a.clients.length + ' client(s) never got a single text</strong> — no welcome, no reminder, nothing, before their status locked the cadence out: ' +
+        shown.map(function(c){ return escapeHtml(c.name) + ' (' + escapeHtml(c.status) + ')'; }).join(', ') +
+        (rest > 0 ? ', +' + rest + ' more (see All clients tab)' : '');
+      box.appendChild(div2);
+    } else if(a.type === 'imminent-untexted'){
+      var div3 = document.createElement('div');
+      div3.className = 'alert alert-danger';
+      var shown3 = a.clients.slice(0, 8);
+      var rest3 = a.clients.length - shown3.length;
+      div3.innerHTML = '<strong>' + a.clients.length + ' call(s) in the next 48 hours with no text sent yet</strong> — catch these before the call happens: ' +
+        shown3.map(function(c){ return escapeHtml(c.name); }).join(', ') +
+        (rest3 > 0 ? ', +' + rest3 + ' more' : '');
+      box.appendChild(div3);
     } else if(a.type === 'duplicate'){
       a.groups.forEach(function(g){
         var div = document.createElement('div');
@@ -316,6 +335,40 @@ function renderCallsBoard(){
 }
 
 
+/* ---- recent sends: "did they reply?" review, newest first ---- */
+function renderRecentSends(){
+  var block = el('recent-sends-block');
+  var body = el('recent-sends-body');
+  var title = el('recent-sends-title');
+  if(!block || !body || !title) return;
+  block.classList.toggle('collapsed', !UI.recentSendsOpen);
+
+  var now = new Date();
+  var recent = getRecentSends(STATE, now, 3);
+  title.textContent = 'Recent sends (last 3 days)' + (recent.length ? ' — ' + recent.length : '');
+  body.innerHTML = '';
+  if(!recent.length){
+    body.appendChild(h('div',{class:'recent-sends-empty'},['Nothing sent in the last 3 days.']));
+    return;
+  }
+  recent.forEach(function(it){
+    var sentAt = safeDate(it.message.sentAt);
+    var when = sentAt ? (fmtDate(sentAt, it.client.timezone) + ' ' + fmtTime(sentAt, it.client.timezone)) : '';
+    var repliedCb = h('input',{type:'checkbox','data-action':'toggle-replied-quick','data-cid':it.client.id,'data-idx':String(it.idx)});
+    repliedCb.checked = !!it.message.responded;
+    var label = h('label',{class:'replied-label'},[repliedCb, 'replied']);
+    var stageChip = h('span',{class:'stage-chip' + (it.message.stage==='noshow'?' noshow':'') + (it.message.stage==='recovery'?' recovery':'')},[it.message.stage]);
+    body.appendChild(h('div',{class:'recent-send-row'},[
+      h('span',{class:'name'},[it.client.name]),
+      stageChip,
+      h('span',{class:'snippet'},[it.message.text]),
+      h('span',{class:'when'},[when]),
+      label
+    ]));
+  });
+}
+
+
 /* ---- all clients tab ---- */
 function renderClientsTab(){
   var chipsBox = el('status-chips'); if(!chipsBox) return;
@@ -366,6 +419,44 @@ function renderClientsTab(){
 
 
 /* ---- variants tab ---- */
+function lastFollowUpSentAt(client){
+  var latest = null;
+  ['recovery','noshow','rebooked','followup'].forEach(function(stage){
+    var m = lastSentAtMs(client, stage);
+    if(m !== null && (latest === null || m > latest)) latest = m;
+  });
+  return latest;
+}
+
+function renderDeadTab(){
+  var tbody = el('dead-table-body'); if(!tbody) return;
+  var now = new Date();
+  var dead = computeDeadClients(STATE, now).slice().sort(function(a,b){
+    var fa = lastFollowUpSentAt(a), fb = lastFollowUpSentAt(b);
+    // oldest follow-up first — the ones that have been cold longest surface at the top
+    return (fa===null?0:fa) - (fb===null?0:fb);
+  });
+  var countEl = el('dead-count'); if(countEl) countEl.textContent = dead.length ? '(' + dead.length + ')' : '';
+  var emptyNote = el('dead-empty-note'); if(emptyNote) emptyNote.style.display = dead.length ? 'none' : '';
+  tbody.innerHTML = '';
+  dead.forEach(function(c){
+    var callD = safeDate(c.callDateTime);
+    var callWhen = callD ? (fmtDate(callD, c.timezone) + ' ' + fmtTime(callD, c.timezone)) : '—';
+    var fMs = lastFollowUpSentAt(c);
+    var followWhen = fMs !== null ? fmtDate(new Date(fMs), c.timezone) : 'never sent';
+    var tr = h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
+      h('td',{},[c.name]),
+      h('td',{},[callWhen]),
+      h('td',{},[h('span',{class:'status-pill st-'+c.status},[statusLabel(c.status)])]),
+      h('td',{},[followWhen]),
+      h('td',{},[c.phone || '—']),
+      h('td',{},[h('button',{class:'btn-ghost btn btn-sm','data-action':'delete-client-quick','data-cid':c.id,title:'Remove this client entirely'},['Delete'])])
+    ]);
+    tbody.appendChild(tr);
+  });
+}
+
+
 function renderVariantsTab(){
   var box = el('variant-stage-blocks'); if(!box) return;
   box.innerHTML = '';
@@ -831,7 +922,8 @@ function openClientModal(clientId){
       '<button class="btn btn-sm' + (c.closeOutcome==='Closed'?' btn-green':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Closed">Closed</button>' +
       '<button class="btn btn-sm' + (c.closeOutcome==='Not closed'?' btn-primary':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Not closed">Not closed</button>' +
     '</div></div>' +
-    '<div class="field-row"><label>Message log</label>' + msgLog + '</div>',
+    '<div class="field-row"><label>Message log</label>' + msgLog + '</div>' +
+    '<div class="field-row" style="text-align:right;"><a href="#" class="delete-client-link" data-action="delete-client-quick" data-cid="'+c.id+'" title="Remove this client entirely">Delete client</a></div>',
     true
   );
 }
@@ -913,6 +1005,44 @@ document.addEventListener('click', function(ev){
   switch(action){
     case 'toggle-menu':
       el('overflow-menu').classList.toggle('hidden');
+      break;
+    case 'sign-out':
+      el('overflow-menu').classList.add('hidden');
+      window.GB_SUPABASE.auth.signOut();
+      break;
+    case 'connect-calendar': {
+      el('overflow-menu').classList.add('hidden');
+      var priority = Number(target.getAttribute('data-priority'));
+      var label = target.getAttribute('data-label');
+      window.GB_SUPABASE.auth.getUser().then(function(res){
+        var userId = res.data.user && res.data.user.id;
+        if(!userId) return;
+        var state = btoa(JSON.stringify({userId: userId, priority: priority, label: label}));
+        var params = new URLSearchParams({
+          client_id: '1060862353263-1tfnpumq29898ffrnc5oh65b211v8ovr.apps.googleusercontent.com',
+          redirect_uri: 'https://gqfpsjksosxvszzhhezu.functions.supabase.co/google-calendar-callback',
+          response_type: 'code',
+          scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email',
+          access_type: 'offline',
+          prompt: 'consent',
+          state: encodeURIComponent(state)
+        });
+        window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+      });
+      break;
+    }
+    case 'sync-calendar-now':
+      el('overflow-menu').classList.add('hidden');
+      showToast('Syncing calendar…');
+      window.GB_SUPABASE.functions.invoke('google-calendar-sync').then(function(res){
+        if(res.error){ showToast('Sync failed — try again in a bit.'); console.error(res.error); return; }
+        var cals = (res.data && res.data.results && res.data.results[0] && res.data.results[0].calendars) || [];
+        var added = cals.reduce(function(sum,c){ return sum + (c.added||0); }, 0);
+        var updated = cals.reduce(function(sum,c){ return sum + (c.updated||0); }, 0);
+        if(!cals.length){ showToast('No calendar connected yet — use "Connect calendar" first.'); return; }
+        showToast('Synced: ' + added + ' new, ' + updated + ' updated.');
+        init();
+      });
       break;
     case 'tab':
       UI.tab = target.getAttribute('data-tab');
@@ -1004,6 +1134,10 @@ document.addEventListener('click', function(ev){
       toggleReplied(STATE, cid, parseInt(target.getAttribute('data-idx'),10));
       renderAll();
       break;
+    case 'toggle-recent-sends':
+      UI.recentSendsOpen = !UI.recentSendsOpen;
+      renderRecentSends();
+      break;
     case 'copy-text': {
       var text = getCardText(STATE, STATE.clients[cid], stage);
       copyToClipboard(text);
@@ -1051,6 +1185,7 @@ document.addEventListener('click', function(ev){
       lastSnapshot = snapshot();
       var deletedName = STATE.clients[cid] ? STATE.clients[cid].name : 'Client';
       deleteClient(STATE, cid);
+      closeModal();
       renderAll();
       showToast(deletedName + ' deleted.', lastSnapshot);
       break;
@@ -1080,44 +1215,6 @@ document.addEventListener('click', function(ev){
       el('overflow-menu').classList.add('hidden');
       exportClientsCsv();
       showToast('CSV exported.');
-      break;
-    case 'sign-out':
-      el('overflow-menu').classList.add('hidden');
-      window.GB_SUPABASE.auth.signOut();
-      break;
-    case 'connect-calendar': {
-      el('overflow-menu').classList.add('hidden');
-      var priority = Number(target.getAttribute('data-priority'));
-      var label = target.getAttribute('data-label');
-      window.GB_SUPABASE.auth.getUser().then(function(res){
-        var userId = res.data.user && res.data.user.id;
-        if(!userId) return;
-        var state = btoa(JSON.stringify({userId: userId, priority: priority, label: label}));
-        var params = new URLSearchParams({
-          client_id: '1060862353263-1tfnpumq29898ffrnc5oh65b211v8ovr.apps.googleusercontent.com',
-          redirect_uri: 'https://gqfpsjksosxvszzhhezu.functions.supabase.co/google-calendar-callback',
-          response_type: 'code',
-          scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email',
-          access_type: 'offline',
-          prompt: 'consent',
-          state: encodeURIComponent(state)
-        });
-        window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
-      });
-      break;
-    }
-    case 'sync-calendar-now':
-      el('overflow-menu').classList.add('hidden');
-      showToast('Syncing calendar…');
-      window.GB_SUPABASE.functions.invoke('google-calendar-sync').then(function(res){
-        if(res.error){ showToast('Sync failed — try again in a bit.'); console.error(res.error); return; }
-        var cals = (res.data && res.data.results && res.data.results[0] && res.data.results[0].calendars) || [];
-        var added = cals.reduce(function(sum,c){ return sum + (c.added||0); }, 0);
-        var updated = cals.reduce(function(sum,c){ return sum + (c.updated||0); }, 0);
-        if(!cals.length){ showToast('No calendar connected yet — use "Connect calendar" first.'); return; }
-        showToast('Synced: ' + added + ' new, ' + updated + ' updated.');
-        init();
-      });
       break;
     case 'trigger-import-backup':
       el('overflow-menu').classList.add('hidden');
@@ -1349,6 +1446,10 @@ async function init(){
 // No DOMContentLoaded auto-boot here — auth.js owns the boot sequence in the
 // hosted build (it calls init() itself only once a signed-in session is
 // confirmed; otherwise it shows the sign-in screen instead).
+
+if(typeof document !== 'undefined' && document.addEventListener){
+  document.addEventListener('DOMContentLoaded', init);
+}
 
 /* ---- test hook (harmless in the browser: window exists, module doesn't) ---- */
 var __GB_EXPORTS__ = {
