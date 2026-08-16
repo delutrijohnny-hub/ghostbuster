@@ -267,6 +267,7 @@ function buildTouchCard(client, stage, now){
   if(!digits) smsLink.setAttribute('aria-disabled','true');
   actions.appendChild(smsLink);
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
+  actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'snooze-touch','data-cid':client.id,'data-stage':stage,title:'Push this to tomorrow'},['Not today']));
   var sentLabel = document.createElement('label');
   sentLabel.className = 'sent-label';
@@ -840,6 +841,59 @@ function populatePrintSheet(state){
 
 
 /* ============================================================
+   10.5) AI DRAFTING (Gemini, via server-side proxy)
+   The prompt is built here client-side (client notes/recap/voice-example
+   data is already loaded here, none of it secret) — the gemini-draft Edge
+   Function's only job is to hold the real API key and make the call, so it
+   never ships to the browser. Requires the caller to be a real signed-in
+   user (verified server-side), not just anyone holding the public anon key.
+   ============================================================ */
+
+function buildAIPrompt(client, stage){
+  var samples = eligibleVariants(STATE, stage, client).map(function(v){ return renderTemplate(v.text, client); });
+  var callDate = safeDate(client.callDateTime);
+  var tz = client.timezone || 'America/New_York';
+  var lines = [
+    'You are drafting a single SMS text message for John, a real estate YouTube coach, to send to a client/lead named ' + firstName(client.name) + '.',
+    'Match John\'s real texting voice exactly, shown in these example messages he actually sends for this same stage ("' + stage + '"):',
+    samples.map(function(s){ return '- "' + s + '"'; }).join('\n'),
+    'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with his name unless the examples do.',
+  ];
+  if(callDate) lines.push('Their call is on ' + fmtDate(callDate, tz) + ' at ' + fmtTime(callDate, tz) + '.');
+  if(client.notes) lines.push('Notes John has on this client: ' + client.notes);
+  if(client.recap) lines.push('Recap from a prior call with them: ' + client.recap);
+  lines.push('Write ONE replacement text message personalized using those notes/recap where it naturally fits. Output ONLY the message text itself — no quotes, no preamble, no explanation.');
+  return lines.join('\n\n');
+}
+
+function callGemini(prompt){
+  return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: {prompt: prompt}}).then(function(res){
+    if(res.error) throw new Error('Gemini request failed — ' + res.error.message);
+    var text = res.data && res.data.text;
+    if(!text) throw new Error(res.data && res.data.error || 'Gemini returned an empty response');
+    return text;
+  });
+}
+
+function generateAIMessage(cid, stage, btn){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  callGemini(buildAIPrompt(client, stage)).then(function(text){
+    editedTextCache[cid + '|' + stage] = text;
+    renderCallsBoard();
+    showToast('AI draft ready — review before sending.');
+  }).catch(function(e){
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+    showToast('Could not generate a draft — ' + e.message);
+  });
+}
+
+
+/* ============================================================
    11) TOASTS
    ============================================================ */
 
@@ -1147,6 +1201,9 @@ document.addEventListener('click', function(ev){
     case 'reset-text':
       delete editedTextCache[cid + '|' + stage];
       renderCallsBoard();
+      break;
+    case 'generate-ai':
+      generateAIMessage(cid, stage, target);
       break;
     case 'snooze-touch':
       snoozeTouch(STATE, cid, stage);
