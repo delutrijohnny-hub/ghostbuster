@@ -109,7 +109,7 @@ header.app-header::before{
 }
 .slime-drip{
   height:3px;
-  background:linear-gradient(90deg, var(--red), var(--red-dark));
+  background:linear-gradient(90deg, var(--slime-dark), var(--slime), var(--slime-dark));
 }
 header.app-header .brand{display:flex;align-items:center;gap:10px;margin-right:auto;position:relative;z-index:1;}
 header.app-header .brand .logo-mark{animation:ghost-float 3.2s ease-in-out infinite;filter:drop-shadow(0 2px 6px rgba(220,47,74,.45));}
@@ -148,8 +148,8 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
   background:linear-gradient(90deg, var(--slime-dark), var(--slime));
 }
 .progress-fill.full{
-  background:var(--green);
-  box-shadow:0 0 0 3px var(--green-soft);
+  background:var(--slime-bright);
+  box-shadow:0 0 12px 1px var(--slime), inset 0 -2px 4px rgba(0,0,0,.15);
 }
 .progress-label{font-weight:600;font-size:13px;white-space:nowrap;font-variant-numeric:tabular-nums;}
 
