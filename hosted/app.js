@@ -1097,7 +1097,7 @@ document.addEventListener('click', function(ev){
           client_id: '1060862353263-1tfnpumq29898ffrnc5oh65b211v8ovr.apps.googleusercontent.com',
           redirect_uri: 'https://gqfpsjksosxvszzhhezu.functions.supabase.co/google-calendar-callback',
           response_type: 'code',
-          scope: 'https://www.googleapis.com/auth/calendar.readonly',
+          scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email',
           access_type: 'offline',
           prompt: 'consent',
           state: encodeURIComponent(state)
