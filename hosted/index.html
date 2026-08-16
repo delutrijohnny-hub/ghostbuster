@@ -85,10 +85,12 @@ a{color:var(--red-dark);}
   display:inline-flex;
   align-items:center;
   gap:6px;
+  transition:border-color .15s ease, background-color .15s ease, box-shadow .15s ease, transform .1s ease;
 }
 .btn:hover{border-color:var(--ink-faint);}
+.btn:active{transform:scale(.97);}
 .btn-primary{background:var(--red);border-color:var(--red);color:#fff;}
-.btn-primary:hover{background:var(--red-dark);}
+.btn-primary:hover{background:var(--red-dark);box-shadow:0 2px 8px rgba(220,47,74,.3);}
 .btn-ghost{background:transparent;border-color:transparent;color:var(--ink-soft);}
 .btn-sm{padding:4px 10px;font-size:12px;}
 .btn-green{background:var(--green);border-color:var(--green);color:#fff;}
