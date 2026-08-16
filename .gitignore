@@ -1,0 +1,12 @@
+# Real client data and secrets — never committed
+.credentials-reference.md
+backups/
+ghostbuster-backup.json
+new_bookings*.ics
+ghostbuster-backup*.json
+migrate-backup-to-supabase.mjs
+HANDOFF.md
+auth-test.html
+.DS_Store
+.claude/
+supabase/.temp/
