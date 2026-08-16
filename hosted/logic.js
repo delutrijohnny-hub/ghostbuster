@@ -75,7 +75,8 @@ function buildDefaultVariants(){
     midcheckin: [
       {id:'c1', builtin:true, text:"Hey {name}, excited for our call on {date}! Still good on your end? Got some ideas specific to your business I think you'll like."},
       {id:'c2', builtin:true, text:"Hi {name}, just checking in ahead of our {date} call — still looking forward to it. Let me know if anything's changed on your end!"},
-      {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, been thinking about {channel} ahead of our {date} call — got a couple ideas I think could really help. Still good on your end?"}
+      {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, been thinking about {channel} ahead of our {date} call — got a couple ideas I think could really help. Still good on your end?"},
+      {id:'c4', builtin:true, text:"Hey {name}, quick confirm — you're still good for {date}? Reply YES and I'll see you then!"}
     ],
     dayof: [
       {id:'d1', builtin:true, text:"Hey {name}, today's the day! Our call is at {time} — talk soon. Here's the link: {link}"},
