@@ -100,6 +100,24 @@ Deno.serve(async (req) => {
     return htmlResponse('Connection failed', 'Connected to Google, but saving the connection failed. Close this tab and try again.', 500);
   }
 
+  // Connecting only stores the token — nothing pulls events until something
+  // syncs. Left as a separate manual step, the first thing a newly-connected
+  // person sees is an empty app, which reads as broken. Trigger one sync run
+  // for just this user right away so bookings are already there when they
+  // land back on GhostBuster. Best-effort: a failure here shouldn't block the
+  // "connected" response — the twice-daily cron and the "Sync now" button are
+  // still there as fallbacks.
+  try {
+    const syncFnUrl = `${SUPABASE_URL.replace('.supabase.co', '.functions.supabase.co')}/google-calendar-sync`;
+    await fetch(syncFnUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.userId }),
+    });
+  } catch (e) {
+    console.error('Post-connect sync trigger failed (non-fatal)', e);
+  }
+
   return htmlResponse(
     'Calendar connected!',
     `${calendarId} (${state.label}) is now connected. You can close this tab and go back to GhostBuster.`

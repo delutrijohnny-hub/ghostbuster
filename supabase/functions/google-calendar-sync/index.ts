@@ -42,7 +42,7 @@ function db(path: string, init: RequestInit = {}) {
   });
 }
 
-async function resolveTargetUserIds(req: Request): Promise<string[]> {
+async function resolveTargetUserIds(req: Request, bodyUserId: string | null): Promise<string[]> {
   const authHeader = req.headers.get('Authorization') || '';
   const callerToken = authHeader.replace(/^Bearer\s+/i, '');
 
@@ -58,6 +58,12 @@ async function resolveTargetUserIds(req: Request): Promise<string[]> {
     // through to "sync everyone" for an unrecognized caller.
     throw new Error('Could not resolve caller identity from Authorization header');
   }
+
+  // service_role caller: syncs everyone (cron), unless a specific userId was
+  // passed in the body (the post-connect trigger in google-calendar-callback
+  // uses this so a fresh connection doesn't force a full re-sync of every
+  // other connected user).
+  if (bodyUserId) return [bodyUserId];
 
   const res = await db('/google_oauth_tokens?select=user_id');
   if (!res.ok) throw new Error('Failed to list connected users: ' + (await res.text()));
@@ -239,7 +245,14 @@ async function syncUserCalendars(userId: string) {
 
 Deno.serve(async (req) => {
   try {
-    const targetUserIds = await resolveTargetUserIds(req);
+    let bodyUserId: string | null = null;
+    try {
+      const body = await req.clone().json();
+      bodyUserId = typeof body?.userId === 'string' ? body.userId : null;
+    } catch {
+      // no/invalid JSON body — fine, means "sync everyone" for a service_role caller
+    }
+    const targetUserIds = await resolveTargetUserIds(req, bodyUserId);
     const results = [];
     for (const userId of targetUserIds) results.push(await syncUserCalendars(userId));
     return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
