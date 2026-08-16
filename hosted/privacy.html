@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GhostBuster — Privacy Policy</title>
+<style>
+  :root{
+    --bg: #f7f1e2;
+    --card: #fffdf6;
+    --ink: #1c1a17;
+    --ink-soft: #59544a;
+    --border: #e6dcc4;
+    --red: #e0201f;
+  }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    line-height:1.6;
+  }
+  .wrap{ max-width:680px; margin:0 auto; padding:48px 24px 96px; }
+  h1{ font-size:28px; margin-bottom:4px; }
+  .updated{ color:var(--ink-soft); font-size:14px; margin-bottom:32px; }
+  h2{ font-size:18px; margin-top:36px; border-bottom:1px solid var(--border); padding-bottom:6px; }
+  p, li{ color:var(--ink-soft); font-size:15px; }
+  a{ color:var(--red); }
+  .card{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px 28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GhostBuster — Privacy Policy</h1>
+  <div class="updated">Last updated: August 16, 2026</div>
+
+  <div class="card">
+    <p>GhostBuster is a private scheduling and follow-up tool built for Market Maker Management
+    (John DeLutri) to manage YouTube coaching call bookings and client communication. It is not
+    offered publicly as a product — this policy explains what it does with data from the single
+    connected Google account.</p>
+
+    <h2>Information we access</h2>
+    <ul>
+      <li><strong>Google Calendar (read-only).</strong> Event times, titles, and attendee
+      names/emails for events on the connected calendar, used only to detect newly booked
+      coaching calls and keep the client list in sync.</li>
+      <li><strong>Google account profile.</strong> Your email address, used to identify your
+      account when you sign in.</li>
+    </ul>
+
+    <h2>How information is used</h2>
+    <ul>
+      <li>To automatically detect new bookings from the connected calendar and create or update
+      the matching client record.</li>
+      <li>To prepare follow-up text messages about scheduled calls, opened in the account
+      holder's own Messages app to send.</li>
+      <li>Optionally, when the account holder manually clicks "Generate with AI," a specific
+      client's notes and call context (not calendar data) are sent to Google's Gemini API to draft
+      a personalized message. This only happens on manual request.</li>
+    </ul>
+
+    <h2>Data storage</h2>
+    <p>Client and scheduling data is stored in a private Supabase (PostgreSQL) database,
+    accessible only to the authenticated account holder. Google Calendar refresh and access
+    tokens are stored server-side and are never exposed to the browser.</p>
+
+    <h2>Data sharing</h2>
+    <p>We do not sell or share personal data with third parties. Data is sent only to Google
+    (Calendar API, for sync) and, only when manually triggered, to Google's Gemini API (for the
+    AI message-drafting feature described above) — solely to provide that functionality.</p>
+
+    <h2>Data retention &amp; deletion</h2>
+    <p>Data is retained as long as the account is active. To request deletion of data or revoke
+    calendar access, contact <a href="mailto:john@marketmakermgmt.com">john@marketmakermgmt.com</a>,
+    or remove GhostBuster's access directly from your Google Account's
+    <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">Third-party
+    access settings</a>.</p>
+
+    <h2>Contact</h2>
+    <p><a href="mailto:john@marketmakermgmt.com">john@marketmakermgmt.com</a></p>
+  </div>
+</div>
+</body>
+</html>
