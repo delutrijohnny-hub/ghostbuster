@@ -243,7 +243,25 @@ async function syncUserCalendars(userId: string) {
   return { userId, calendars: perCalendar };
 }
 
+// Called from the browser (the "Sync now" menu button) via supabase-js,
+// which is a cross-origin fetch — the browser sends a CORS preflight
+// OPTIONS request first. Without an explicit OPTIONS short-circuit here,
+// that preflight fell through into the real sync logic below (bodyUserId
+// null, no Authorization header on a preflight, so it resolved to "sync
+// everyone") — meaning every browser-side sync attempt silently ran the
+// full sync twice, once for the preflight and once for the real POST, and
+// the missing CORS headers meant the browser blocked the real request's
+// response from ever reaching the caller anyway.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: CORS_HEADERS });
+  }
   try {
     let bodyUserId: string | null = null;
     try {
@@ -255,9 +273,9 @@ Deno.serve(async (req) => {
     const targetUserIds = await resolveTargetUserIds(req, bodyUserId);
     const results = [];
     for (const userId of targetUserIds) results.push(await syncUserCalendars(userId));
-    return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ results }), { headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
   } catch (e) {
     console.error('Sync failed', e);
-    return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
   }
 });
