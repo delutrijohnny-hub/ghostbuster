@@ -19,6 +19,19 @@
    Depends on window.GB_SUPABASE, the supabase-js client created once in
    auth.js. Loaded after logic.js, before app.js. */
 
+// Fallback when the account has no explicit sender_name set yet — derived
+// from the email's local-part (before the @ and before any . _ + separator)
+// rather than the Google profile display name, since that name can be
+// lowercase/a nickname/differently spelled than what someone actually wants
+// clients to see. Anyone can still override it explicitly (sender_name in
+// app_settings) if the derived guess isn't right — see credentials-reference
+// for the two real accounts' explicit values.
+function deriveSenderName(email){
+  var local = String(email || '').split('@')[0] || '';
+  var first = local.split(/[._+]/)[0] || local;
+  return first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'there';
+}
+
 async function loadState(){
   var sb = window.GB_SUPABASE;
   var userRes = await sb.auth.getUser();
@@ -45,6 +58,7 @@ async function loadState(){
       return {id: t.id, text: t.text, done: !!t.done, createdAt: t.created_at, doneAt: t.done_at};
     }),
     epsilon: settingsRes.data ? Number(settingsRes.data.epsilon) : 0.2,
+    senderName: (settingsRes.data && settingsRes.data.sender_name) || deriveSenderName(user.email),
     lastSync: null
   };
 
@@ -122,7 +136,7 @@ async function saveState(state){
   var uid = user.id;
 
   try{
-    await sb.from('app_settings').upsert({user_id: uid, epsilon: state.epsilon, updated_at: new Date().toISOString()});
+    await sb.from('app_settings').upsert({user_id: uid, epsilon: state.epsilon, sender_name: state.senderName, updated_at: new Date().toISOString()});
 
     var todoIds = state.todos.map(function(t){ return t.id; });
     var todoRows = state.todos.map(function(t){

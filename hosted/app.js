@@ -850,17 +850,18 @@ function populatePrintSheet(state){
    ============================================================ */
 
 function buildAIPrompt(client, stage){
-  var samples = eligibleVariants(STATE, stage, client).map(function(v){ return renderTemplate(v.text, client); });
+  var sender = STATE.senderName || 'Johnny';
+  var samples = eligibleVariants(STATE, stage, client).map(function(v){ return renderTemplate(v.text, client, sender); });
   var callDate = safeDate(client.callDateTime);
   var tz = client.timezone || 'America/New_York';
   var lines = [
-    'You are drafting a single SMS text message for John, a real estate YouTube coach, to send to a client/lead named ' + firstName(client.name) + '.',
-    'Match John\'s real texting voice exactly, shown in these example messages he actually sends for this same stage ("' + stage + '"):',
+    'You are drafting a single SMS text message for ' + sender + ', a real estate YouTube coach, to send to a client/lead named ' + firstName(client.name) + '.',
+    'Match ' + sender + '\'s real texting voice exactly, shown in these example messages he actually sends for this same stage ("' + stage + '"):',
     samples.map(function(s){ return '- "' + s + '"'; }).join('\n'),
     'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with his name unless the examples do.',
   ];
   if(callDate) lines.push('Their call is on ' + fmtDate(callDate, tz) + ' at ' + fmtTime(callDate, tz) + '.');
-  if(client.notes) lines.push('Notes John has on this client: ' + client.notes);
+  if(client.notes) lines.push('Notes ' + sender + ' has on this client: ' + client.notes);
   if(client.recap) lines.push('Recap from a prior call with them: ' + client.recap);
   lines.push('Write ONE replacement text message personalized using those notes/recap where it naturally fits. Output ONLY the message text itself — no quotes, no preamble, no explanation.');
   return lines.join('\n\n');

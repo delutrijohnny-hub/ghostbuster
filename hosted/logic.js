@@ -64,13 +64,13 @@ function sameContact(a, b){
 function buildDefaultVariants(){
   return {
     welcome: [
-      {id:'w1', builtin:true, text:"Hey {name}! John here — excited to have you locked in for {date} at {time}. We'll go over how realtors are using YouTube to bring in more buyer and seller leads, and what that could look like for you. Go ahead and block off the time!"},
-      {id:'w2', builtin:true, text:"Hi {name}, John here with MarketMakerMGMT. Really looking forward to our call on {date} at {time} — we'll talk through turning your channel into a real lead source for your business. Save the spot on your calendar!"},
-      {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}! John here — just took a look at {channel} and I'm excited for our call on {date} at {time}. Got a few specific ideas for turning it into a lead source for your business. Talk soon!"}
+      {id:'w1', builtin:true, text:"Hey {name}! {sender} here — excited to have you locked in for {date} at {time}. We'll go over how realtors are using YouTube to bring in more buyer and seller leads, and what that could look like for you. Go ahead and block off the time!"},
+      {id:'w2', builtin:true, text:"Hi {name}, {sender} here with MarketMakerMGMT. Really looking forward to our call on {date} at {time} — we'll talk through turning your channel into a real lead source for your business. Save the spot on your calendar!"},
+      {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}! {sender} here — just took a look at {channel} and I'm excited for our call on {date} at {time}. Got a few specific ideas for turning it into a lead source for your business. Talk soon!"}
     ],
     monday: [
       {id:'m1', builtin:true, text:"Hey {name}, quick heads up — our call is this {weekday} at {time}. Excited to show you what's possible for your channel. Keep it on your calendar!"},
-      {id:'m2', builtin:true, text:"Hi {name}, John here. Just a reminder our call is set for {weekday} at {time} this week — we'll talk real strategy for your YouTube channel. Talk soon!"}
+      {id:'m2', builtin:true, text:"Hi {name}, {sender} here. Just a reminder our call is set for {weekday} at {time} this week — we'll talk real strategy for your YouTube channel. Talk soon!"}
     ],
     midcheckin: [
       {id:'c1', builtin:true, text:"Hey {name}, excited for our call on {date}! Still good on your end? Got some ideas specific to your business I think you'll like."},
@@ -89,7 +89,7 @@ function buildDefaultVariants(){
       {id:'r2', builtin:true, text:"Hi {name}, just checking in — looks like we lost track of a time for our call. No stress, just let me know what works and I'll get us back on the calendar."}
     ],
     noshow: [
-      {id:'n1', builtin:true, text:"Hey {name}, John here — looks like we missed each other for our {date} call. No worries at all, it happens! Want me to send over a couple new times?"},
+      {id:'n1', builtin:true, text:"Hey {name}, {sender} here — looks like we missed each other for our {date} call. No worries at all, it happens! Want me to send over a couple new times?"},
       {id:'n2', builtin:true, text:"Hi {name}, sorry we didn't connect on {date}. I'd still love to show you what's working for realtors on YouTube right now — just let me know a day that works and I'll get us back on the books."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, we missed each other on {date} — no worries. Still got a few ideas for {channel} I think you'll want to hear. Want me to send over some new times?"}
     ],
@@ -99,7 +99,7 @@ function buildDefaultVariants(){
     // someone coming back around, not a stranger, so the tone skips the
     // introduction but still reads as a first real connection.
     rebooked: [
-      {id:'rb1', builtin:true, text:"Hey {name}, John here — glad we're finally locked in for {date} at {time}! Looking forward to connecting and going over the YouTube plan for your business."},
+      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here — glad we're finally locked in for {date} at {time}! Looking forward to connecting and going over the YouTube plan for your business."},
       {id:'rb2', builtin:true, text:"Hi {name}, saw we've got a new time set for {date} at {time} — excited to finally get on the phone and talk strategy."}
     ],
     // Fires instead of "rebooked" when the prior contact's last known status
@@ -108,7 +108,7 @@ function buildDefaultVariants(){
     // they're a stranger or a no-show finally showing up).
     followup: [
       {id:'f1', builtin:true, text:"Hey {name}, glad we're picking this back up — got you down for {date} at {time}. Looking forward to continuing where we left off!"},
-      {id:'f2', builtin:true, text:"Hi {name}, John here — excited we're back on for {date} at {time}. Let's keep building on what we talked about last time!"}
+      {id:'f2', builtin:true, text:"Hi {name}, {sender} here — excited we're back on for {date} at {time}. Let's keep building on what we talked about last time!"}
     ]
   };
 }
@@ -486,11 +486,12 @@ function firstName(name){
 }
 
 
-function renderTemplate(template, client){
+function renderTemplate(template, client, senderName){
   var callDate = safeDate(client.callDateTime);
   var tz = client.timezone || 'America/New_York';
   var vals = {
     name: firstName(client.name),
+    sender: senderName || 'Johnny',
     date: callDate ? fmtDate(callDate, tz) : '',
     time: callDate ? fmtTime(callDate, tz) : '',
     weekday: callDate ? weekdayName(callDate, tz) : '',
@@ -505,12 +506,12 @@ function getCardText(state, client, stage){
   var key = client.id + '|' + stage;
   if(Object.prototype.hasOwnProperty.call(editedTextCache, key)) return editedTextCache[key];
   var variant = pickVariant(state, stage, client);
-  return renderTemplate(variant.text, client);
+  return renderTemplate(variant.text, client, state.senderName);
 }
 
 function getOriginalText(state, client, stage){
   var variant = pickVariant(state, stage, client);
-  return renderTemplate(variant.text, client);
+  return renderTemplate(variant.text, client, state.senderName);
 }
 
 
@@ -526,7 +527,7 @@ function markSent(state, clientId, stage, text){
   // the sender customized it by hand (or it's AI-generated from notes) — log
   // it as 'custom' rather than crediting/debiting the underlying template's
   // bandit stats with a send that isn't really that template's copy.
-  var wasCustomized = text !== renderTemplate(variant.text, client);
+  var wasCustomized = text !== renderTemplate(variant.text, client, state.senderName);
   var loggedVariantId = wasCustomized ? 'custom' : variant.id;
   client.messageLog.push({
     stage: stage,
