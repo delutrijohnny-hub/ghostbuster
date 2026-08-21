@@ -1180,13 +1180,13 @@ document.addEventListener('click', function(ev){
       openClientModal(cid); renderAll();
       break;
     case 'toggle-replied':
-      toggleReplied(STATE, cid, parseInt(target.getAttribute('data-idx'),10));
+      doToggleReplied(cid, parseInt(target.getAttribute('data-idx'),10));
       openClientModal(cid); renderAll();
       break;
     case 'toggle-replied-quick':
       // same underlying toggle as inside the modal, but used from the board/table
       // where popping a modal open on a single tap would defeat the point
-      toggleReplied(STATE, cid, parseInt(target.getAttribute('data-idx'),10));
+      doToggleReplied(cid, parseInt(target.getAttribute('data-idx'),10));
       renderAll();
       break;
     case 'toggle-recent-sends':
@@ -1413,10 +1413,34 @@ document.addEventListener('keydown', function(ev){
 });
 
 
+// Fire-and-forget: builtin (shared) templates pool their sends/responses
+// across every account via increment_builtin_stat (atomic +1, so this can
+// never be used to set the count to anything arbitrary). Custom/hand-added
+// variants aren't pooled — their stats stay purely in this account's own
+// variant_stats row, already handled by saveState().
+function pooledIncrementIfBuiltin(stage, variantId, field, delta){
+  var variant = (STATE.variants[stage] || []).filter(function(v){ return v.id === variantId; })[0];
+  if(!variant || !variant.builtin) return;
+  window.GB_SUPABASE.rpc('increment_builtin_stat', {p_stage: stage, p_variant_key: variantId, p_field: field, p_delta: delta || 1})
+    .then(function(res){ if(res.error) console.error('pooled stat increment failed', res.error); });
+}
+
+// toggleReplied() can flip a reply mark back off (checked by mistake) — the
+// pooled table needs the matching -1 in that case, or it drifts out of sync
+// with the real per-message state forever.
+function doToggleReplied(cid, idx){
+  var client = STATE.clients[cid];
+  var msg = client && client.messageLog[idx];
+  toggleReplied(STATE, cid, idx);
+  if(msg && msg.variantId !== 'custom') pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses', msg.responded ? 1 : -1);
+}
+
 function doMarkSent(cid, stage){
   var client = STATE.clients[cid];
   var text = getCardText(STATE, client, stage);
   markSent(STATE, cid, stage, text);
+  var logged = client.messageLog[client.messageLog.length - 1];
+  if(logged && logged.variantId !== 'custom') pooledIncrementIfBuiltin(stage, logged.variantId, 'sends');
   renderAll();
 }
 

@@ -111,6 +111,21 @@ async function loadState(){
     if(!state.variantStats[row.stage]) state.variantStats[row.stage] = {};
     state.variantStats[row.stage][row.variant_key] = {sends: row.sends, responses: row.responses};
   });
+
+  // Built-in (shared) templates learn from everyone's sends, not just this
+  // account's — with several real accounts now sending the exact same
+  // wording, pooling gives the bandit far more signal per template than any
+  // one person's own trickle of traffic would. Only applies to builtin
+  // variants; a hand-added custom one stays purely personal per-user stats.
+  var pooledRes = await sb.from('builtin_variant_stats').select('*');
+  if(!pooledRes.error){
+    (pooledRes.data || []).forEach(function(row){
+      if(!state.variantStats[row.stage]) state.variantStats[row.stage] = {};
+      var isBuiltin = (state.variants[row.stage] || []).some(function(v){ return v.id === row.variant_key && v.builtin; });
+      if(isBuiltin) state.variantStats[row.stage][row.variant_key] = {sends: row.sends, responses: row.responses};
+    });
+  }
+
   // Any variant (seeded or user-added) with no stats row yet gets a zeroed one,
   // same guarantee buildDefaultState() gives the local build.
   Object.keys(state.variants).forEach(function(stage){
