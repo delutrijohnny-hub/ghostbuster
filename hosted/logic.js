@@ -64,34 +64,34 @@ function sameContact(a, b){
 function buildDefaultVariants(){
   return {
     welcome: [
-      {id:'w1', builtin:true, text:"Hey {name}! {sender} here — excited to have you locked in for {date} at {time}. We'll go over how realtors are using YouTube to bring in more buyer and seller leads, and what that could look like for you. Go ahead and block off the time!"},
-      {id:'w2', builtin:true, text:"Hi {name}, {sender} here with MarketMakerMGMT. Really looking forward to our call on {date} at {time} — we'll talk through turning your channel into a real lead source for your business. Save the spot on your calendar!"},
-      {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}! {sender} here — just took a look at {channel} and I'm excited for our call on {date} at {time}. Got a few specific ideas for turning it into a lead source for your business. Talk soon!"}
+      {id:'w1', builtin:true, text:"Hey {name}, {sender} here. Got you locked in for {date} at {time}. Going to break down the exact video formats pulling local inbound clients right now. Go ahead and block the calendar."},
+      {id:'w2', builtin:true, text:"Hi {name}, {sender} with MarketMakerMGMT. We're set for {date} at {time}. We'll map out how to turn regular video uploads into predictable inbound business. Save the time on your end."},
+      {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}, {sender} here. Got {channel} open and locked you in for {date} at {time}. Want to focus on the biggest leverage points for local search and discovery. Talk soon."}
     ],
     monday: [
-      {id:'m1', builtin:true, text:"Hey {name}, quick heads up — our call is this {weekday} at {time}. Excited to show you what's possible for your channel. Keep it on your calendar!"},
-      {id:'m2', builtin:true, text:"Hi {name}, {sender} here. Just a reminder our call is set for {weekday} at {time} this week — we'll talk real strategy for your YouTube channel. Talk soon!"}
+      {id:'m1', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Going over channel architecture and what actually converts local viewers. Keep it on the calendar."},
+      {id:'m2', builtin:true, text:"Hi {name}, {sender} here. Quick reminder for {weekday} at {time}. We'll get into real channel strategy and viewer retention for your market. Talk soon."}
     ],
     midcheckin: [
-      {id:'c1', builtin:true, text:"Hey {name}, excited for our call on {date}! Still good on your end? Got some ideas specific to your business I think you'll like."},
-      {id:'c2', builtin:true, text:"Hi {name}, just checking in ahead of our {date} call — still looking forward to it. Let me know if anything's changed on your end!"},
-      {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, been thinking about {channel} ahead of our {date} call — got a couple ideas I think could really help. Still good on your end?"},
-      {id:'c4', builtin:true, text:"Hey {name}, quick confirm — you're still good for {date}? Reply with a 👍 and I'll see you then!"}
+      {id:'c1', builtin:true, text:"Hey {name}, checking in ahead of our call on {date}. Going to focus on the main distribution mistakes keeping real estate videos under 100 views. Still good on your end?"},
+      {id:'c2', builtin:true, text:"Hi {name}, touching base before {date}. Ready to map out your content roadmap and posting rhythm. Let me know if anything shifted on your schedule."},
+      {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, reviewing our plan for {channel} before {date}. Want to zone in on your local video packaging and CTR. Still all set?"},
+      {id:'c4', builtin:true, text:"Hey {name}, quick schedule check for {date}. Drop a 👍 if that time still works and I'll see you then."}
     ],
     dayof: [
-      {id:'d1', builtin:true, text:"Hey {name}, today's the day! Our call is at {time} — talk soon. Here's the link: {link}"},
-      {id:'d2', builtin:true, text:"Hi {name}, see you at {time} today! Here's the link: {link}"},
-      {id:'d3', builtin:true, text:"Hey {name}, today's the day! Excited to dig into your channel at {time} — here's the link: {link}"},
-      {id:'d4', builtin:true, text:"Hi {name}, see you at {time} today — got some good stuff to walk you through! Here's the link: {link}"}
+      {id:'d1', builtin:true, text:"Hey {name}, hopping on at {time} to dial in your channel roadmap. Here's the link: {link}"},
+      {id:'d2', builtin:true, text:"Hi {name}, ready for our call at {time}. Got the strategy framework queued up. Jump in here: {link}"},
+      {id:'d3', builtin:true, text:"Hey {name}, talk at {time}. Going to walk through the exact content hooks that drive local watch time. Room link is here: {link}"},
+      {id:'d4', builtin:true, text:"Hi {name}, see you at {time}. Ready to break down your channel growth structure. Join here: {link}"}
     ],
     recovery: [
-      {id:'r1', builtin:true, text:"Hey {name}, haven't heard back in a bit — no worries at all, things get busy! Want me to send over a couple new times so we can grab 15 minutes?"},
-      {id:'r2', builtin:true, text:"Hi {name}, just checking in — looks like we lost track of a time for our call. No stress, just let me know what works and I'll get us back on the calendar."}
+      {id:'r1', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to map out that channel growth blueprint? Let me know if I should drop a couple new times."},
+      {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to get your YouTube content dialed in, send over a couple open windows and I'll get us set."}
     ],
     noshow: [
-      {id:'n1', builtin:true, text:"Hey {name}, {sender} here — looks like we missed each other for our {date} call. No worries at all, it happens! Want me to send over a couple new times?"},
-      {id:'n2', builtin:true, text:"Hi {name}, sorry we didn't connect on {date}. I'd still love to show you what's working for realtors on YouTube right now — just let me know a day that works and I'll get us back on the books."},
-      {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, we missed each other on {date} — no worries. Still got a few ideas for {channel} I think you'll want to hear. Want me to send over some new times?"}
+      {id:'n1', builtin:true, text:"Hey {name}, {sender} here. Looks like timing went sideways for {date}, totally understand how days go. Want me to send over a fresh link to pick a new slot?"},
+      {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still want to walk you through what's driving local YouTube conversion right now. Shoot me a time that works better and we can reset."},
+      {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
     // Fires instead of "welcome" when a new booking is matched (by phone +
     // email) to a contact who already exists in the system but never actually
@@ -99,16 +99,16 @@ function buildDefaultVariants(){
     // someone coming back around, not a stranger, so the tone skips the
     // introduction but still reads as a first real connection.
     rebooked: [
-      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here — glad we're finally locked in for {date} at {time}! Looking forward to connecting and going over the YouTube plan for your business."},
-      {id:'rb2', builtin:true, text:"Hi {name}, saw we've got a new time set for {date} at {time} — excited to finally get on the phone and talk strategy."}
+      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Ready to dive into the YouTube roadmap for your market."},
+      {id:'rb2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen, ready to get your channel dialed in."}
     ],
     // Fires instead of "rebooked" when the prior contact's last known status
     // was Completed — they already had a real call with John, this is a
     // genuine second call, and the copy should read that way (not like
     // they're a stranger or a no-show finally showing up).
     followup: [
-      {id:'f1', builtin:true, text:"Hey {name}, glad we're picking this back up — got you down for {date} at {time}. Looking forward to continuing where we left off!"},
-      {id:'f2', builtin:true, text:"Hi {name}, {sender} here — excited we're back on for {date} at {time}. Let's keep building on what we talked about last time!"}
+      {id:'f1', builtin:true, text:"Hey {name}, good to pick this back up on {date} at {time}. We'll jump right into the next phase of your video production and channel rollout."},
+      {id:'f2', builtin:true, text:"Hi {name}, {sender} here. Glad we're back on the calendar for {date} at {time}. Let's pick up where we left off and map out the rest of your channel strategy."}
     ]
   };
 }
