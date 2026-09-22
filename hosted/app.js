@@ -90,6 +90,7 @@ function renderAll(){
   renderProgressBar();
   renderStats();
   renderTodos();
+  renderOnDeck();
   renderCallsBoard();
   renderRecentSends();
   renderClientsTab();
@@ -318,6 +319,83 @@ function buildBustedPanel(subtitle){
     '<div class="busted-title">Busted!</div>' +
     '<div class="busted-sub">' + escapeHtml(subtitle || 'Inbox zero — nothing due right now.') + '</div>';
   return div;
+}
+
+
+// The live call, pinned above the board. Everything here is one tap: their
+// number, a nudge text written in the moment, and the outcome buttons — the
+// half hour either side of a call is where show-up rate is actually won, and
+// it's the one stretch the board itself can't help with.
+function renderOnDeck(){
+  var box = el('on-deck'); if(!box) return;
+  var now = new Date();
+  var od = getOnDeck(STATE, now);
+
+  // Never render nothing — a blank strip is indistinguishable from the panel
+  // being broken, so every quiet state still says what it is.
+  if(!od.focus){
+    var head = '<h4><span>⏱ On deck</span><span>' +
+      (od.todays.length ? (od.loggedCount + ' of ' + od.todays.length + ' logged today') : 'nothing today') +
+      '</span></h4>';
+    var body;
+    if(od.unlogged.length){
+      body = '<div class="od-quiet"><strong>' + od.unlogged.length + '</strong> call' +
+        (od.unlogged.length === 1 ? '' : 's') + ' earlier today still ' +
+        (od.unlogged.length === 1 ? 'needs' : 'need') + ' an outcome — logging them is what keeps your show-up rate honest.</div>';
+    } else if(od.next){
+      var nd = safeDate(od.next.callDateTime);
+      body = '<div class="od-quiet">Next on the books: <button class="od-name" data-action="open-client" data-cid="' +
+        od.next.id + '">' + escapeHtml(od.next.name) + '</button> · ' +
+        fmtDate(nd, od.next.timezone) + ' at ' + fmtTime(nd, od.next.timezone) + '</div>';
+    } else {
+      body = '<div class="od-quiet">No upcoming calls on the books. The next booking to sync lands here with a countdown and their number.</div>';
+    }
+    box.innerHTML = '<div class="ondeck">' + head + body + '</div>';
+    return;
+  }
+
+  var c = od.focus;
+  var d = safeDate(c.callDateTime);
+  var tzInfo = tzChipInfo(c, now);
+  var handle = extractChannelHandle(c.youtubeLink);
+  var tel = telHref(c.phone);
+  var digits = String(c.phone || '').replace(/\D/g, '');
+  var nudge = onDeckNudgeText(c, od.late ? 'late' : 'soon', STATE.senderName);
+  var sms = digits ? ('sms:' + (digits.length === 10 ? '+1' + digits : '+' + digits) + '&body=' + encodeURIComponent(nudge)) : null;
+  var resched = (c.reschedules && c.reschedules.length) || c.rescheduleCount || 0;
+
+  var html = '<div class="ondeck' + (od.late ? ' late' : od.soon ? ' soon' : '') + '">' +
+    '<h4><span>⏱ On deck</span><span>' + od.todays.length + ' call' + (od.todays.length === 1 ? '' : 's') +
+      ' today' + (od.loggedCount ? (' · ' + od.loggedCount + ' logged') : '') + '</span></h4>' +
+    '<div class="od-main">' +
+      '<span class="od-time">' + fmtTime(d, c.timezone) + '</span>' +
+      '<button class="od-name" data-action="open-client" data-cid="' + c.id + '">' + escapeHtml(c.name) + '</button>' +
+      '<span class="od-count">' + countdownLabel(od.mins) + '</span>' +
+    '</div>' +
+    '<div class="od-meta">' +
+      (c.phone ? ('<span>' + escapeHtml(c.phone) + '</span>') : '<span class="od-chip warn">no phone on file</span>') +
+      '<span class="od-chip' + (tzInfo.warn ? ' warn' : '') + '">' + escapeHtml(tzInfo.timeLabel) + ' their time</span>' +
+      (handle ? ('<span class="od-chip">▶ ' + escapeHtml(handle) + '</span>') : '') +
+      (resched ? ('<span class="od-chip">↻ moved ' + resched + '×</span>') : '') +
+    '</div>' +
+    (c.notes && c.notes.trim() ? ('<div class="od-note"><strong>Notes:</strong> ' + escapeHtml(c.notes.trim()) + '</div>') : '') +
+    (od.late ? ('<div class="od-note">' + Math.abs(od.mins) + ' minutes past the start. One "I\'m here whenever you\'re ready" text saves a lot of these before they become a no-show.</div>') : '') +
+    '<div class="od-actions">' +
+      (tel ? ('<a class="btn btn-sm" href="' + escapeHtml(tel) + '">📞 Call</a>') : '') +
+      (sms ? ('<a class="btn btn-sm btn-primary" href="' + escapeHtml(sms) + '">💬 ' + (od.late ? 'Text "I\'m here"' : 'Send the link') + '</a>') : '') +
+      (od.started ? (
+        '<button class="btn btn-sm btn-green" data-action="set-outcome-quick" data-cid="' + c.id + '" data-status="Showed">✓ Showed</button>' +
+        '<button class="btn btn-sm" data-action="set-outcome-quick" data-cid="' + c.id + '" data-status="No-show">✗ No-show</button>' +
+        '<button class="btn btn-sm" data-action="set-outcome-quick" data-cid="' + c.id + '" data-status="Rescheduled">↻ Resched</button>'
+      ) : '') +
+    '</div>' +
+    (od.later.length ? ('<div class="od-rest"><span>Also today:</span>' + od.later.map(function(x){
+      return '<button data-action="open-client" data-cid="' + x.id + '">' +
+        fmtTime(safeDate(x.callDateTime), x.timezone) + ' · ' + escapeHtml(x.name) + '</button>';
+    }).join('') + '</div>') : '') +
+  '</div>';
+
+  box.innerHTML = html;
 }
 
 
@@ -1527,6 +1605,13 @@ function openEndOfDayModal(){
 async function init(){
   STATE = await loadState();
   renderAll();
+}
+
+// A countdown that only updates on reload is worse than none — it reads as
+// authoritative while quietly going stale. Re-render just the panel on a
+// timer; it's cheap and touches nothing else.
+if(typeof setInterval !== 'undefined'){
+  setInterval(function(){ if(STATE) renderOnDeck(); }, 30000);
 }
 // No DOMContentLoaded auto-boot here — auth.js owns the boot sequence in the
 // hosted build (it calls init() itself only once a signed-in session is
