@@ -319,6 +319,25 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .recent-send-row .replied-label{display:flex;align-items:center;gap:5px;flex:0 0 auto;font-size:11.5px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
 .recent-sends-empty{padding:16px 14px;color:var(--ink-faint);font-size:13px;}
 
+/* review queue — the answer to "did they write back?", asked once per send.
+   Deliberately loud: every unanswered row is a send the bandit can't learn
+   from, so this is the one panel that should nag. */
+.review-q{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow);}
+.review-q-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);}
+.review-q-head h4{margin:0;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--ink);}
+.review-q-head .hint{font-size:11.5px;color:var(--ink-faint);}
+.review-q-body{max-height:320px;overflow-y:auto;}
+.review-row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);font-size:13px;}
+.review-row:last-child{border-bottom:none;}
+.review-row .name{font-weight:700;flex:0 0 auto;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.review-row .snippet{color:var(--ink-soft);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.review-row .when{color:var(--ink-faint);font-size:11.5px;flex:0 0 auto;white-space:nowrap;}
+.review-actions{display:flex;gap:6px;flex:0 0 auto;}
+.btn-reply-yes,.btn-reply-no{font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:99px;border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;white-space:nowrap;transition:background .12s ease,color .12s ease,border-color .12s ease;}
+.btn-reply-yes:hover{background:var(--green);border-color:var(--green);color:#fff;}
+.btn-reply-no:hover{background:var(--ink-faint);border-color:var(--ink-faint);color:var(--card);}
+.review-q-done{padding:14px;font-size:13px;color:var(--ink-soft);}
+
 /* variants tab */
 .variant-stage-block{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:14px;box-shadow:var(--shadow);}
 table.variant-table{width:100%;border-collapse:collapse;margin-top:8px;}
@@ -530,6 +549,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>
     </div>
+    <div id="review-queue"></div>
     <div class="recent-sends" id="recent-sends-block">
       <button class="recent-sends-toggle" data-action="toggle-recent-sends" type="button">
         <span id="recent-sends-title">Recent sends</span>

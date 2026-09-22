@@ -574,7 +574,7 @@ test('a hand-edited or AI-generated send is logged as variantId "custom" and doe
   });
 });
 
-test('an un-edited, template-rendered send still credits its variant\'s bandit stats normally', () => {
+test('an un-edited, template-rendered send is attributed to its variant, and credits the bandit once reviewed', () => {
   const state = GB.buildDefaultState();
   const c = freshClient({ id: 'edit3', callDateTime: null });
   state.clients[c.id] = c;
@@ -583,6 +583,10 @@ test('an un-edited, template-rendered send still credits its variant\'s bandit s
   GB.markSent(state, c.id, 'welcome', rendered !== null ? rendered : variant.text);
   const logged = state.clients[c.id].messageLog[0];
   assert.notStrictEqual(logged.variantId, 'custom');
+  // The send is attributed immediately but stays out of the denominator until
+  // the reply question is actually answered — see reviewMessage.
+  assert.strictEqual(state.variantStats.welcome[logged.variantId].sends, 0);
+  GB.reviewMessage(state, c.id, 0, false);
   assert.strictEqual(state.variantStats.welcome[logged.variantId].sends, 1);
 });
 
@@ -941,6 +945,173 @@ test('renderAll does not throw on a populated state', () => {
   }
   GBFull._setState(state);
   assert.doesNotThrow(() => GBFull.renderAll());
+});
+
+console.log('\n--- T-1h reminder (hourbefore) ---');
+
+function minsFromNow(n) { return new Date(Date.now() + n * 60000).toISOString(); }
+
+test('call 45 min out, dayof already sent -> hourbefore due', () => {
+  const now = new Date();
+  const c = freshClient({
+    bookedDate: isoDaysAgo(5),
+    callDateTime: minsFromNow(45),
+    messageLog: [
+      { stage: 'welcome', variantId: 'w1', text: 'hi', sentAt: isoDaysAgo(4), responded: false, respondedAt: null },
+      { stage: 'dayof', variantId: 'd1', text: 'morning', sentAt: isoDaysAgo(0), responded: false, respondedAt: null }
+    ]
+  });
+  assert.ok(GB.computeDue(c, now).includes('hourbefore'));
+});
+
+test('call 3 hours out -> hourbefore NOT yet due', () => {
+  const c = freshClient({ bookedDate: isoDaysAgo(5), callDateTime: minsFromNow(180) });
+  assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
+});
+
+test('call 4 min out -> past the floor, hourbefore no longer due', () => {
+  const c = freshClient({ bookedDate: isoDaysAgo(5), callDateTime: minsFromNow(4) });
+  assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
+});
+
+test('call already started -> hourbefore never fires late', () => {
+  const c = freshClient({ bookedDate: isoDaysAgo(5), callDateTime: minsFromNow(-30) });
+  assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
+});
+
+test('hourbefore only fires once', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(5),
+    callDateTime: minsFromNow(40),
+    messageLog: [{ stage: 'hourbefore', variantId: 'h1', text: 'soon', sentAt: minsFromNow(-5), responded: false, respondedAt: null }]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
+});
+
+test('no-show client 45 min out -> cadence stopped, no hourbefore', () => {
+  const c = freshClient({ status: 'No-show', bookedDate: isoDaysAgo(5), callDateTime: minsFromNow(45) });
+  assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
+});
+
+test('every hourbefore variant promises a link and renders one', () => {
+  const c = freshClient({ callDateTime: minsFromNow(45) });
+  GB.buildDefaultVariants().hourbefore.forEach(v => {
+    assert.ok(v.text.includes('{link}'), 'variant ' + v.id + ' should carry the meet link');
+    const out = GB.renderTemplate(v.text, c, 'Johnny');
+    assert.ok(!out.includes('{'), 'variant ' + v.id + ' left an unrendered placeholder: ' + out);
+  });
+});
+
+test('sending hourbefore moves Booked -> Reminded', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: minsFromNow(45) });
+  state.clients[c.id] = c;
+  GB.markSent(state, c.id, 'hourbefore', 'anything at all');
+  assert.strictEqual(state.clients[c.id].status, 'Reminded');
+});
+
+console.log('\n--- reply review (bandit denominator) ---');
+
+test('a send does NOT count toward the bandit until reviewed', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 0, 'unreviewed send must not enter the denominator');
+  assert.strictEqual(state.clients[c.id].messageLog[0].reviewed, false);
+});
+
+test('reviewing "no reply" counts the send but no response', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  GB.reviewMessage(state, c.id, 0, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1);
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 0);
+});
+
+test('reviewing "replied" counts both', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  GB.reviewMessage(state, c.id, 0, true);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1);
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
+});
+
+test('changing the answer moves responses but never double-counts the send', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  GB.reviewMessage(state, c.id, 0, true);
+  GB.reviewMessage(state, c.id, 0, false);
+  GB.reviewMessage(state, c.id, 0, true);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1, 'send counted exactly once');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
+});
+
+test('hand-edited text carries no template stats but still reviews clean', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  GB.markSent(state, c.id, 'welcome', 'totally rewritten by hand');
+  assert.strictEqual(state.clients[c.id].messageLog[0].variantId, 'custom');
+  assert.doesNotThrow(() => GB.reviewMessage(state, c.id, 0, true));
+  assert.strictEqual(state.clients[c.id].messageLog[0].reviewed, true);
+});
+
+test('getAwaitingReview skips fresh sends, surfaces settled ones', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  c.messageLog = [
+    { stage: 'welcome', variantId: 'w1', text: 'just now', sentAt: minsFromNow(-5), responded: false, respondedAt: null, reviewed: false },
+    { stage: 'monday', variantId: 'm1', text: 'yesterday', sentAt: isoDaysAgo(1), responded: false, respondedAt: null, reviewed: false },
+    { stage: 'dayof', variantId: 'd1', text: 'answered', sentAt: isoDaysAgo(1), responded: true, respondedAt: isoDaysAgo(1), reviewed: true }
+  ];
+  state.clients[c.id] = c;
+  const q = GB.getAwaitingReview(state, new Date());
+  assert.strictEqual(q.length, 1, 'only the settled, unanswered one belongs in the queue');
+  assert.strictEqual(q[0].message.text, 'yesterday');
+});
+
+test('getAwaitingReview ages out stale sends rather than asking about them', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  c.messageLog = [
+    { stage: 'welcome', variantId: 'w1', text: 'two days ago', sentAt: isoDaysAgo(2), responded: false, respondedAt: null, reviewed: false },
+    { stage: 'monday', variantId: 'm1', text: 'ten days ago', sentAt: isoDaysAgo(10), responded: false, respondedAt: null, reviewed: false }
+  ];
+  state.clients[c.id] = c;
+  const q = GB.getAwaitingReview(state, new Date());
+  assert.strictEqual(q.length, 1, 'a ten-day-old send is past honest recall and should not be asked about');
+  assert.strictEqual(q[0].message.text, 'two days ago');
+});
+
+test('getAwaitingReview ignores archived clients', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({ ignored: true });
+  c.messageLog = [{ stage: 'welcome', variantId: 'w1', text: 'x', sentAt: isoDaysAgo(1), responded: false, respondedAt: null, reviewed: false }];
+  state.clients[c.id] = c;
+  assert.strictEqual(GB.getAwaitingReview(state, new Date()).length, 0);
+});
+
+test('legacy data: a logged reply counts as reviewed, an unanswered one does not', () => {
+  const migrated = GB.sanitizeClient({
+    id: 'legacy', name: 'Old Record', phone: '5125551234',
+    messageLog: [
+      { stage: 'welcome', variantId: 'w1', text: 'a', sentAt: isoDaysAgo(9), responded: true, respondedAt: isoDaysAgo(9) },
+      { stage: 'monday', variantId: 'm1', text: 'b', sentAt: isoDaysAgo(8), responded: false, respondedAt: null }
+    ]
+  });
+  assert.strictEqual(migrated.messageLog[0].reviewed, true, 'a reply on file is self-evidently reviewed');
+  assert.strictEqual(migrated.messageLog[1].reviewed, false, 'never-answered stays unknown, not a rejection');
 });
 
 console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');

@@ -76,7 +76,8 @@ async function loadState(){
       }).map(function(m){
         return {
           stage: m.stage, variantId: m.variant_key, text: m.text,
-          sentAt: m.sent_at, responded: !!m.responded, respondedAt: m.responded_at
+          sentAt: m.sent_at, responded: !!m.responded, respondedAt: m.responded_at,
+          reviewed: !!m.reviewed
         };
       }),
       notes: row.notes, recap: row.recap,
@@ -106,6 +107,25 @@ async function loadState(){
       if(!state.variants[row.stage]) state.variants[row.stage] = [];
       state.variants[row.stage].push({id: row.variant_key, text: row.text, builtin: !!row.builtin, needsChannel: !!row.needs_channel});
     });
+
+    // An account seeded before a new built-in stage existed has variant rows,
+    // so the seed branch above never runs for it — and it would silently never
+    // receive that stage's templates. Backfill only the stages it's actually
+    // missing, leaving every existing row (and any hand-written variant)
+    // untouched. This is how 'hourbefore' reaches accounts created earlier.
+    var defaultsByStage = buildDefaultVariants();
+    var missingRows = [];
+    Object.keys(defaultsByStage).forEach(function(stage){
+      if(state.variants[stage] && state.variants[stage].length) return;
+      state.variants[stage] = defaultsByStage[stage];
+      defaultsByStage[stage].forEach(function(v){
+        missingRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel});
+      });
+    });
+    if(missingRows.length){
+      var backfillRes = await sb.from('variants').insert(missingRows);
+      if(backfillRes.error) console.error('GhostBuster: variant backfill failed', backfillRes.error);
+    }
   }
 
   (statsRes.data || []).forEach(function(row){
@@ -194,7 +214,8 @@ async function saveState(state){
       state.clients[id].messageLog.forEach(function(m){
         msgRows.push({
           client_id: id, stage: m.stage, variant_key: m.variantId || '', text: m.text,
-          sent_at: m.sentAt, responded: !!m.responded, responded_at: m.respondedAt
+          sent_at: m.sentAt, responded: !!m.responded, responded_at: m.respondedAt,
+          reviewed: !!m.reviewed
         });
       });
     });

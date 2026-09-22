@@ -25,6 +25,10 @@ var STOP_1TO4 = {Completed:true,'No-show':true,Ghosted:true};
 // changed — a reply that never turns into an actual date doesn't stop it.
 var FOLLOWUP_REFIRE_DAYS = 4;
 
+// Window for the T-1h reminder, in minutes before the call.
+var HOURBEFORE_LEAD_MIN = 75;
+var HOURBEFORE_FLOOR_MIN = 10;
+
 
 /* ---------- small utils ---------- */
 function uid(){ return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -84,6 +88,15 @@ function buildDefaultVariants(){
       {id:'d3', builtin:true, text:"Hey {name}, talk at {time}. Going to walk through the exact content hooks that drive local watch time. Room link is here: {link}"},
       {id:'d4', builtin:true, text:"Hi {name}, see you at {time}. Ready to break down your channel growth structure. Join here: {link}"}
     ],
+    // Fires ~1 hour out, after "dayof" has already gone in the morning. The
+    // no-show data says most misses aren't people changing their mind, they're
+    // people whose day ran them over — so this one stays short, leads with the
+    // link, and asks for nothing but a thumbs up.
+    hourbefore: [
+      {id:'h1', builtin:true, text:"Hey {name}, we're on in about an hour at {time}. Here's the link so it's handy: {link}"},
+      {id:'h2', builtin:true, text:"{name}, coming up on {time}. Link's right here when you're ready: {link}"},
+      {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"}
+    ],
     recovery: [
       {id:'r1', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to map out that channel growth blueprint? Let me know if I should drop a couple new times."},
       {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to get your YouTube content dialed in, send over a couple open windows and I'll get us set."}
@@ -142,7 +155,12 @@ function sanitizeClient(raw, fallbackId){
       text: typeof m.text === 'string' ? m.text : '',
       sentAt: (typeof m.sentAt === 'string' && !isNaN(Date.parse(m.sentAt))) ? m.sentAt : nowISO(),
       responded: !!m.responded,
-      respondedAt: typeof m.respondedAt === 'string' ? m.respondedAt : null
+      respondedAt: typeof m.respondedAt === 'string' ? m.respondedAt : null,
+      // Data predating the reviewed flag: a logged reply is self-evidently a
+      // reviewed message. A responded:false with no flag is genuinely unknown
+      // — nobody ever answered the question — so it stays unreviewed and gets
+      // surfaced for review rather than silently counting as a rejection.
+      reviewed: (typeof m.reviewed === 'boolean') ? m.reviewed : !!m.responded
     };
   }) : [];
   return {
@@ -383,6 +401,17 @@ function computeDue(client, now){
       if(todayKey === callKey && !hasSentStage(client,'dayof')){
         due.push('dayof');
       }
+      // The T-1h nudge. "dayof" is date-granular, so it typically goes out
+      // whenever the morning list gets worked — hours before the call, which
+      // is exactly when a reminder is easiest to forget again. This one is
+      // clock-granular and only surfaces inside a narrow window right before
+      // the call, so it lands while they still have time to walk to a desk.
+      // Floor of 10 minutes: past that it's too late to be useful and the On
+      // Deck panel's own nudge takes over.
+      var minsOut = (callDate.getTime() - now.getTime()) / 60000;
+      if(minsOut <= HOURBEFORE_LEAD_MIN && minsOut >= HOURBEFORE_FLOOR_MIN && !hasSentStage(client,'hourbefore')){
+        due.push('hourbefore');
+      }
     }
   }
 
@@ -541,18 +570,22 @@ function markSent(state, clientId, stage, text){
     text: text,
     sentAt: nowISO(),
     responded: false,
-    respondedAt: null
+    respondedAt: null,
+    reviewed: false
   });
-  if(!wasCustomized){
-    if(!state.variantStats[stage]) state.variantStats[stage] = {};
-    if(!state.variantStats[stage][variant.id]) state.variantStats[stage][variant.id] = {sends:0,responses:0};
-    state.variantStats[stage][variant.id].sends++;
-  }
+  // Deliberately NO stats.sends++ here. A send only enters the bandit's
+  // denominator once someone has actually looked at whether it got a reply
+  // (see reviewMessage). Counting at send time conflated "they didn't reply"
+  // with "nobody checked yet" — both were responded:false — so every
+  // unreviewed message scored as a rejection and pickVariant's
+  // (responses+1)/(sends+2) drifted toward whichever template had been used
+  // least. An unreviewed send is now simply absent from the math instead of
+  // being counted as a failure.
 
   if(!STOP_1TO4[client.status]){
     if((stage === 'monday' || stage === 'midcheckin') && client.status === 'Booked'){
       client.status = 'Confirmed';
-    } else if(stage === 'dayof' && (client.status === 'Booked' || client.status === 'Confirmed')){
+    } else if((stage === 'dayof' || stage === 'hourbefore') && (client.status === 'Booked' || client.status === 'Confirmed')){
       client.status = 'Reminded';
     }
   }
@@ -577,15 +610,81 @@ function snoozeTouch(state, clientId, stage, now){
 }
 
 
-function toggleReplied(state, clientId, msgIndex){
+// The single seam for "did this message get a reply?". Recording either
+// answer — yes or no — is what puts the send into the bandit's denominator;
+// a message nobody has answered for stays out of the math entirely.
+// Re-answering later just moves the response count, never the send count.
+function reviewMessage(state, clientId, msgIndex, didReply){
   var client = state.clients[clientId];
   if(!client || !client.messageLog[msgIndex]) return;
   var m = client.messageLog[msgIndex];
-  m.responded = !m.responded;
-  m.respondedAt = m.responded ? nowISO() : null;
-  var stats = state.variantStats[m.stage] && state.variantStats[m.stage][m.variantId];
-  if(stats){ stats.responses = Math.max(0, stats.responses + (m.responded ? 1 : -1)); }
+  didReply = !!didReply;
+
+  // 'custom' and AI-drafted text aren't any template's copy, so they carry no
+  // template stats — but they still get marked reviewed so they stop nagging.
+  var tracked = m.variantId && m.variantId !== 'custom';
+  var stats = null;
+  if(tracked){
+    if(!state.variantStats[m.stage]) state.variantStats[m.stage] = {};
+    if(!state.variantStats[m.stage][m.variantId]) state.variantStats[m.stage][m.variantId] = {sends:0, responses:0};
+    stats = state.variantStats[m.stage][m.variantId];
+  }
+
+  if(!m.reviewed){
+    m.reviewed = true;
+    if(stats){
+      stats.sends++;
+      if(didReply) stats.responses++;
+    }
+  } else if(stats && didReply !== m.responded){
+    stats.responses = Math.max(0, stats.responses + (didReply ? 1 : -1));
+  }
+
+  m.responded = didReply;
+  m.respondedAt = didReply ? nowISO() : null;
   saveState(state);
+}
+
+
+// Back-compat wrapper for the existing checkbox UI: ticking it means "yes,
+// they replied", unticking means "no, they didn't" — both are answers, so
+// either way the message counts as reviewed from then on.
+function toggleReplied(state, clientId, msgIndex){
+  var client = state.clients[clientId];
+  if(!client || !client.messageLog[msgIndex]) return;
+  reviewMessage(state, clientId, msgIndex, !client.messageLog[msgIndex].responded);
+}
+
+
+// Everything sent long enough ago that a reply would have landed by now, and
+// that nobody has answered the reply question for yet. This is the queue that
+// feeds the bandit — an empty one means the stats are trustworthy.
+//
+// The 3-day ceiling is doing real work. It keeps the queue to something
+// finishable in one sitting (a 14-day window opened at 129 rows, which is a
+// wall people learn to scroll past), and it keeps the answers honest — nobody
+// reliably remembers whether a particular text got a reply a fortnight ago,
+// and a guessed answer is worse for the bandit than no answer at all. Sends
+// that age out are simply never counted, which is the safe direction.
+function getAwaitingReview(state, now, minAgeHours, maxAgeDays){
+  now = now || new Date();
+  minAgeHours = (typeof minAgeHours === 'number') ? minAgeHours : 2;
+  maxAgeDays = (typeof maxAgeDays === 'number') ? maxAgeDays : 3;
+  var newest = now.getTime() - minAgeHours * 3600000;
+  var oldest = now.getTime() - maxAgeDays * 86400000;
+  var out = [];
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    if(c.ignored) return;
+    c.messageLog.forEach(function(m, idx){
+      if(m.reviewed) return;
+      var t = Date.parse(m.sentAt);
+      if(isNaN(t) || t > newest || t < oldest) return;
+      out.push({client: c, idx: idx, message: m});
+    });
+  });
+  out.sort(function(a,b){ return Date.parse(a.message.sentAt) - Date.parse(b.message.sentAt); });
+  return out;
 }
 
 
@@ -1530,6 +1629,8 @@ var __LOGIC_EXPORTS__ = {
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
+  reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
+  HOURBEFORE_LEAD_MIN: HOURBEFORE_LEAD_MIN, HOURBEFORE_FLOOR_MIN: HOURBEFORE_FLOOR_MIN,
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,
   AREA_CODE_TZ: AREA_CODE_TZ, areaCodeFromPhone: areaCodeFromPhone, timezoneForClient: timezoneForClient,
   resolveClientTimezone: resolveClientTimezone, tzLabel: tzLabel, meetLinkFromEvent: meetLinkFromEvent,

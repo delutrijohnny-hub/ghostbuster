@@ -92,6 +92,7 @@ function renderAll(){
   renderTodos();
   renderOnDeck();
   renderCallsBoard();
+  renderReviewQueue();
   renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
@@ -415,6 +416,55 @@ function renderCallsBoard(){
 
 
 /* ---- recent sends: "did they reply?" review, newest first ---- */
+// The one panel that nags. Every row here is a send the bandit is holding in
+// limbo: it can't count as a win or a loss until someone says which it was.
+// Two explicit buttons rather than a checkbox, because a checkbox left
+// unticked is ambiguous — and that ambiguity is exactly what broke the stats
+// in the first place.
+function renderReviewQueue(){
+  var box = el('review-queue');
+  if(!box) return;
+  box.innerHTML = '';
+  var now = new Date();
+  var queue = getAwaitingReview(STATE, now);
+  if(!queue.length){
+    // Only worth showing the all-clear if there was ever anything to clear.
+    var anySends = Object.keys(STATE.clients).some(function(cid){ return STATE.clients[cid].messageLog.length; });
+    if(!anySends) return;
+    box.appendChild(h('div',{class:'review-q'},[
+      h('div',{class:'review-q-done'},['✅ Every send has a reply logged. The template stats are trustworthy.'])
+    ]));
+    return;
+  }
+
+  var head = h('div',{class:'review-q-head'},[
+    h('h4',{},['Did they write back? — ' + queue.length]),
+    h('span',{class:'hint'},['Until you answer, these don\'t count either way'])
+  ]);
+  var body = h('div',{class:'review-q-body'},[]);
+
+  queue.slice(0, 40).forEach(function(it){
+    var sentAt = safeDate(it.message.sentAt);
+    var when = sentAt ? (fmtDate(sentAt, it.client.timezone) + ' ' + fmtTime(sentAt, it.client.timezone)) : '';
+    body.appendChild(h('div',{class:'review-row'},[
+      h('span',{class:'name','data-action':'open-client','data-cid':it.client.id},[it.client.name]),
+      h('span',{class:'stage-chip' + (it.message.stage==='noshow'?' noshow':'') + (it.message.stage==='recovery'?' recovery':'')},[it.message.stage]),
+      h('span',{class:'snippet'},[it.message.text]),
+      h('span',{class:'when'},[when]),
+      h('span',{class:'review-actions'},[
+        h('button',{class:'btn-reply-yes','data-action':'review-replied','data-cid':it.client.id,'data-idx':String(it.idx),title:'They responded'},['👍 replied']),
+        h('button',{class:'btn-reply-no','data-action':'review-silent','data-cid':it.client.id,'data-idx':String(it.idx),title:'No response'},['no reply'])
+      ])
+    ]));
+  });
+
+  if(queue.length > 40){
+    body.appendChild(h('div',{class:'review-q-done'},['+ ' + (queue.length - 40) + ' older ones behind these.']));
+  }
+  box.appendChild(h('div',{class:'review-q'},[head, body]));
+}
+
+
 function renderRecentSends(){
   var block = el('recent-sends-block');
   var body = el('recent-sends-body');
@@ -1265,6 +1315,14 @@ document.addEventListener('click', function(ev){
       // same underlying toggle as inside the modal, but used from the board/table
       // where popping a modal open on a single tap would defeat the point
       doToggleReplied(cid, parseInt(target.getAttribute('data-idx'),10));
+      renderAll();
+      break;
+    case 'review-replied':
+      reviewMessage(STATE, cid, parseInt(target.getAttribute('data-idx'),10), true);
+      renderAll();
+      break;
+    case 'review-silent':
+      reviewMessage(STATE, cid, parseInt(target.getAttribute('data-idx'),10), false);
       renderAll();
       break;
     case 'toggle-recent-sends':
