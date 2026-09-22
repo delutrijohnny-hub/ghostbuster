@@ -10,3 +10,11 @@ auth-test.html
 .DS_Store
 .claude/
 supabase/.temp/
+
+# Local-only desktop build — the deployed copies live in hosted/.
+# Anchored with a leading slash so these never match hosted/logic.js etc,
+# which must stay tracked. test.js is deliberately NOT here: the test suite
+# validates the shared logic and belongs in version control.
+/app.js
+/index.html
+/logic.js
