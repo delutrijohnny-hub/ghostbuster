@@ -155,7 +155,8 @@ function sanitizeClient(raw, fallbackId){
     meetLink: typeof raw.meetLink === 'string' ? raw.meetLink : '',
     callDateTime: (typeof raw.callDateTime === 'string' && !isNaN(Date.parse(raw.callDateTime))) ? raw.callDateTime : null,
     bookedDate: (typeof raw.bookedDate === 'string' && !isNaN(Date.parse(raw.bookedDate))) ? raw.bookedDate : nowISO(),
-    timezone: (typeof raw.timezone === 'string' && raw.timezone) ? raw.timezone : 'America/New_York',
+    timezone: resolveClientTimezone(raw),
+    timezoneConfirmed: raw.timezoneConfirmed === true,
     status: VALID_STATUSES.indexOf(raw.status) !== -1 ? raw.status : 'Booked',
     messageLog: messageLog,
     notes: typeof raw.notes === 'string' ? raw.notes : '',
@@ -493,9 +494,14 @@ function renderTemplate(template, client, senderName){
     name: firstName(client.name),
     sender: senderName || 'Johnny',
     date: callDate ? fmtDate(callDate, tz) : '',
-    time: callDate ? fmtTime(callDate, tz) : '',
+    // Zone spelled out, so "11:00 AM PDT" can't be read as 11am wherever the
+    // reader happens to be.
+    time: callDate ? (fmtTime(callDate, tz) + ' ' + tzLabel(tz, callDate)).trim() : '',
     weekday: callDate ? weekdayName(callDate, tz) : '',
-    link: client.meetLink || 'the link in your calendar invite',
+    // Never point a client at their calendar — the invite's Meet link is
+    // pulled through by the sync now. If one is genuinely missing this reads
+    // as an obvious placeholder rather than quietly shipping vague wording.
+    link: client.meetLink || '(no link on file — paste one before sending)',
     channel: extractChannelHandle(client.youtubeLink) || ''
   };
   return String(template).replace(/\{(\w+)\}/g, function(m, key){ return (key in vals) ? vals[key] : m; });
@@ -619,23 +625,30 @@ var AREA_CODE_TZ = (function(){
   var m = {};
   function add(codes, zone){ codes.forEach(function(c){ m[c]=zone; }); }
   add(['203','475','860','959','302','202','305','321','352','386','407','561','689','754','772','786','813','863','904','941','954',
-       '229','404','470','478','678','706','762','770','912','219','260','317','463','574','765','812','930',
+       '229','404','470','478','678','706','762','770','912','260','317','463','574','765','812','930',
        '502','606','859','207','240','301','410','443','667','339','351','413','508','617','774','781','857','978',
        '231','248','269','313','517','586','616','679','734','810','906','603','201','551','609','732','848','856','862','908','973',
        '212','315','332','347','516','518','585','607','631','646','680','716','718','838','845','914','917','929','934',
        '252','336','704','743','828','910','919','980','984','216','220','234','283','330','380','419','440','513','567','614','740','937',
+       '239','727','947','656',
        '215','223','267','272','412','484','570','610','717','724','814','878','401','803','839','843','854','864',
        '423','865','802','276','434','540','571','703','757','804','826','948','304','681'], 'America/New_York');
-  add(['205','251','256','334','938','479','501','870','850','217','224','309','312','331','618','630','708','773','779','815','847','872',
+  // 219 is Gary, Indiana — the north-west corner of the state runs on Chicago
+  // time, not Eastern like the rest of it.
+  add(['219','205','251','256','334','938','479','501','870','850','217','224','309','312','331','618','630','708','773','779','815','847','872',
        '319','515','563','641','712','316','620','785','913','270','364','225','318','337','504','985',
        '218','320','507','612','651','763','952','228','601','662','769','314','417','573','636','660','816','975',
        '402','531','308','701','405','539','572','580','918','605','615','629','731','901','931',
        '214','254','281','325','346','361','409','430','432','469','512','682','713','737','806','817','830','832','903','936','940','956','972','979',
        '262','414','534','608','715','920'], 'America/Chicago');
-  add(['303','719','720','970','406','505','575','385','435','801','307','208','986'], 'America/Denver');
+  // 915 is El Paso — geographically Texas, but on Mountain time, and it was
+  // sitting in the Pacific block an hour out.
+  add(['915','303','719','720','970','406','505','575','385','435','801','307','208','986'], 'America/Denver');
   add(['480','520','602','623','928'], 'America/Phoenix');
+  add(['907'], 'America/Anchorage');
+  add(['808'], 'Pacific/Honolulu');
   add(['209','213','279','310','323','341','408','415','424','442','510','530','559','562','619','626','628','650','657','661','669',
-       '707','714','747','760','805','818','820','831','840','858','909','916','925','949','951','915',
+       '707','714','747','760','805','818','820','831','840','858','909','916','925','949','951',
        '702','725','775','458','503','541','971','206','253','360','425','509','564'], 'America/Los_Angeles');
   return m;
 })();
@@ -652,6 +665,32 @@ function timezoneForClient(phone, fallback){
   return (ac && AREA_CODE_TZ[ac]) ? AREA_CODE_TZ[ac] : (fallback || 'America/New_York');
 }
 
+// The hosted calendar sync stores ev.start.timeZone as the client's timezone,
+// but that is the *organiser's* calendar zone — i.e. ours, or Asia/Kolkata for
+// events a teammate abroad created. Texts then quote the call time in that
+// zone, so a California client booked at 2pm Eastern is told "2:00 PM".
+//
+// This app's design already treats the phone's area code as the source of
+// truth ("guessed from the phone's area code; correct it if you know better"),
+// so the area code wins here and the stored value is only trusted when someone
+// has actually confirmed it by hand in the client modal.
+function resolveClientTimezone(raw){
+  var stored = (typeof raw.timezone === 'string' && raw.timezone) ? raw.timezone : null;
+  if(raw.timezoneConfirmed === true && stored) return stored;
+  var fromPhone = raw.phone ? AREA_CODE_TZ[areaCodeFromPhone(raw.phone)] : null;
+  return fromPhone || stored || 'America/New_York';
+}
+
+// DST-correct short label ("PDT" in summer, "PST" in winter) straight from
+// Intl, so a quoted time can never be read in the wrong zone.
+function tzLabel(tz, date){
+  try{
+    var parts = new Intl.DateTimeFormat('en-US',{timeZone:tz||'UTC',timeZoneName:'short'}).formatToParts(date||new Date());
+    for(var i=0;i<parts.length;i++){ if(parts[i].type==='timeZoneName') return parts[i].value; }
+  }catch(e){}
+  return '';
+}
+
 
 var PHONE_RE = /(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
 
@@ -662,7 +701,18 @@ function extractPhone(text){ var m = String(text||'').match(PHONE_RE); return m 
 
 function extractYoutube(text){ var m = String(text||'').match(/https?:\/\/(www\.)?youtube\.com\/[^\s)"'<]+/i); return m ? m[0] : ''; }
 
-function extractMeetLink(text){ var m = String(text||'').match(/https?:\/\/(meet\.google\.com|[\w.-]*zoom\.us)[^\s)"'<]*/i); return m ? m[0] : ''; }
+function extractMeetLink(text){ var m = String(text||'').match(/https?:\/\/(meet\.google\.com|[\w.-]*zoom\.us|teams\.microsoft\.com|teams\.live\.com|whereby\.com)[^\s)"'<]*/i); return m ? m[0] : ''; }
+
+// Every place a conferencing link can hide on an event, in order of how
+// authoritative it is. X-GOOGLE-CONFERENCE and LOCATION carry the real Meet
+// room; the description is the last resort because on these booking-form
+// invites it holds the client's details, not the link.
+function meetLinkFromEvent(ev){
+  return extractMeetLink(ev.conference)
+      || extractMeetLink(ev.location)
+      || extractMeetLink(ev.description)
+      || '';
+}
 
 function pad2(n){ return (n<10?'0':'') + n; }
 
@@ -695,8 +745,15 @@ function parseICS(text){
     var attendeeLines = unfolded.match(/^ATTENDEE.*$/gim) || [];
     var dtstart = get('DTSTART');
     var tzidMatch = dtstart.params.match(/TZID=([^;:]+)/i);
+    // Google puts the Meet link in X-GOOGLE-CONFERENCE and LOCATION, not in
+    // the description — and these booking-form descriptions are custom text
+    // that never contains it. Reading only the description is why every
+    // day-of text fell back to "the link in your calendar invite".
+    var location = stripHtml(get('LOCATION').value.replace(/\\,/g,',').replace(/\\n/gi,' '));
+    var conference = get('X-GOOGLE-CONFERENCE').value.replace(/\\,/g,',').trim();
     events.push({
       summary: summary, description: description,
+      location: location, conference: conference,
       dtstartRaw: dtstart.value, dtstartTzid: tzidMatch ? tzidMatch[1] : null,
       uid: get('UID').value, created: get('CREATED').value, attendeeLines: attendeeLines
     });
@@ -759,7 +816,7 @@ function clientFromICSEvent(ev){
     googleEventId: ev.uid || null,
     name: name, phone: phone, email: email,
     youtubeLink: extractYoutube(ev.description),
-    meetLink: extractMeetLink(ev.description),
+    meetLink: meetLinkFromEvent(ev),
     callDateTime: dtISO,
     bookedDate: bookedDate
   };
@@ -1369,6 +1426,7 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,
   AREA_CODE_TZ: AREA_CODE_TZ, areaCodeFromPhone: areaCodeFromPhone, timezoneForClient: timezoneForClient,
+  resolveClientTimezone: resolveClientTimezone, tzLabel: tzLabel, meetLinkFromEvent: meetLinkFromEvent,
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,

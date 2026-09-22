@@ -156,7 +156,10 @@ async function syncOneCalendar(
         youtube_link: parsed.youtubeLink || existingByEvent.youtube_link,
         meet_link: parsed.meetLink || existingByEvent.meet_link,
         organizer_email: parsed.organizerEmail,
-        timezone: parsed.timezone,
+        // Never overwrite an existing zone on re-sync: it may have been
+        // corrected by hand in the client modal, and the app self-heals a
+        // stale one from the area code on load anyway.
+        timezone: existingByEvent.timezone || parsed.timezone,
         updated_at: new Date().toISOString(),
       };
       const oldTime = existingByEvent.call_date_time ? new Date(existingByEvent.call_date_time).getTime() : null;

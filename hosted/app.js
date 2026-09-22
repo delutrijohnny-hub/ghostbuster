@@ -1347,6 +1347,9 @@ document.addEventListener('change', function(ev){
     if(c){
       if(field === 'callDateTime') c.callDateTime = t.value ? parseDatetimeLocalInTZ(t.value, c.timezone || 'America/New_York') : null;
       else c[field] = t.value;
+      // Picking a zone by hand is a deliberate correction — flag it so the
+      // area-code guess stops overriding it on every load.
+      if(field === 'timezone') c.timezoneConfirmed = true;
       saveState(STATE); renderAll();
       // the call-time field is displayed in the client's own zone, so a
       // timezone change needs the modal itself re-drawn to stay correct

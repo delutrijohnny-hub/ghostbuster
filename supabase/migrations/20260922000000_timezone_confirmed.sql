@@ -1,0 +1,11 @@
+-- resolveClientTimezone() lets the phone's area code win over whatever zone
+-- is stored, EXCEPT when someone has deliberately corrected it by hand in the
+-- client modal (timezoneConfirmed). Without somewhere to persist that flag the
+-- hosted app dropped it on every save, so a hand correction silently reverted
+-- to the area-code guess on the next load — the exact behaviour the flag
+-- exists to stop. localStorage got this for free (it serialises the whole
+-- object); Postgres needs the column spelled out.
+--
+-- Default false is right for every existing row: nothing has been hand
+-- confirmed yet, so the area code should win until someone says otherwise.
+alter table public.clients add column timezone_confirmed boolean not null default false;

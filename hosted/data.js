@@ -69,7 +69,7 @@ async function loadState(){
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
-      timezone: row.timezone, status: row.status,
+      timezone: row.timezone, timezoneConfirmed: !!row.timezone_confirmed, status: row.status,
       messageLog: (row.message_log || []).slice().sort(function(a,b){
         return new Date(a.sent_at) - new Date(b.sent_at);
       }).map(function(m){
@@ -170,7 +170,7 @@ async function saveState(state){
         name: c.name, phone: c.phone, email: c.email,
         youtube_link: c.youtubeLink, meet_link: c.meetLink,
         call_date_time: c.callDateTime, booked_date: c.bookedDate,
-        timezone: c.timezone, status: c.status,
+        timezone: c.timezone, timezone_confirmed: !!c.timezoneConfirmed, status: c.status,
         notes: c.notes, recap: c.recap, close_outcome: c.closeOutcome || null,
         reschedules: c.reschedules, reschedule_count: c.rescheduleCount,
         stalled_since: c.stalledSince, ignored: !!c.ignored, manually_added: !!c.manuallyAdded,
