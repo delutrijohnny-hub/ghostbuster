@@ -59,6 +59,7 @@ async function loadState(){
     }),
     epsilon: settingsRes.data ? Number(settingsRes.data.epsilon) : 0.2,
     senderName: (settingsRes.data && settingsRes.data.sender_name) || deriveSenderName(user.email),
+    poolsLearning: !!(settingsRes.data && settingsRes.data.pools_learning),
     lastSync: null
   };
 
@@ -112,12 +113,17 @@ async function loadState(){
     state.variantStats[row.stage][row.variant_key] = {sends: row.sends, responses: row.responses};
   });
 
-  // Built-in (shared) templates learn from everyone's sends, not just this
-  // account's — with several real accounts now sending the exact same
-  // wording, pooling gives the bandit far more signal per template than any
-  // one person's own trickle of traffic would. Only applies to builtin
-  // variants; a hand-added custom one stays purely personal per-user stats.
-  var pooledRes = await sb.from('builtin_variant_stats').select('*');
+  // Built-in (shared) templates can learn from everyone's sends rather than
+  // just this account's — but only between accounts that actually log
+  // replies. An account that sends and never logs contributes sends that can
+  // never produce a reply, and because pickVariant scores with
+  // (responses+1)/(sends+2) those aren't neutral: they push a variant down
+  // the ranking, which had the bandit favouring whichever message had been
+  // used least. Opt-in via app_settings.pools_learning; everyone else falls
+  // back to their own per-user variant_stats, already loaded above.
+  var pooledRes = (settingsRes.data && settingsRes.data.pools_learning)
+    ? await sb.from('builtin_variant_stats').select('*')
+    : {error: null, data: []};
   if(!pooledRes.error){
     (pooledRes.data || []).forEach(function(row){
       if(!state.variantStats[row.stage]) state.variantStats[row.stage] = {};

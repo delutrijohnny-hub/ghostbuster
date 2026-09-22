@@ -1,0 +1,16 @@
+-- Shared bandit learning is now opt-in per account.
+--
+-- Pooling was built on the assumption that several accounts were all sending
+-- the same templates and logging replies, so their results were the same
+-- signal. In practice one account does ~all the sending and the rest log
+-- nothing, so pooling mixed in sends that can never produce a reply. A send
+-- with a guaranteed-zero reply isn't neutral: pickVariant() scores with
+-- (responses+1)/(sends+2), so piling on zero-reply sends actively pushes a
+-- variant DOWN the ranking. The net effect was a bandit steering toward
+-- whichever message had been used least.
+--
+-- Default false: an account contributes to (and reads) the shared pool only
+-- once it's actually logging replies, otherwise it falls back to its own
+-- per-user variant_stats. Flip an account on when it starts pulling its
+-- weight.
+alter table public.app_settings add column pools_learning boolean not null default false;

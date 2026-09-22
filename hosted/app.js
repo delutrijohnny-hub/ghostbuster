@@ -1500,6 +1500,10 @@ document.addEventListener('keydown', function(ev){
 // variants aren't pooled — their stats stay purely in this account's own
 // variant_stats row, already handled by saveState().
 function pooledIncrementIfBuiltin(stage, variantId, field, delta){
+  // Accounts that don't log replies don't get to move the shared numbers —
+  // their sends are guaranteed-zero-reply and drag every variant they touch
+  // down the ranking. See the pools_learning migration.
+  if(!STATE.poolsLearning) return;
   var variant = (STATE.variants[stage] || []).filter(function(v){ return v.id === variantId; })[0];
   if(!variant || !variant.builtin) return;
   window.GB_SUPABASE.rpc('increment_builtin_stat', {p_stage: stage, p_variant_key: variantId, p_field: field, p_delta: delta || 1})
