@@ -1474,6 +1474,100 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- configurable sequences ---');
+
+function withSequence(steps, fn){
+  GB.setSequence(steps);
+  try { fn(); } finally { GB.setSequence(null); }
+}
+
+test('the default sequence is what the hard-coded rules did', () => {
+  // The real assertion is the whole computeDue suite above still passing; this
+  // just pins the shape so a step cannot be dropped unnoticed.
+  const keys = GB.buildDefaultSequence().map(s => s.key);
+  assert.deepStrictEqual(keys,
+    ['welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow']);
+});
+
+test('a business can drop a touch it does not want', () => {
+  // An HVAC shop has no use for "Monday of the call week".
+  const noMonday = GB.buildDefaultSequence().filter(s => s.key !== 'monday');
+  withSequence(noMonday, () => {
+    const c = freshClient({
+      bookedDate: isoDaysAgo(6),
+      callDateTime: isoDaysFromNow(2),
+      messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(5),responded:false,respondedAt:null,reviewed:true}]
+    });
+    assert.ok(!GB.computeDue(c, new Date()).includes('monday'));
+  });
+});
+
+test('days_before_appointment fires on exactly that day', () => {
+  withSequence([{key:'t2', stage:'midcheckin', trigger:{type:'days_before_appointment', days:2}}], () => {
+    const two = freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
+    const four = freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(4)});
+    assert.ok(GB.computeDue(two, new Date()).includes('midcheckin'), 'should fire 2 days out');
+    assert.ok(!GB.computeDue(four, new Date()).includes('midcheckin'), 'should not fire 4 days out');
+  });
+});
+
+test('days_after_create drives a cadence with no appointment at all', () => {
+  // A contact with no booked call — the HVAC "we quoted you, chase it" case.
+  withSequence([{key:'chase', stage:'recovery', trigger:{type:'days_after_create', days:3}}], () => {
+    const old = freshClient({bookedDate: isoDaysAgo(5), callDateTime: null});
+    const fresh = freshClient({bookedDate: isoDaysAgo(1), callDateTime: null});
+    assert.ok(GB.computeDue(old, new Date()).includes('recovery'));
+    assert.ok(!GB.computeDue(fresh, new Date()).includes('recovery'));
+  });
+});
+
+test('repeat_while_role re-fires on its own clock and respects its window', () => {
+  withSequence([{key:'rescue', stage:'noshow', trigger:{type:'repeat_while_role', roles:['missed'],
+    anchor:'appointment', afterDays:0, everyDays:4, windowDays:14}}], () => {
+    const justMissed = freshClient({status:'No-show', callDateTime: isoDaysAgo(1)});
+    const recentlySent = freshClient({status:'No-show', callDateTime: isoDaysAgo(5),
+      messageLog:[{stage:'noshow',variantId:'n1',text:'x',sentAt:isoDaysAgo(1),responded:false,respondedAt:null,reviewed:true}]});
+    const longGone = freshClient({status:'No-show', callDateTime: isoDaysAgo(40)});
+    assert.ok(GB.computeDue(justMissed, new Date()).includes('noshow'));
+    assert.ok(!GB.computeDue(recentlySent, new Date()).includes('noshow'), 'should wait everyDays between sends');
+    assert.ok(!GB.computeDue(longGone, new Date()).includes('noshow'), 'should stop past the window');
+  });
+});
+
+test('a rescue step still fires after the appointment cadence has stopped', () => {
+  // The whole point of a no-show rescue is that it runs once the normal
+  // cadence is over.
+  const c = freshClient({status:'No-show', callDateTime: isoDaysAgo(2)});
+  assert.ok(GB.computeDue(c, new Date()).includes('noshow'));
+});
+
+test('an unrecognised trigger fires nothing rather than guessing', () => {
+  withSequence([{key:'x', stage:'welcome', trigger:{type:'someday_maybe'}}], () => {
+    const c = freshClient({bookedDate: isoDaysAgo(3), callDateTime: isoDaysFromNow(3)});
+    assert.deepStrictEqual(Array.from(GB.computeDue(c, new Date())), [],
+      'guessing a schedule would send real texts nobody asked for');
+  });
+});
+
+test('an empty or broken sequence falls back to the defaults', () => {
+  GB.setSequence([]);
+  assert.strictEqual(GB.getSequence().length, GB.buildDefaultSequence().length);
+  GB.setSequence([{stage:'welcome'}, {trigger:{type:'on_create'}}]);   // both invalid
+  assert.strictEqual(GB.getSequence().length, GB.buildDefaultSequence().length);
+  GB.setSequence(null);
+});
+
+test('rebooked and followup still override the first touch under a custom sequence', () => {
+  withSequence([{key:'hello', stage:'welcome', trigger:{type:'on_create'}}], () => {
+    const stranger = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+    const returning = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5), rebooked:true});
+    const veteran = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5), rebooked:true, hadPriorCall:true});
+    assert.ok(GB.computeDue(stranger, new Date()).includes('welcome'));
+    assert.ok(GB.computeDue(returning, new Date()).includes('rebooked'));
+    assert.ok(GB.computeDue(veteran, new Date()).includes('followup'));
+  });
+});
+
 console.log('\n--- pause on reply ---');
 
 const repliedMsg = (over) => Object.assign({stage:'welcome', variantId:'w1', text:'x',

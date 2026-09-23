@@ -1364,7 +1364,10 @@ function openSettingsModal(){
     pipeline: (STATE.pipeline || buildDefaultPipeline()).map(function(st){
       return {key: st.key, label: st.label || st.key, role: st.role || 'open'};
     }),
-    terminology: Object.assign(buildDefaultTerminology(), STATE.terminology || {})
+    terminology: Object.assign(buildDefaultTerminology(), STATE.terminology || {}),
+    // Deep-copied: the draft must not alias the live sequence, or removing a
+    // step would take effect before anyone pressed Save.
+    sequence: JSON.parse(JSON.stringify(STATE.sequence || buildDefaultSequence()))
   };
   renderSettingsModal();
 }
@@ -1422,6 +1425,19 @@ function renderSettingsModal(){
     (removed.length ? '<div class="set-warn">⚠ ' + removed.map(function(k){ return counts[k] + ' contact(s) on “' + escapeHtml(k) + '”'; }).join(', ') +
       ' — removing a stage leaves them on it. Unrecognised stages behave as “open”, so they keep getting followed up rather than disappearing.</div>' : '') +
     '</div>' +
+    '<div class="set-section"><h3>Follow-up cadence</h3>' +
+    '<div class="hint">When GhostBuster chases. Removing a step stops that touch firing; the message templates for it stay put, so nothing is lost if you add it back.</div>' +
+    SETTINGS_DRAFT.sequence.map(function(st, i){
+      return '<div class="stage-row">' +
+        '<span class="grip">' + (i+1) + '</span>' +
+        '<span style="flex:1;min-width:0;font-size:12.5px;"><strong>' + escapeHtml(st.stage) + '</strong> — ' +
+        escapeHtml(describeTrigger(st.trigger)) + '</span>' +
+        '<button data-action="remove-step" data-idx="' + i + '" title="Remove this touch">✕</button>' +
+      '</div>';
+    }).join('') +
+    (SETTINGS_DRAFT.sequence.length < buildDefaultSequence().length
+      ? '<button class="btn btn-sm" data-action="restore-sequence">Restore the default cadence</button>' : '') +
+    '</div>' +
     '<div class="set-section"><h3>What you call things</h3>' +
     '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
     '<div class="term-grid">' + termFields + '</div></div>' +
@@ -1450,10 +1466,16 @@ function saveSettingsDraft(){
     showToast('Keep at least one “open” stage, or nothing will ever be followed up.');
     return;
   }
+  if(!d.sequence.length){
+    showToast('A cadence needs at least one step, or GhostBuster will never follow up.');
+    return;
+  }
   STATE.pipeline = stages;
   STATE.terminology = d.terminology;
+  STATE.sequence = d.sequence;
   setPipeline(stages);
   setTerminology(d.terminology);
+  setSequence(d.sequence);
   saveState(STATE);
   closeModal();
   renderAll();
@@ -1718,8 +1740,17 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
+    case 'remove-step':
+      SETTINGS_DRAFT.sequence.splice(parseInt(target.getAttribute('data-idx'),10), 1);
+      renderSettingsModal();
+      break;
+    case 'restore-sequence':
+      SETTINGS_DRAFT.sequence = buildDefaultSequence();
+      renderSettingsModal();
+      break;
     case 'reset-settings':
-      SETTINGS_DRAFT = {pipeline: buildDefaultPipeline(), terminology: buildDefaultTerminology()};
+      SETTINGS_DRAFT = {pipeline: buildDefaultPipeline(), terminology: buildDefaultTerminology(),
+                        sequence: buildDefaultSequence()};
       renderSettingsModal();
       break;
     case 'save-settings':

@@ -1,0 +1,20 @@
+-- The follow-up cadence, per organization.
+--
+-- Stages became data earlier; when they fire did not. computeDue was eight
+-- hard-coded rules, so a business could rename its pipeline but not change its
+-- follow-up rhythm — an HVAC shop chasing an estimate has no use for a "Monday
+-- of the call week" text, and a recruiter may want four touches in week one.
+--
+-- Same jsonb reasoning as pipeline/terminology: every read is "the whole
+-- cadence for this org", the shape is still moving, and normalising later is
+-- easy while the reverse is not.
+--
+-- NULL means "use the built-in default sequence", so every existing account
+-- keeps exactly the cadence it has today until someone edits theirs.
+--
+-- shape: [{"key":"welcome","stage":"welcome","trigger":{"type":"on_create"}}, ...]
+--   trigger.type is one of: on_create, weekday_of_appointment_week,
+--   midpoint_booked_to_appointment, day_of_appointment,
+--   minutes_before_appointment, days_before_appointment, days_after_create,
+--   repeat_while_role. See buildDefaultSequence() in logic.js.
+alter table public.app_settings add column sequence jsonb;

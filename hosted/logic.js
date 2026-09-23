@@ -549,87 +549,184 @@ function lastSentAtMs(client, stage){
 }
 
 
+/* ---- the cadence, as data ----
+   computeDue was eight hard-coded rules. A business could rename its stages
+   but not change WHEN GhostBuster follows up, which was the last assumption
+   welding the engine to one company's process: an HVAC shop chasing an
+   estimate does not want a "Monday of the call week" text, and a recruiter
+   might want four touches in the first week rather than one.
+
+   A sequence is a list of steps, each naming a stage and a trigger. Triggers
+   are a small closed set rather than free-form expressions — enough to
+   express every existing rule and the obvious variations, without becoming a
+   scripting language nobody can safely edit through a settings form:
+
+     on_create                      once, when the contact appears
+     weekday_of_appointment_week    e.g. the Monday before the call
+     midpoint_booked_to_appointment halfway between booking and the call
+     day_of_appointment             on the day itself
+     minutes_before_appointment     a narrow clock-granular window
+     repeat_while_role              re-fires every N days while a role holds
+
+   buildDefaultSequence reproduces today's cadence exactly. That is the whole
+   safety argument for this refactor: the existing computeDue tests are
+   extensive and were written against the hard-coded rules, so if they all
+   still pass, the data-driven evaluator agrees with the code it replaced. */
+function buildDefaultSequence(){
+  return [
+    {key:'welcome',    stage:'welcome',    trigger:{type:'on_create'}},
+    {key:'monday',     stage:'monday',     trigger:{type:'weekday_of_appointment_week'}},
+    {key:'midcheckin', stage:'midcheckin', trigger:{type:'midpoint_booked_to_appointment'}},
+    {key:'dayof',      stage:'dayof',      trigger:{type:'day_of_appointment'}},
+    {key:'hourbefore', stage:'hourbefore', trigger:{type:'minutes_before_appointment',
+                                                   leadMin: HOURBEFORE_LEAD_MIN, floorMin: HOURBEFORE_FLOOR_MIN}},
+    {key:'recovery',   stage:'recovery',   trigger:{type:'repeat_while_role', roles:['stalled','lost'],
+                                                   anchor:'stalled', afterDays:2, everyDays: FOLLOWUP_REFIRE_DAYS}},
+    {key:'noshow',     stage:'noshow',     trigger:{type:'repeat_while_role', roles:['missed'],
+                                                   anchor:'appointment', afterDays:0,
+                                                   everyDays: FOLLOWUP_REFIRE_DAYS, windowDays:14}}
+  ];
+}
+
+// Plain-English rendering of a trigger, so a settings form can show a cadence
+// without anyone learning the trigger vocabulary.
+function describeTrigger(trigger){
+  var t = trigger || {};
+  switch(t.type){
+    case 'on_create': return 'as soon as they come in';
+    case 'weekday_of_appointment_week': return 'earlier in the week of the appointment';
+    case 'midpoint_booked_to_appointment': return 'halfway between booking and the appointment';
+    case 'day_of_appointment': return 'on the day of the appointment';
+    case 'minutes_before_appointment':
+      return 'about ' + (t.leadMin || 60) + ' minutes before the appointment';
+    case 'days_before_appointment':
+      return (t.days || 1) + ' day' + ((t.days || 1) === 1 ? '' : 's') + ' before the appointment';
+    case 'days_after_create':
+      return (t.days || 0) + ' day' + ((t.days || 0) === 1 ? '' : 's') + ' after they come in';
+    case 'repeat_while_role':
+      return 'every ' + (t.everyDays || 1) + ' days while ' + (t.roles || []).join(' or ') +
+        (typeof t.windowDays === 'number' ? ', for up to ' + t.windowDays + ' days' : '');
+  }
+  return 'custom trigger';
+}
+
+var ACTIVE_SEQUENCE = buildDefaultSequence();
+
+function setSequence(steps){
+  ACTIVE_SEQUENCE = (Array.isArray(steps) && steps.length)
+    ? steps.filter(function(st){ return st && st.stage && st.trigger && st.trigger.type; })
+    : buildDefaultSequence();
+  if(!ACTIVE_SEQUENCE.length) ACTIVE_SEQUENCE = buildDefaultSequence();
+}
+function getSequence(){ return ACTIVE_SEQUENCE; }
+
+// True when this step is due right now. Pure: no state, no side effects, so
+// each trigger type can be reasoned about and tested on its own.
+function stepIsDue(step, client, now, ctx){
+  var t = step.trigger || {};
+  var stage = step.stage;
+
+  // repeat_while_role steps run on their own schedule and are the only ones
+  // that fire after a contact's cadence has otherwise stopped — a no-show
+  // rescue exists precisely because the appointment cadence ended.
+  if(t.type === 'repeat_while_role'){
+    var roles = t.roles || [];
+    if(roles.indexOf(stageRole(client.status)) === -1) return false;
+    var anchorMs = t.anchor === 'stalled'
+      ? (client.stalledSince ? Date.parse(client.stalledSince) : NaN)
+      : (ctx.callDate ? ctx.callDate.getTime() : NaN);
+    if(isNaN(anchorMs)) return false;
+    var daysSince = (now.getTime() - anchorMs) / 86400000;
+    if(daysSince < (t.afterDays || 0)) return false;
+    if(typeof t.windowDays === 'number' && daysSince > t.windowDays) return false;
+    var lastSent = lastSentAtMs(client, stage);
+    return lastSent === null || (now.getTime() - lastSent) / 86400000 >= (t.everyDays || 1);
+  }
+
+  // Everything below is a once-only touch on the way to an appointment, so it
+  // stops as soon as the appointment is resolved and never repeats.
+  if(ctx.stopCadence) return false;
+  if(hasSentStage(client, stage)) return false;
+
+  switch(t.type){
+    case 'on_create':
+      return true;
+
+    case 'weekday_of_appointment_week': {
+      if(!ctx.callKey) return false;
+      var weekStart = mondayOfWeekKey(ctx.callKey);
+      // Only meaningful when the call is later in its own week; a Monday call
+      // has no "Monday before it".
+      return weekStart < ctx.callKey && ctx.todayKey >= weekStart && ctx.todayKey < ctx.callKey;
+    }
+
+    case 'midpoint_booked_to_appointment': {
+      if(!ctx.callKey || !ctx.bookedDate) return false;
+      var midMs = (ctx.bookedDate.getTime() + ctx.callDate.getTime()) / 2;
+      var midKey = tzDateKey(new Date(midMs), ctx.tz);
+      return ctx.todayKey >= midKey && ctx.todayKey <= keyPlusDays(ctx.callKey, -1);
+    }
+
+    case 'day_of_appointment':
+      return !!ctx.callKey && ctx.todayKey === ctx.callKey;
+
+    case 'minutes_before_appointment': {
+      if(!ctx.callDate) return false;
+      var mins = (ctx.callDate.getTime() - now.getTime()) / 60000;
+      return mins <= (t.leadMin || 60) && mins >= (t.floorMin || 0);
+    }
+
+    case 'days_before_appointment': {
+      if(!ctx.callKey) return false;
+      return ctx.todayKey === keyPlusDays(ctx.callKey, -(t.days || 1));
+    }
+
+    case 'days_after_create': {
+      if(!ctx.bookedDate) return false;
+      var since = (now.getTime() - ctx.bookedDate.getTime()) / 86400000;
+      return since >= (t.days || 0);
+    }
+  }
+  // An unrecognised trigger never fires. Silently doing nothing is the safe
+  // failure here: guessing would send real texts on a schedule nobody chose.
+  return false;
+}
+
+
 function computeDue(client, now){
   now = now || new Date();
   if(!client || client.ignored) return [];
   var due = [];
   var tz = client.timezone || 'America/New_York';
-  var todayKey = tzDateKey(now, tz);
   var callDate = safeDate(client.callDateTime);
-  var stopCadence = stopsCadence(client.status);
+  var ctx = {
+    tz: tz,
+    todayKey: tzDateKey(now, tz),
+    callDate: callDate,
+    callKey: callDate ? tzDateKey(callDate, tz) : null,
+    bookedDate: safeDate(client.bookedDate),
+    stopCadence: stopsCadence(client.status)
+  };
 
-  if(!stopCadence){
-    if(client.rebooked){
-      var rebookStage = client.hadPriorCall ? 'followup' : 'rebooked';
-      if(!hasSentStage(client, rebookStage)) due.push(rebookStage);
-    } else if(!hasSentStage(client, 'welcome')) due.push('welcome');
-
-    if(callDate){
-      var callKey = tzDateKey(callDate, tz);
-      var mondayKey = mondayOfWeekKey(callKey);
-      if(mondayKey < callKey && todayKey >= mondayKey && todayKey < callKey && !hasSentStage(client,'monday')){
-        due.push('monday');
-      }
-      var bookedDate = safeDate(client.bookedDate);
-      if(bookedDate){
-        var midMs = (bookedDate.getTime() + callDate.getTime()) / 2;
-        var midKey = tzDateKey(new Date(midMs), tz);
-        var dayBeforeCallKey = keyPlusDays(callKey, -1);
-        if(todayKey >= midKey && todayKey <= dayBeforeCallKey && !hasSentStage(client,'midcheckin')){
-          due.push('midcheckin');
-        }
-      }
-      if(todayKey === callKey && !hasSentStage(client,'dayof')){
-        due.push('dayof');
-      }
-      // The T-1h nudge. "dayof" is date-granular, so it typically goes out
-      // whenever the morning list gets worked — hours before the call, which
-      // is exactly when a reminder is easiest to forget again. This one is
-      // clock-granular and only surfaces inside a narrow window right before
-      // the call, so it lands while they still have time to walk to a desk.
-      // Floor of 10 minutes: past that it's too late to be useful and the On
-      // Deck panel's own nudge takes over.
-      var minsOut = (callDate.getTime() - now.getTime()) / 60000;
-      if(minsOut <= HOURBEFORE_LEAD_MIN && minsOut >= HOURBEFORE_FLOOR_MIN && !hasSentStage(client,'hourbefore')){
-        due.push('hourbefore');
-      }
+  ACTIVE_SEQUENCE.forEach(function(step){
+    // The first touch has three faces depending on who this is: a stranger
+    // (welcome), someone who booked before and never showed (rebooked), or
+    // someone who already had a real call and is back for another (followup).
+    // The choice is about the contact's history rather than about timing, so
+    // it stays here rather than becoming three near-identical sequence steps
+    // a business would have to keep in sync.
+    var stage = step.stage;
+    if(step.trigger.type === 'on_create' && stage === 'welcome' && client.rebooked){
+      stage = client.hadPriorCall ? 'followup' : 'rebooked';
     }
-  }
-
-  // "Rescheduled" (or Ghosted) with no new date locked in yet — including
-  // someone who replied wanting to reschedule but never actually gave a day —
-  // gets a gentle nudge every REFIRE_DAYS, not just once. It keeps firing for
-  // as long as they sit in this status; the only things that stop it are an
-  // actual rebooking (status changes) or John manually re-logging an outcome.
-  if(isStalledStage(client.status) && client.stalledSince){
-    var stalledMs = Date.parse(client.stalledSince);
-    if(!isNaN(stalledMs)){
-      var daysSinceStall = (now.getTime() - stalledMs) / 86400000;
-      if(daysSinceStall >= 2){
-        var lastRecovery = lastSentAtMs(client, 'recovery');
-        var recoveryDueAgain = lastRecovery === null || (now.getTime() - lastRecovery) / 86400000 >= FOLLOWUP_REFIRE_DAYS;
-        if(recoveryDueAgain) due.push('recovery');
-      }
-    }
-  }
-
-  // Same story for a straight no-show: one rescue text used to be it. Now it
-  // re-fires every REFIRE_DAYS through the 14-day window — covers exactly the
-  // "said they wanted to reschedule but never gave me a day" case, since a
-  // reply alone doesn't change their status or stop the nudges.
-  if(isMissed(client.status) && callDate){
-    var daysSinceCall = (now.getTime() - callDate.getTime()) / 86400000;
-    if(daysSinceCall >= 0 && daysSinceCall <= 14){
-      var lastRescue = lastSentAtMs(client, 'noshow');
-      var rescueDueAgain = lastRescue === null || (now.getTime() - lastRescue) / 86400000 >= FOLLOWUP_REFIRE_DAYS;
-      if(rescueDueAgain) due.push('noshow');
-    }
-  }
+    var effective = (stage === step.stage) ? step : {key: step.key, stage: stage, trigger: step.trigger};
+    if(stepIsDue(effective, client, now, ctx)) due.push(stage);
+  });
 
   // "Not today" is an explicit, one-day-only deferral, not a way to bury a
   // touch — it self-expires the moment the snoozed-until date is reached.
   var snoozed = client.snoozedUntil || {};
-  due = due.filter(function(stage){ return !(snoozed[stage] && todayKey < snoozed[stage]); });
+  due = due.filter(function(stage){ return !(snoozed[stage] && ctx.todayKey < snoozed[stage]); });
 
   // They wrote back: hold the automated nudges, keep the appointment-critical
   // reminders. See replyPauseUntil.
@@ -2383,6 +2480,8 @@ var __LOGIC_EXPORTS__ = {
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
   hasSentStage: hasSentStage, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
   REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, replyPauseUntil: replyPauseUntil,
+  buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
+  describeTrigger: describeTrigger,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,

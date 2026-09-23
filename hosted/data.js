@@ -69,6 +69,8 @@ async function loadState(){
     pipeline: (settingsRes.data && Array.isArray(settingsRes.data.pipeline) && settingsRes.data.pipeline.length)
       ? settingsRes.data.pipeline : null,
     terminology: (settingsRes.data && settingsRes.data.terminology) || null,
+    sequence: (settingsRes.data && Array.isArray(settingsRes.data.sequence) && settingsRes.data.sequence.length)
+      ? settingsRes.data.sequence : null,
     scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
     pendingEvents: [],
     lastSync: null
@@ -80,6 +82,7 @@ async function loadState(){
   // before the first render.
   setPipeline(state.pipeline);
   setTerminology(state.terminology);
+  setSequence(state.sequence);
 
   (clientsRes.data || []).forEach(function(row){
     state.clients[row.id] = {
@@ -288,6 +291,7 @@ function snapshot(state, uid){
     sender_name: state.senderName, pools_learning: !!state.poolsLearning,
     pipeline: state.pipeline || null,
     terminology: state.terminology || null,
+    sequence: state.sequence || null,
     score_weights: state.scoreWeights || null
   };
   return snap;
