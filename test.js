@@ -1716,6 +1716,42 @@ test('rebooked and followup still override the first touch under a custom sequen
   });
 });
 
+console.log('\n--- hot / good / nurture / dead grouping ---');
+
+test('every band lands in exactly one group', () => {
+  const bands = ['immediate','high','soon','nurture','low'];
+  bands.forEach(b => {
+    const hits = GB.SCORE_GROUPS.filter(g => g.bands.indexOf(b) !== -1);
+    assert.strictEqual(hits.length, 1, b + ' should belong to exactly one group');
+  });
+});
+
+test('hot covers both urgent bands, because they mean the same instruction', () => {
+  assert.strictEqual(GB.scoreGroupOf('immediate'), 'hot');
+  assert.strictEqual(GB.scoreGroupOf('high'), 'hot');
+  assert.strictEqual(GB.scoreGroupOf('soon'), 'good');
+  assert.strictEqual(GB.scoreGroupOf('nurture'), 'nurture');
+  assert.strictEqual(GB.scoreGroupOf('low'), 'dead');
+});
+
+test('an unknown band falls to dead rather than vanishing from every filter', () => {
+  assert.strictEqual(GB.scoreGroupOf('something-new'), 'dead');
+});
+
+test('the groups partition a real book with nothing left over', () => {
+  const st = GB.buildDefaultState();
+  for(let i = 0; i < 12; i++){
+    st.clients['c'+i] = freshClient({id:'c'+i, name:'C'+i, phone:'2135550100',
+      bookedDate: isoDaysAgo(i * 7),
+      callDateTime: i % 3 === 0 ? isoDaysFromNow(1) : (i % 3 === 1 ? isoDaysAgo(5) : null),
+      status: ['Booked','Completed','No-show','Ghosted'][i % 4]});
+  }
+  const live = Object.keys(st.clients).map(k => st.clients[k]);
+  const counted = GB.SCORE_GROUPS.reduce((n, g) => n + live.filter(c =>
+    g.bands.indexOf(GB.computeGhostScore(c, new Date()).band) !== -1).length, 0);
+  assert.strictEqual(counted, live.length, 'every contact must appear under exactly one chip');
+});
+
 console.log('\n--- pause on reply ---');
 
 const repliedMsg = (over) => Object.assign({stage:'welcome', variantId:'w1', text:'x',

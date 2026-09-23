@@ -1955,6 +1955,25 @@ function ghostScoreBand(score){
   return 'low';
 }
 
+/* The five scoring bands collapse to the four buckets a salesperson actually
+   sorts leads into. 'immediate' and 'high' are the same instruction — chase
+   this now — and splitting them buys nothing at the filter level, where the
+   question is which pile to work rather than exactly how warm one lead is.
+   The precise band still colours the badge and drives the ranked queue. */
+var SCORE_GROUPS = [
+  {key:'hot',     label:'Hot',     bands:['immediate','high']},
+  {key:'good',    label:'Good',    bands:['soon']},
+  {key:'nurture', label:'Nurture', bands:['nurture']},
+  {key:'dead',    label:'Dead',    bands:['low']}
+];
+
+function scoreGroupOf(band){
+  for(var i = 0; i < SCORE_GROUPS.length; i++){
+    if(SCORE_GROUPS[i].bands.indexOf(band) !== -1) return SCORE_GROUPS[i].key;
+  }
+  return 'dead';
+}
+
 function daysBetween(aMs, bMs){ return (aMs - bMs) / 86400000; }
 
 // Returns {score, band, reasons:[{label, points}]} where the reasons sum to
@@ -2655,6 +2674,7 @@ var __LOGIC_EXPORTS__ = {
   MONTHS: MONTHS, parseHeuristicDate: parseHeuristicDate, parseBulkBlock: parseBulkBlock, parseBulkPaste: parseBulkPaste,
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,
   buildDefaultScoreWeights: buildDefaultScoreWeights, ghostScoreBand: ghostScoreBand,
+  SCORE_GROUPS: SCORE_GROUPS, scoreGroupOf: scoreGroupOf,
   computeGhostScore: computeGhostScore, rankByGhostScore: rankByGhostScore,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,

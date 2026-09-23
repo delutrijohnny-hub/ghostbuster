@@ -643,24 +643,41 @@ function renderRecentSends(){
 function renderClientsTab(){
   var chipsBox = el('status-chips'); if(!chipsBox) return;
   var clients = Object.keys(STATE.clients).map(function(k){ return STATE.clients[k]; });
+  var live = clients.filter(function(c){ return !c.ignored; });
+
+  // Scored once, up front: the group chips need counts, the rows need badges,
+  // and score sorting needs values — all from the same pass rather than three.
+  var scoreNow = new Date();
+  var scoredAll = live.map(function(c){ return {client: c, g: computeGhostScore(c, scoreNow)}; });
+
   chipsBox.innerHTML = '';
-  var allChip = h('button',{class:'chip'+(UI.statusFilter===null?' active':''),'data-action':'filter-status','data-status':''},['All (' + clients.filter(function(c){return !c.ignored;}).length + ')']);
-  chipsBox.appendChild(allChip);
+  chipsBox.appendChild(h('button',{class:'chip'+(!UI.scoreFilter && UI.statusFilter===null?' active':''),
+    'data-action':'filter-score','data-group':''},['All (' + live.length + ')']));
+
+  // How hot is this lead — the grouping people actually sort by — comes first.
+  SCORE_GROUPS.forEach(function(grp){
+    var n = scoredAll.filter(function(r){ return scoreGroupOf(r.g.band) === grp.key; }).length;
+    chipsBox.appendChild(h('button',{class:'chip chip-' + grp.key + (UI.scoreFilter===grp.key?' active':''),
+      'data-action':'filter-score','data-group':grp.key},[grp.label + ' (' + n + ')']));
+  });
+
+  // Pipeline status stays available after them: a different question (where is
+  // this in the process) rather than a competing answer to the same one.
   VALID_STATUSES.forEach(function(st){
-    var n = clients.filter(function(c){ return c.status===st && !c.ignored; }).length;
-    chipsBox.appendChild(h('button',{class:'chip'+(UI.statusFilter===st?' active':''),'data-action':'filter-status','data-status':st},[st + ' (' + n + ')']));
+    var n = live.filter(function(c){ return c.status===st; }).length;
+    if(!n) return;   // an empty filter reads as a bug
+    chipsBox.appendChild(h('button',{class:'chip chip-status'+(UI.statusFilter===st?' active':''),
+      'data-action':'filter-status','data-status':st},[statusLabel(st) + ' (' + n + ')']));
   });
 
   var q = UI.clientsSearch.trim().toLowerCase();
-  var list = clients.filter(function(c){ return !c.ignored; });
-  if(UI.statusFilter) list = list.filter(function(c){ return c.status===UI.statusFilter; });
-  if(q) list = list.filter(function(c){ return c.name.toLowerCase().indexOf(q)!==-1; });
+  var scoredList = scoredAll;
+  if(UI.scoreFilter) scoredList = scoredList.filter(function(r){ return scoreGroupOf(r.g.band) === UI.scoreFilter; });
+  if(UI.statusFilter) scoredList = scoredList.filter(function(r){ return r.client.status === UI.statusFilter; });
+  if(q) scoredList = scoredList.filter(function(r){ return r.client.name.toLowerCase().indexOf(q) !== -1; });
+  var list = scoredList.map(function(r){ return r.client; });
 
-  // Scored once per render and cached on the row: sorting by score would
-  // otherwise recompute it for every comparison, and computeGhostScore calls
-  // computeDue, which is not free across 140 clients.
-  var scoreNow = new Date();
-  var scored = list.map(function(c){ return {client: c, g: computeGhostScore(c, scoreNow)}; });
+  var scored = scoredList;
   if(UI.clientsSort === 'score'){
     scored.sort(function(a, b){
       if(b.g.score !== a.g.score) return b.g.score - a.g.score;
@@ -1677,8 +1694,20 @@ document.addEventListener('click', function(ev){
     case 'cal-view-day':
       openDayListModal(target.getAttribute('data-day'));
       break;
+    case 'filter-score': {
+      var grp = target.getAttribute('data-group');
+      UI.scoreFilter = grp || null;
+      // Picking a temperature clears the pipeline filter — combining them
+      // silently produces an empty table that reads as broken.
+      UI.statusFilter = null;
+      // Sorting by score is what someone wants the moment they pick a band.
+      if(grp) UI.clientsSort = 'score';
+      renderClientsTab();
+      break;
+    }
     case 'filter-status':
       UI.statusFilter = target.getAttribute('data-status') || null;
+      UI.scoreFilter = null;   // same reason as above, in the other direction
       renderClientsTab();
       break;
     case 'add-client':
