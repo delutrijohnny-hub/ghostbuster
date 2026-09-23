@@ -17,7 +17,79 @@
 
 var STORAGE_KEY = 'mm_followup_v1';
 
-var VALID_STATUSES = ['Booked','Confirmed','Reminded','Completed','No-show','Rescheduled','Ghosted'];
+/* ---- pipeline stages, as data ----
+   Stages used to be a fixed list of seven strings, and the ~35 places that
+   asked "is this one Completed?" hard-coded the name. That's what tied
+   GhostBuster to one company's sales process: an HVAC shop's equivalent of
+   Completed is "Job Booked", a recruiter's is "Placed".
+
+   The fix isn't renaming — it's that almost none of those checks actually
+   cared about the NAME. They cared about the MEANING: did the appointment
+   happen, was it missed, has this gone quiet. So a stage declares a role, and
+   the logic asks about roles:
+
+     open     the follow-up cadence runs
+     won      it happened; cadence stops
+     missed   they didn't show; cadence stops, the rescue sequence takes over
+     stalled  in limbo with no new date; recovery nudges re-fire
+     lost     written off; cadence stops, recovery nudges still re-fire
+
+   The defaults below reproduce today's behaviour exactly — 'won'/'missed'/
+   'lost' are precisely the old STOP_1TO4 set, and 'stalled'/'lost' are
+   precisely the old Ghosted/Rescheduled recovery pair. A business can now
+   define its own stages with its own names and get the same engine. */
+function buildDefaultPipeline(){
+  return [
+    {key:'Booked',      label:'Booked',      role:'open'},
+    {key:'Confirmed',   label:'Confirmed',   role:'open'},
+    {key:'Reminded',    label:'Reminded',    role:'open'},
+    {key:'Completed',   label:'Completed',   role:'won'},
+    {key:'No-show',     label:'No-show',     role:'missed'},
+    {key:'Rescheduled', label:'Rescheduled', role:'stalled'},
+    {key:'Ghosted',     label:'Ghosted',     role:'lost'}
+  ];
+}
+
+// computeDue(client, now) and friends don't take state, and threading it
+// through every call site (and every test) to read one config would be a large
+// diff for no behavioural gain. The active pipeline is held here instead and
+// set once at load, alongside the existing module-level caches. Anything that
+// hasn't called setPipeline() gets the defaults, so logic.js stays usable
+// standalone — which the tests and the Edge Functions both rely on.
+var ACTIVE_PIPELINE = buildDefaultPipeline();
+
+function setPipeline(stages){
+  ACTIVE_PIPELINE = (Array.isArray(stages) && stages.length) ? stages.filter(function(st){
+    return st && typeof st.key === 'string' && st.key;
+  }) : buildDefaultPipeline();
+  if(!ACTIVE_PIPELINE.length) ACTIVE_PIPELINE = buildDefaultPipeline();
+}
+function getPipeline(){ return ACTIVE_PIPELINE; }
+
+// Unknown stages read as 'open' rather than throwing: a contact sitting on a
+// stage an admin just deleted should keep getting followed up, not fall out of
+// the system silently.
+function stageRole(status){
+  for(var i=0;i<ACTIVE_PIPELINE.length;i++){
+    if(ACTIVE_PIPELINE[i].key === status) return ACTIVE_PIPELINE[i].role || 'open';
+  }
+  return 'open';
+}
+function stageLabel(status){
+  for(var i=0;i<ACTIVE_PIPELINE.length;i++){
+    if(ACTIVE_PIPELINE[i].key === status) return ACTIVE_PIPELINE[i].label || status;
+  }
+  return status;
+}
+function isWon(status){ return stageRole(status) === 'won'; }
+function isMissed(status){ return stageRole(status) === 'missed'; }
+function isStalledStage(status){ var r = stageRole(status); return r === 'stalled' || r === 'lost'; }
+function isOpenStage(status){ return stageRole(status) === 'open'; }
+// won / missed / lost end the 1-to-4 cadence; the rescue and recovery
+// sequences are separate and keep running where their own roles apply.
+function stopsCadence(status){ var r = stageRole(status); return r === 'won' || r === 'missed' || r === 'lost'; }
+
+var VALID_STATUSES = buildDefaultPipeline().map(function(st){ return st.key; });
 
 var STOP_1TO4 = {Completed:true,'No-show':true,Ghosted:true};
 
@@ -407,7 +479,7 @@ function computeDue(client, now){
   var tz = client.timezone || 'America/New_York';
   var todayKey = tzDateKey(now, tz);
   var callDate = safeDate(client.callDateTime);
-  var stopCadence = !!STOP_1TO4[client.status];
+  var stopCadence = stopsCadence(client.status);
 
   if(!stopCadence){
     if(client.rebooked){
@@ -452,7 +524,7 @@ function computeDue(client, now){
   // gets a gentle nudge every REFIRE_DAYS, not just once. It keeps firing for
   // as long as they sit in this status; the only things that stop it are an
   // actual rebooking (status changes) or John manually re-logging an outcome.
-  if((client.status === 'Ghosted' || client.status === 'Rescheduled') && client.stalledSince){
+  if(isStalledStage(client.status) && client.stalledSince){
     var stalledMs = Date.parse(client.stalledSince);
     if(!isNaN(stalledMs)){
       var daysSinceStall = (now.getTime() - stalledMs) / 86400000;
@@ -468,7 +540,7 @@ function computeDue(client, now){
   // re-fires every REFIRE_DAYS through the 14-day window — covers exactly the
   // "said they wanted to reschedule but never gave me a day" case, since a
   // reply alone doesn't change their status or stop the nudges.
-  if(client.status === 'No-show' && callDate){
+  if(isMissed(client.status) && callDate){
     var daysSinceCall = (now.getTime() - callDate.getTime()) / 86400000;
     if(daysSinceCall >= 0 && daysSinceCall <= 14){
       var lastRescue = lastSentAtMs(client, 'noshow');
@@ -616,7 +688,7 @@ function markSent(state, clientId, stage, text){
   // being counted as a failure.
 
   var statusBefore = client.status;
-  if(!STOP_1TO4[client.status]){
+  if(!stopsCadence(client.status)){
     if((stage === 'monday' || stage === 'midcheckin') && client.status === 'Booked'){
       client.status = 'Confirmed';
     } else if((stage === 'dayof' || stage === 'hourbefore') && (client.status === 'Booked' || client.status === 'Confirmed')){
@@ -1076,7 +1148,7 @@ function commitImportedClients(state, parsedList){
         var ot = safeDate(other.callDateTime), nt = safeDate(p.callDateTime);
         if(ot && nt && ot.getTime() === nt.getTime()) return false;
         isRebooking = true;
-        hadPriorCall = other.status === 'Completed';
+        hadPriorCall = isWon(other.status);
         return true;
       });
       state.clients[id] = {
@@ -1140,7 +1212,7 @@ function computeStats(state, range, now){
   now = now || new Date();
   var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
   var inCallWindow = clients.filter(function(c){ return c.callDateTime && inRange(c.callDateTime, range, now); });
-  var completed = inCallWindow.filter(function(c){ return c.status==='Completed'; }).length;
+  var completed = inCallWindow.filter(function(c){ return isWon(c.status); }).length;
   var noshow = inCallWindow.filter(function(c){ return c.status==='No-show'; }).length;
   var showUpRate = (completed+noshow) > 0 ? completed/(completed+noshow) : null;
   var closed = inCallWindow.filter(function(c){ return c.closeOutcome==='Closed'; }).length;
@@ -1157,7 +1229,10 @@ function computeStats(state, range, now){
 function pct(v){ return v===null || v===undefined || isNaN(v) ? '—' : Math.round(v*100) + '%'; }
 
 // The whole point of the tool: a ghost, when it appears in your client list, gets called out.
-function statusLabel(status){ return (status==='Ghosted' || status==='No-show') ? ('👻 ' + status) : status; }
+function statusLabel(status){
+  var r = stageRole(status);
+  return (r === 'lost' || r === 'missed') ? ('👻 ' + stageLabel(status)) : stageLabel(status);
+}
 
 
 function computeHealthAlerts(state){
@@ -1199,7 +1274,7 @@ function computeHealthAlerts(state){
   // status landed *before* a single text ever went out, they're silently
   // dropped forever with no further prompt to catch it.
   var neverTexted = clients.filter(function(c){
-    return STOP_1TO4[c.status] && c.messageLog.length === 0;
+    return stopsCadence(c.status) && c.messageLog.length === 0;
   });
   if(neverTexted.length) alerts.push({type:'never-texted', clients:neverTexted});
 
@@ -1209,7 +1284,7 @@ function computeHealthAlerts(state){
   // client falls into "never-texted" above — this is the early-warning
   // version, while there's still time to actually send something.
   var imminentUntexted = clients.filter(function(c){
-    if(STOP_1TO4[c.status]) return false;
+    if(stopsCadence(c.status)) return false;
     var d = safeDate(c.callDateTime);
     if(!d) return false;
     var hoursUntil = (d.getTime() - now.getTime()) / 3600000;
@@ -1239,7 +1314,7 @@ var DEAD_ELIGIBLE_STATUSES = {'No-show':true, Ghosted:true, Rescheduled:true};
 function isDeadClient(client, allClients, now, deadAfterDays){
   deadAfterDays = deadAfterDays == null ? 14 : deadAfterDays;
   if(client.ignored) return false;
-  var completedNotClosed = client.status === 'Completed' && client.closeOutcome !== 'Closed';
+  var completedNotClosed = isWon(client.status) && client.closeOutcome !== 'Closed';
   if(!DEAD_ELIGIBLE_STATUSES[client.status] && !completedNotClosed) return false;
 
   var rebookedSince = allClients.some(function(other){
@@ -1347,7 +1422,10 @@ function getRecentSends(state, now, days){
 var ONDECK_SOON_MIN = 20;         // inside this many minutes counts as "starting soon"
 var ONDECK_LATE_GRACE_MIN = 4;    // this far past the start and they're officially late
 var ONDECK_LATE_WINDOW_MIN = 45;  // past this the call stops being live; end-of-day owns it
-var ONDECK_RESOLVED = {Completed:true, 'No-show':true, Ghosted:true, Rescheduled:true};
+// "Resolved" here means anything that isn't still open — won, missed, lost or
+// stalled. Asking the role rather than naming four stages means a custom
+// pipeline gets this right without On Deck knowing any of its stage names.
+function isResolvedStage(status){ return !isOpenStage(status); }
 
 function minsUntil(iso, now){
   var d = safeDate(iso);
@@ -1403,7 +1481,7 @@ function getOnDeck(state, now){
     return d && isSameLocalDay(d, now);
   }).sort(byCallDate);
 
-  var unlogged = todays.filter(function(c){ return !ONDECK_RESOLVED[c.status]; });
+  var unlogged = todays.filter(function(c){ return !isResolvedStage(c.status); });
 
   // The live one: the next call of the day still needing an outcome that
   // hasn't gone cold yet. A call 2 hours past its start is no longer
@@ -1422,7 +1500,7 @@ function getOnDeck(state, now){
   if(!focus){
     next = all.filter(function(c){
       var d = safeDate(c.callDateTime);
-      return d && d.getTime() > now.getTime() && !ONDECK_RESOLVED[c.status];
+      return d && d.getTime() > now.getTime() && !isResolvedStage(c.status);
     }).sort(byCallDate)[0] || null;
   }
 
@@ -1485,20 +1563,20 @@ function lastMessageIndex(client){
 
 function computeRescueScorecard(state){
   var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
-  var missed = clients.filter(function(c){ return c.status === 'No-show' || hasSentStage(c,'noshow'); });
+  var missed = clients.filter(function(c){ return isMissed(c.status) || hasSentStage(c,'noshow'); });
   var rescued = clients.filter(function(c){ return hasSentStage(c,'noshow'); });
   var replied = rescued.filter(function(c){ return c.messageLog.some(function(m){ return m.stage==='noshow' && m.responded; }); });
-  var rebooked = rescued.filter(function(c){ return c.status==='Confirmed' || c.status==='Completed' || c.status==='Reminded'; });
+  var rebooked = rescued.filter(function(c){ return isOpenStage(c.status) || isWon(c.status); });
   return {missed: missed.length, rescued: rescued.length, replied: replied.length, rebooked: rebooked.length};
 }
 
 
 function computeInsights(state){
   var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
-  var resolved = clients.filter(function(c){ return c.status==='Completed' || c.status==='No-show'; });
+  var resolved = clients.filter(function(c){ return isWon(c.status) || isMissed(c.status); });
   if(resolved.length < 4) return null;
   var insights = [];
-  function rateOf(arr){ var n=arr.filter(function(c){return c.status==='Completed';}).length; return arr.length ? n/arr.length : null; }
+  function rateOf(arr){ var n=arr.filter(function(c){return isWon(c.status);}).length; return arr.length ? n/arr.length : null; }
 
   var withLead = resolved.filter(function(c){ return c.bookedDate && c.callDateTime; }).map(function(c){
     var lead = (new Date(c.callDateTime) - new Date(c.bookedDate)) / 86400000;
@@ -1614,7 +1692,7 @@ function computeEndOfDayItems(state){
     var hasOutcome = ['Completed','No-show'].indexOf(c.status) !== -1;
     if(isToday && !hasOutcome) items.push({type:'today-no-outcome', client:c});
     else if(isPast && !isToday && !hasOutcome && c.status !== 'Ghosted' && c.status !== 'Rescheduled') items.push({type:'overdue-unlogged', client:c});
-    if(c.status === 'Completed' && !c.closeOutcome) items.push({type:'no-close', client:c});
+    if(isWon(c.status) && !c.closeOutcome) items.push({type:'no-close', client:c});
   });
   state.todos.filter(function(t){ return !t.done; }).forEach(function(t){ items.push({type:'todo', todo:t}); });
   return items;
@@ -1684,6 +1762,10 @@ function buildClientsCsv(state){
 /* ---- exports: CommonJS for test.js/Node, window global for the browser ---- */
 var __LOGIC_EXPORTS__ = {
   STORAGE_KEY: STORAGE_KEY, VALID_STATUSES: VALID_STATUSES, STOP_1TO4: STOP_1TO4,
+  buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
+  stageRole: stageRole, stageLabel: stageLabel, isWon: isWon, isMissed: isMissed,
+  isStalledStage: isStalledStage, isOpenStage: isOpenStage, isResolvedStage: isResolvedStage,
+  stopsCadence: stopsCadence,
   uid: uid, nowISO: nowISO, safeDate: safeDate, escapeHtml: escapeHtml, clamp: clamp,
   buildDefaultVariants: buildDefaultVariants, buildDefaultState: buildDefaultState,
   sanitizeClient: sanitizeClient, sanitizeSnoozedUntil: sanitizeSnoozedUntil, migrateState: migrateState,

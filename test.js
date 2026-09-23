@@ -874,14 +874,20 @@ test('renderCalendarTab does not throw in month or week view, empty or populated
 
 console.log('\n--- on deck ---');
 
-// Build a client whose call is `mins` from now, so these read as "a call
+// These tests reason about "today", so they are anchored to a fixed 9am rather
+// than to the real clock. Anchored to Date.now() they were time-of-day
+// dependent: run after ~9pm, "a call 180 minutes out" lands tomorrow and drops
+// out of today's list, so the suite passed all day and failed every evening.
+const ON_DECK_NOW = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })();
+
+// Build a client whose call is `mins` from the anchor, so these read as "a call
 // 10 minutes out" rather than as ISO string arithmetic.
 function clientAtMinutes(id, mins, overrides) {
   return freshClient(Object.assign({
     id: id,
     name: id,
     phone: '213-555-0100',
-    callDateTime: new Date(Date.now() + mins * 60000).toISOString(),
+    callDateTime: new Date(ON_DECK_NOW.getTime() + mins * 60000).toISOString(),
   }, overrides || {}));
 }
 function stateWith(clients) {
@@ -892,46 +898,46 @@ function stateWith(clients) {
 
 test('the next unresolved call today becomes the focus', () => {
   const s = stateWith([clientAtMinutes('soon', 10), clientAtMinutes('later', 180)]);
-  const od = GB.getOnDeck(s, new Date());
+  const od = GB.getOnDeck(s, ON_DECK_NOW);
   assert.strictEqual(od.focus.id, 'soon');
   assert.strictEqual(od.later.length, 1);
 });
 
 test('a call inside the soon window is flagged soon, not late', () => {
-  const od = GB.getOnDeck(stateWith([clientAtMinutes('a', 10)]), new Date());
+  const od = GB.getOnDeck(stateWith([clientAtMinutes('a', 10)]), ON_DECK_NOW);
   assert.strictEqual(od.soon, true);
   assert.strictEqual(od.late, false);
   assert.strictEqual(od.started, false);
 });
 
 test('a call a few minutes past its start is late and counts as started', () => {
-  const od = GB.getOnDeck(stateWith([clientAtMinutes('a', -10)]), new Date());
+  const od = GB.getOnDeck(stateWith([clientAtMinutes('a', -10)]), ON_DECK_NOW);
   assert.strictEqual(od.late, true);
   assert.strictEqual(od.started, true);
 });
 
 test('a call well past its start stops being live — end of day owns it', () => {
   const s = stateWith([clientAtMinutes('cold', -120)]);
-  const od = GB.getOnDeck(s, new Date());
+  const od = GB.getOnDeck(s, ON_DECK_NOW);
   assert.strictEqual(od.focus, null);
   assert.strictEqual(od.unlogged.length, 1, 'still needs an outcome, just not live');
 });
 
 test('a call with an outcome already logged is never the focus', () => {
-  const od = GB.getOnDeck(stateWith([clientAtMinutes('done', -10, { status: 'Completed' })]), new Date());
+  const od = GB.getOnDeck(stateWith([clientAtMinutes('done', -10, { status: 'Completed' })]), ON_DECK_NOW);
   assert.strictEqual(od.focus, null);
   assert.strictEqual(od.loggedCount, 1);
 });
 
 test('ignored clients stay out of it entirely', () => {
-  const od = GB.getOnDeck(stateWith([clientAtMinutes('hidden', 10, { ignored: true })]), new Date());
+  const od = GB.getOnDeck(stateWith([clientAtMinutes('hidden', 10, { ignored: true })]), ON_DECK_NOW);
   assert.strictEqual(od.focus, null);
   assert.strictEqual(od.todays.length, 0);
 });
 
 test('with nothing live today it falls back to the next booking on the books', () => {
   const s = stateWith([clientAtMinutes('future', 60 * 24 * 3)]);
-  const od = GB.getOnDeck(s, new Date());
+  const od = GB.getOnDeck(s, ON_DECK_NOW);
   assert.strictEqual(od.focus, null);
   assert.strictEqual(od.next.id, 'future');
 });
@@ -1138,6 +1144,90 @@ test('legacy data: a logged reply counts as reviewed, an unanswered one does not
   });
   assert.strictEqual(migrated.messageLog[0].reviewed, true, 'a reply on file is self-evidently reviewed');
   assert.strictEqual(migrated.messageLog[1].reviewed, false, 'never-answered stays unknown, not a rejection');
+});
+
+console.log('\n--- custom pipelines (industry-agnostic stages) ---');
+
+// The point of the role model: an HVAC shop's stages share no names at all with
+// the agency defaults, but drive the same cadence, rescue and recovery engine.
+const HVAC_PIPELINE = [
+  {key:'New Inquiry',        label:'New Inquiry',        role:'open'},
+  {key:'Contacted',          label:'Contacted',          role:'open'},
+  {key:'Estimate Scheduled', label:'Estimate Scheduled', role:'open'},
+  {key:'Estimate Completed', label:'Estimate Completed', role:'won'},
+  {key:'Missed Estimate',    label:'Missed Estimate',    role:'missed'},
+  {key:'Awaiting Decision',  label:'Awaiting Decision',  role:'stalled'},
+  {key:'Lost',               label:'Lost',               role:'lost'}
+];
+function withPipeline(stages, fn){
+  GB.setPipeline(stages);
+  try { fn(); } finally { GB.setPipeline(null); }   // always restore the defaults
+}
+
+test('defaults reproduce the old hard-coded behaviour exactly', () => {
+  assert.strictEqual(GB.stopsCadence('Completed'), true);
+  assert.strictEqual(GB.stopsCadence('No-show'), true);
+  assert.strictEqual(GB.stopsCadence('Ghosted'), true);
+  assert.strictEqual(GB.stopsCadence('Booked'), false);
+  assert.strictEqual(GB.stopsCadence('Confirmed'), false);
+  assert.strictEqual(GB.stopsCadence('Rescheduled'), false);
+  // the old STOP_1TO4 map and the role model must agree on every stage
+  GB.VALID_STATUSES.forEach(st => {
+    assert.strictEqual(GB.stopsCadence(st), !!GB.STOP_1TO4[st], 'disagreement on ' + st);
+  });
+});
+
+test('an HVAC stage named nothing like "Completed" still stops the cadence', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const c = freshClient({status:'Estimate Completed', callDateTime: isoDaysAgo(1)});
+    assertDue(GB.computeDue(c, new Date()), []);
+    assert.strictEqual(GB.isWon('Estimate Completed'), true);
+  });
+});
+
+test('an HVAC "missed" stage drives the no-show rescue sequence', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const c = freshClient({status:'Missed Estimate', callDateTime: isoDaysAgo(2)});
+    assert.ok(GB.computeDue(c, new Date()).includes('noshow'),
+      'a missed appointment should trigger rescue regardless of what the stage is called');
+  });
+});
+
+test('an HVAC "stalled" stage drives recovery nudges', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const c = freshClient({status:'Awaiting Decision', stalledSince: isoDaysAgo(5)});
+    assert.ok(GB.computeDue(c, new Date()).includes('recovery'));
+  });
+});
+
+test('an open stage still runs the normal cadence under a custom pipeline', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const c = freshClient({status:'New Inquiry', callDateTime: isoDaysFromNow(3), bookedDate: isoDaysAgo(1)});
+    assert.ok(GB.computeDue(c, new Date()).includes('welcome'));
+  });
+});
+
+test('a stage an admin deleted reads as open, so contacts never fall out of the system', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    assert.strictEqual(GB.stageRole('Some Stage That Was Removed'), 'open');
+    const c = freshClient({status:'Some Stage That Was Removed', callDateTime: isoDaysFromNow(3), bookedDate: isoDaysAgo(1)});
+    assert.ok(GB.computeDue(c, new Date()).length > 0, 'an orphaned contact must keep getting followed up');
+  });
+});
+
+test('statusLabel ghosts by meaning, not by the word "Ghosted"', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    assert.ok(GB.statusLabel('Lost').startsWith('👻'));
+    assert.ok(GB.statusLabel('Missed Estimate').startsWith('👻'));
+    assert.ok(!GB.statusLabel('New Inquiry').startsWith('👻'));
+  });
+});
+
+test('setPipeline(null) and an empty list both fall back to the defaults', () => {
+  GB.setPipeline([]);
+  assert.strictEqual(GB.getPipeline().length, GB.buildDefaultPipeline().length);
+  GB.setPipeline(null);
+  assert.strictEqual(GB.stopsCadence('Completed'), true);
 });
 
 console.log('\n--- incremental persistence (hosted/data.js) ---');
