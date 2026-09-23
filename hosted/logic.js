@@ -74,7 +74,7 @@ function buildDefaultVariants(){
     ],
     monday: [
       {id:'m1', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Going over channel architecture and what actually converts local viewers. Keep it on the calendar."},
-      {id:'m2', builtin:true, text:"Hi {name}, {sender} here. Quick reminder for {weekday} at {time}. We'll get into real channel strategy and viewer retention for your market. Talk soon."}
+      {id:'m2', builtin:true, text:"Hey {name}, we're on for {weekday} at {time}. I'll have a couple of examples from your market pulled up to walk through. Anything specific you want me to look at before then?"}
     ],
     midcheckin: [
       {id:'c1', builtin:true, text:"Hey {name}, checking in ahead of our call on {date}. Going to focus on the main distribution mistakes keeping real estate videos under 100 views. Still good on your end?"},
@@ -102,7 +102,7 @@ function buildDefaultVariants(){
       {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to get your YouTube content dialed in, send over a couple open windows and I'll get us set."}
     ],
     noshow: [
-      {id:'n1', builtin:true, text:"Hey {name}, {sender} here. Looks like timing went sideways for {date}, totally understand how days go. Want me to send over a fresh link to pick a new slot?"},
+      {id:'n1', builtin:true, text:"Hey {name}, missed you on {date}. No stress, it happens. What does later this week look like on your end?"},
       {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still want to walk you through what's driving local YouTube conversion right now. Shoot me a time that works better and we can reset."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
