@@ -1442,6 +1442,38 @@ test('the analytics that read reply data still work after an outcome', () => {
   assert.ok(g.reasons.some(r => /replied before/.test(r.label)), 'Ghost Score must still see the reply');
 });
 
+// A call to a function that does not exist parses fine and only fails when that
+// line runs — which for a settings modal means the first person to hit Save.
+// Found exactly that: three calls to toast() when the helper is showToast().
+{
+  const strip = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  const logicSrcH = fs.readFileSync(path.join(__dirname, 'hosted', 'logic.js'), 'utf8');
+  const appSrcH   = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const dataSrcH  = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const all = strip(logicSrcH + '\n' + appSrcH + '\n' + dataSrcH);
+  const defined = new Set([
+    ...[...all.matchAll(/function\s+([A-Za-z_$]\w*)/g)].map(m => m[1]),
+    ...[...all.matchAll(/(?:var|let|const)\s+([A-Za-z_$]\w*)\s*=\s*(?:function|\()/g)].map(m => m[1])
+  ]);
+  const KEYWORDS = new Set(['if','for','while','switch','catch','return','typeof','new','await',
+    'else','do','try','throw','delete','void','in','of','function','var','let','const']);
+  const BROWSER = new Set(['Number','String','Boolean','Array','Object','Date','Math','JSON','parseInt',
+    'parseFloat','isNaN','isFinite','setTimeout','setInterval','clearTimeout','clearInterval','fetch',
+    'encodeURIComponent','decodeURIComponent','alert','confirm','prompt','require','Promise','RegExp',
+    'Error','Set','Map','btoa','atob','getComputedStyle','structuredClone','Intl','escape','unescape',
+    'URLSearchParams','FileReader','Blob',
+    'Chart']);   // Chart.js, loaded from a CDN in index.html
+  const called = [...strip(appSrcH).matchAll(/(?<![.\w$])([A-Za-z_$]\w{2,})\s*\(/g)].map(m => m[1]);
+  const missing = [...new Set(called)].filter(n => !defined.has(n) && !KEYWORDS.has(n) && !BROWSER.has(n));
+  assert.deepStrictEqual(missing, [], 'app.js calls function(s) that are never defined: ' + missing.join(', '));
+  console.log('  ok  - every function hosted/app.js calls is actually defined');
+}
+
 console.log('\n--- contact timeline ---');
 
 test('history is reconstructed for contacts that predate the events table', () => {

@@ -84,8 +84,20 @@ function h(tag, attrs, children){
 }
 
 
+// Static chrome carries data-term markers so the configured vocabulary reaches
+// the shell too, not just the panels that build their text in JS. Without this
+// the terminology setting is half-applied — which reads worse than not being
+// configurable at all, because the interface contradicts itself.
+function applyTerminology(){
+  var nodes = document.querySelectorAll('[data-term]');
+  for(var i = 0; i < nodes.length; i++){
+    nodes[i].textContent = term(nodes[i].getAttribute('data-term'));
+  }
+}
+
 function renderAll(){
   if(!STATE) return;
+  applyTerminology();
   renderHealthAlerts();
   renderProgressBar();
   renderStats();
@@ -1269,6 +1281,123 @@ function renderTimeline(client, events){
 }
 
 
+/* Business settings — what makes GhostBuster fit a business other than this
+   one. Stages, vocabulary and the Ghost Score weights all already persist per
+   organization; until now they could only be changed in Postgres, which meant
+   the multi-industry claim was true in the data model and false in practice.
+
+   Stages are edited as rows with an explicit role rather than as free text,
+   because the role is the part the engine acts on. A stage whose role is
+   unset behaves as 'open', which is the safe default but rarely the intended
+   one — making it a required choice is cheaper than debugging why a custom
+   "Closed Won" never stopped the follow-up cadence. */
+var SETTINGS_DRAFT = null;
+
+function openSettingsModal(){
+  // Edited against a draft, not live state: a half-finished pipeline (a stage
+  // mid-rename, a blank row) would otherwise be what computeDue sees on the
+  // next render.
+  SETTINGS_DRAFT = {
+    pipeline: (STATE.pipeline || buildDefaultPipeline()).map(function(st){
+      return {key: st.key, label: st.label || st.key, role: st.role || 'open'};
+    }),
+    terminology: Object.assign(buildDefaultTerminology(), STATE.terminology || {})
+  };
+  renderSettingsModal();
+}
+
+var ROLE_HELP = {
+  open:    'follow-ups keep running',
+  won:     'the appointment happened; cadence stops',
+  missed:  'they did not show; rescue sequence starts',
+  stalled: 'in limbo; recovery nudges re-fire',
+  lost:    'written off; cadence stops'
+};
+
+function renderSettingsModal(){
+  var d = SETTINGS_DRAFT;
+  var stageRows = d.pipeline.map(function(st, i){
+    var opts = ['open','won','missed','stalled','lost'].map(function(r){
+      return '<option value="'+r+'"'+(st.role===r?' selected':'')+'>'+r+' — '+ROLE_HELP[r]+'</option>';
+    }).join('');
+    return '<div class="stage-row">' +
+      '<span class="grip">'+(i+1)+'</span>' +
+      '<input type="text" value="'+escapeHtml(st.label)+'" data-action="set-stage-label" data-idx="'+i+'" placeholder="Stage name">' +
+      '<select data-action="set-stage-role" data-idx="'+i+'">'+opts+'</select>' +
+      '<button data-action="move-stage" data-idx="'+i+'" data-dir="-1" title="Move up">↑</button>' +
+      '<button data-action="move-stage" data-idx="'+i+'" data-dir="1" title="Move down">↓</button>' +
+      '<button data-action="remove-stage" data-idx="'+i+'" title="Remove">✕</button>' +
+    '</div>';
+  }).join('');
+
+  var termFields = [
+    ['contact','One contact'], ['contactPlural','Many contacts'],
+    ['appointment','One appointment'], ['appointmentPlural','Many appointments'],
+    ['graveyard','The Graveyard']
+  ].map(function(f){
+    return '<div><label>'+f[1]+'</label><input type="text" data-action="set-term" data-key="'+f[0]+'" value="'+escapeHtml(d.terminology[f[0]])+'"></div>';
+  }).join('');
+
+  // Renaming a stage rewrites the status on every contact currently sitting on
+  // it, so say so before they hit save rather than after.
+  var counts = {};
+  Object.keys(STATE.clients).forEach(function(cid){
+    var st = STATE.clients[cid].status;
+    counts[st] = (counts[st] || 0) + 1;
+  });
+  var current = (STATE.pipeline || buildDefaultPipeline()).map(function(s){ return s.key; });
+  var removed = current.filter(function(k){
+    return !d.pipeline.some(function(st){ return st.key === k; }) && counts[k];
+  });
+
+  openModalHtml(
+    '<div class="modal-head"><h2>Business settings</h2><button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
+    '<div class="set-section"><h3>Pipeline stages</h3>' +
+    '<div class="hint">The role is what GhostBuster acts on, not the name — so an HVAC shop can call its won stage “Estimate Completed” and the cadence still stops there.</div>' +
+    stageRows +
+    '<button class="btn btn-sm" data-action="add-stage">+ Add stage</button>' +
+    (removed.length ? '<div class="set-warn">⚠ ' + removed.map(function(k){ return counts[k] + ' contact(s) on “' + escapeHtml(k) + '”'; }).join(', ') +
+      ' — removing a stage leaves them on it. Unrecognised stages behave as “open”, so they keep getting followed up rather than disappearing.</div>' : '') +
+    '</div>' +
+    '<div class="set-section"><h3>What you call things</h3>' +
+    '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
+    '<div class="term-grid">' + termFields + '</div></div>' +
+    '<div class="field-row" style="text-align:right;">' +
+      '<button class="btn btn-sm btn-ghost" data-action="reset-settings">Reset to defaults</button> ' +
+      '<button class="btn btn-sm btn-green" data-action="save-settings">Save settings</button>' +
+    '</div>',
+    true
+  );
+}
+
+function saveSettingsDraft(){
+  var d = SETTINGS_DRAFT;
+  // A blank-named stage is a half-finished edit, not a stage. Dropping them on
+  // save is kinder than refusing to save and making someone hunt for the row.
+  var stages = d.pipeline
+    .map(function(st){ return {key: (st.label || '').trim(), label: (st.label || '').trim(), role: st.role || 'open'}; })
+    .filter(function(st){ return st.key; });
+  if(!stages.length){
+    showToast('A pipeline needs at least one stage.');
+    return;
+  }
+  if(!stages.some(function(st){ return st.role === 'open'; })){
+    // Without an open stage nothing is ever followed up, which looks exactly
+    // like the app being broken.
+    showToast('Keep at least one “open” stage, or nothing will ever be followed up.');
+    return;
+  }
+  STATE.pipeline = stages;
+  STATE.terminology = d.terminology;
+  setPipeline(stages);
+  setTerminology(d.terminology);
+  saveState(STATE);
+  closeModal();
+  renderAll();
+  showToast('Settings saved.');
+}
+
+
 function openWeeklyDigestModal(){
   var text = buildWeeklyDigest(STATE, new Date());
   openModalHtml(
@@ -1503,6 +1632,36 @@ document.addEventListener('click', function(ev){
       UI.outcomeOpen = null;
       renderGhostToday();
       break;
+    case 'open-settings':
+      openSettingsModal();
+      break;
+    case 'add-stage':
+      SETTINGS_DRAFT.pipeline.push({key:'', label:'', role:'open'});
+      renderSettingsModal();
+      break;
+    case 'remove-stage':
+      SETTINGS_DRAFT.pipeline.splice(parseInt(target.getAttribute('data-idx'),10), 1);
+      renderSettingsModal();
+      break;
+    case 'move-stage': {
+      var mi = parseInt(target.getAttribute('data-idx'),10);
+      var dir = parseInt(target.getAttribute('data-dir'),10);
+      var mj = mi + dir;
+      if(mj >= 0 && mj < SETTINGS_DRAFT.pipeline.length){
+        var tmp = SETTINGS_DRAFT.pipeline[mi];
+        SETTINGS_DRAFT.pipeline[mi] = SETTINGS_DRAFT.pipeline[mj];
+        SETTINGS_DRAFT.pipeline[mj] = tmp;
+        renderSettingsModal();
+      }
+      break;
+    }
+    case 'reset-settings':
+      SETTINGS_DRAFT = {pipeline: buildDefaultPipeline(), terminology: buildDefaultTerminology()};
+      renderSettingsModal();
+      break;
+    case 'save-settings':
+      saveSettingsDraft();
+      break;
     case 'ghost-filter':
       UI.ghostFilter = target.getAttribute('data-band');
       renderGhostToday();
@@ -1657,6 +1816,11 @@ document.addEventListener('click', function(ev){
 
 document.addEventListener('change', function(ev){
   var t = ev.target;
+  if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-stage-role'){
+    var ri = parseInt(t.getAttribute('data-idx'), 10);
+    if(SETTINGS_DRAFT.pipeline[ri]) SETTINGS_DRAFT.pipeline[ri].role = t.value;
+    return;
+  }
   if(t.getAttribute && t.getAttribute('data-action') === 'mark-sent'){
     var cid = t.getAttribute('data-cid'), stage = t.getAttribute('data-stage');
     if(t.checked) doMarkSent(cid, stage);
@@ -1710,6 +1874,20 @@ document.addEventListener('change', function(ev){
 
 document.addEventListener('input', function(ev){
   var t = ev.target;
+  // Settings edits land in the draft, never in STATE — the modal is only
+  // committed on save, so a stage mid-rename never reaches computeDue.
+  // Deliberately no re-render on keystroke: rebuilding the modal would steal
+  // focus and drop the caret mid-word.
+  var sa = t.getAttribute && t.getAttribute('data-action');
+  if(SETTINGS_DRAFT && sa === 'set-stage-label'){
+    var si = parseInt(t.getAttribute('data-idx'), 10);
+    if(SETTINGS_DRAFT.pipeline[si]) SETTINGS_DRAFT.pipeline[si].label = t.value;
+    return;
+  }
+  if(SETTINGS_DRAFT && sa === 'set-term'){
+    SETTINGS_DRAFT.terminology[t.getAttribute('data-key')] = t.value;
+    return;
+  }
   if(t.getAttribute && t.getAttribute('data-action') === 'edit-text'){
     var cid = t.getAttribute('data-cid'), stage = t.getAttribute('data-stage');
     var original = getOriginalText(STATE, STATE.clients[cid], stage);

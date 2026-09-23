@@ -359,6 +359,23 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .tl-label{font-size:12.5px;font-weight:600;}
 .tl-when{font-size:11px;color:var(--ink-faint);font-variant-numeric:tabular-nums;}
 .tl-loading{padding:12px;font-size:12.5px;color:var(--ink-faint);}
+/* business settings — the pipeline editor and vocabulary. Stages are rows
+   rather than free text so a role is always chosen deliberately: the role is
+   what the engine acts on, and a stage without one silently behaves as 'open'. */
+.set-section{margin-bottom:20px;}
+.set-section h3{margin:0 0 4px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--ink);}
+.set-section .hint{font-size:11.5px;color:var(--ink-faint);margin-bottom:9px;line-height:1.5;}
+.stage-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;}
+.stage-row input{flex:1;min-width:0;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;}
+.stage-row select{padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;background:var(--card);}
+.stage-row .grip{color:var(--ink-faint);font-size:12px;width:16px;text-align:center;}
+.stage-row button{flex:0 0 auto;padding:5px 9px;font-size:12px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;}
+.stage-row button:hover{border-color:var(--red);color:var(--red);}
+.term-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.term-grid label{font-size:11.5px;color:var(--ink-soft);font-weight:700;display:block;margin-bottom:3px;}
+.term-grid input{width:100%;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;}
+.set-warn{font-size:11.5px;color:var(--amber);background:var(--amber-soft);padding:8px 10px;border-radius:var(--radius-sm);margin-top:8px;line-height:1.5;}
+@media (max-width:560px){ .term-grid{grid-template-columns:1fr;} .stage-row{flex-wrap:wrap;} }
 /* One interaction lifecycle. 'Waiting' is stated quietly; only an interaction
    past the reply window gets the outcome row, so the question appears once and
    only when it can actually be answered. */
@@ -536,10 +553,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <h1>The GhostBuster</h1>
   </div>
   <button class="btn" data-action="end-of-day">End of day <span id="eod-count">(0)</span></button>
-  <button class="btn btn-primary" data-action="add-client">+ Add client</button>
+  <button class="btn btn-primary" data-action="add-client">+ Add <span data-term="contact">client</span></button>
   <div class="menu-wrap">
     <button class="btn" data-action="toggle-menu">⋯ Menu</button>
     <div class="menu-dropdown hidden" id="overflow-menu">
+      <button data-action="open-settings">⚙ Business settings</button>
       <button data-action="sync-calendar-now">Sync calendar now</button>
       <button data-action="connect-calendar" data-priority="0" data-label="Market Maker">Connect Market Maker calendar</button>
       <button data-action="connect-calendar" data-priority="1" data-label="Personal">Connect personal calendar</button>
@@ -593,7 +611,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <button class="tab-btn" data-action="tab" data-tab="variants">3 · Message variants</button>
     <button class="tab-btn" data-action="tab" data-tab="weekly">4 · Weekly performance</button>
     <button class="tab-btn" data-action="tab" data-tab="calendar">5 · Calendar</button>
-    <button class="tab-btn" data-action="tab" data-tab="dead">6 · Graveyard <span id="dead-count"></span></button>
+    <button class="tab-btn" data-action="tab" data-tab="dead">6 · <span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
   </div>
 
   <div class="tab-panel active" id="tab-calls">
