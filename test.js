@@ -1474,6 +1474,98 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- recommended next action ---');
+
+test('a reply means a person owes them a person', () => {
+  const c = freshClient({messageLog:[{stage:'welcome',variantId:'w1',text:'x',
+    sentAt: isoDaysAgo(2), responded:true, respondedAt: isoDaysAgo(1), reviewed:true}]});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.action, 'reply');
+});
+
+test('minutes from the call, a text is too slow', () => {
+  const c = freshClient({status:'Confirmed',
+    callDateTime: new Date(Date.now() + 8 * 60000).toISOString()});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.action, 'call');
+  assert.ok(/minutes/.test(rec.why));
+});
+
+test('a due touch recommends sending that touch', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.action, 'text');
+  assert.strictEqual(rec.stage, 'welcome');
+});
+
+test('after enough unanswered texts it switches channel instead', () => {
+  const log = [];
+  for(let i = GB.UNANSWERED_SWITCH_AT; i >= 1; i--){
+    log.push({stage:'monday',variantId:'m1',text:'x',sentAt: isoDaysAgo(i + 1),
+      responded:false, respondedAt:null, reviewed:true});
+  }
+  const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(5), messageLog: log});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.action, 'call', 'texting has stopped working; got ' + JSON.stringify(rec));
+  assert.ok(rec.stage, 'the due message should still be available underneath');
+});
+
+test('but an appointment reminder is never downgraded to a call', () => {
+  const log = [];
+  for(let i = 5; i >= 1; i--){
+    log.push({stage:'monday',variantId:'m1',text:'x',sentAt: isoDaysAgo(i + 1),
+      responded:false, respondedAt:null, reviewed:true});
+  }
+  const c = freshClient({bookedDate: isoDaysAgo(10),
+    callDateTime: new Date(Date.now() + 45 * 60000).toISOString(), messageLog: log});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.stage, 'hourbefore', 'the link still needs sending; got ' + JSON.stringify(rec));
+});
+
+test('unreviewed sends do not count toward the channel switch', () => {
+  const log = [];
+  for(let i = 5; i >= 1; i--){
+    log.push({stage:'monday',variantId:'m1',text:'x',sentAt: isoDaysAgo(i + 1),
+      responded:false, respondedAt:null, reviewed:false});
+  }
+  const c = freshClient({messageLog: log});
+  assert.strictEqual(GB.consecutiveUnanswered(c), 0, 'nobody checked, so it is not evidence of silence');
+});
+
+test('a just-sent touch says wait rather than inventing work', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(20),
+    messageLog:[{stage:'welcome',variantId:'w1',text:'x',
+      sentAt: new Date(Date.now() - 3*3600000).toISOString(), responded:false, respondedAt:null, reviewed:false}]});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.strictEqual(rec.action, 'wait');
+});
+
+test('a high score with no scheduled touch left still gets an action', () => {
+  // The failure this exists to prevent: the queue explains at length why
+  // someone needs attention, then offers no way to give it.
+  const c = freshClient({
+    status:'Confirmed', bookedDate: isoDaysAgo(40),
+    callDateTime: isoDaysFromNow(1),
+    messageLog: ['welcome','monday','midcheckin'].map((st, i) => ({
+      stage: st, variantId: st[0]+'1', text:'x', sentAt: isoDaysAgo(34 - i),
+      responded: i === 0, respondedAt: i === 0 ? isoDaysAgo(34) : null, reviewed:true
+    }))
+  });
+  const score = GB.computeGhostScore(c, new Date());
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.ok(score.score >= 51, 'fixture should score high, got ' + score.score);
+  assert.notStrictEqual(rec.action, 'none', 'a high score must never resolve to "nothing due"');
+  assert.ok(rec.why, 'and it must say why');
+});
+
+test('a contact with no phone says so instead of recommending the impossible', () => {
+  const c = freshClient({phone:'', bookedDate: isoDaysAgo(30), callDateTime: null,
+    messageLog:[{stage:'welcome',variantId:'w1',text:'x',sentAt: isoDaysAgo(20),
+      responded:false, respondedAt:null, reviewed:true}]});
+  const rec = GB.recommendNextAction(c, new Date());
+  assert.ok(rec.action === 'none' || rec.action === 'outcome', 'got ' + rec.action);
+});
+
 console.log('\n--- configurable sequences ---');
 
 function withSequence(steps, fn){

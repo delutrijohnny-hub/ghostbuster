@@ -400,6 +400,12 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .gt-state.waiting{color:var(--ink-soft);}
 .gt-state.needs_outcome{background:var(--amber-soft);color:var(--amber);}
 .gt-state.replied{background:var(--green-soft);color:var(--green);}
+/* One obvious primary action; the alternative channel stays available but
+   visually secondary, because a recommendation is a suggestion not a rule. */
+.gt-rec{font-size:11.5px;color:var(--ink-soft);margin-top:4px;line-height:1.45;}
+.gt-acts .gt-primary{background:var(--ink);border-color:var(--ink);color:var(--card);font-weight:800;}
+.gt-acts .gt-primary:hover{background:var(--green);border-color:var(--green);color:#fff;}
+.gt-acts .gt-primary.muted{background:var(--bg);border-color:var(--border);color:var(--ink-faint);font-weight:700;cursor:default;}
 .gt-row.needs-outcome{background:linear-gradient(90deg,var(--amber-soft) 0 3px,transparent 3px);}
 .gt-outcome{flex:1 1 100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:54px;margin-top:2px;}
 .gt-outcome .lbl{font-size:11.5px;color:var(--ink-faint);font-weight:700;}

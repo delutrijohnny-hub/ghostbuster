@@ -495,11 +495,29 @@ function renderGhostToday(){
   shown.slice(0, 25).forEach(function(r){
     var c = r.client;
     var digits = String(c.phone || '').replace(/\D/g,'');
+    var smsTo = digits ? ('sms:' + (digits.length === 10 ? '+1' + digits : '+' + digits)) : null;
+    var rec = recommendNextAction(c, now);
+
+    // One obvious primary action, with the rest demoted to secondary. A row of
+    // equally-weighted buttons makes the salesperson decide what GhostBuster
+    // was supposed to have decided for them.
     var acts = h('span',{class:'gt-acts'},[]);
-    if(digits){
-      acts.appendChild(h('a',{href: telHref(c.phone), title:'Call ' + c.name},['Call']));
-      acts.appendChild(h('a',{href:'sms:' + (digits.length===10 ? '+1'+digits : '+'+digits), title:'Text ' + c.name},['Text']));
+    var primary = null;
+    if(rec.action === 'call' && digits){
+      primary = h('a',{class:'gt-primary', href: telHref(c.phone), title: rec.why},['📞 ' + rec.label]);
+    } else if((rec.action === 'text' || rec.action === 'reply') && smsTo){
+      var body = rec.stage ? getCardText(STATE, c, rec.stage) : '';
+      primary = h('a',{class:'gt-primary', href: smsTo + (body ? '&body=' + encodeURIComponent(body) : ''),
+        title: rec.why},['💬 ' + rec.label]);
+    } else if(rec.action === 'wait'){
+      primary = h('span',{class:'gt-primary muted', title: rec.why},['⏳ ' + rec.label]);
     }
+    if(primary) acts.appendChild(primary);
+
+    // Secondary: the other channel, always reachable — a recommendation is a
+    // suggestion, not a restriction.
+    if(digits && rec.action !== 'call') acts.appendChild(h('a',{href: telHref(c.phone)},['Call']));
+    if(smsTo && rec.action !== 'text' && rec.action !== 'reply') acts.appendChild(h('a',{href: smsTo},['Text']));
     acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
 
     // Where this contact sits in the one interaction lifecycle. Waiting is
@@ -526,6 +544,7 @@ function renderGhostToday(){
     if(inter.state !== 'none'){
       main.appendChild(h('div',{class:'gt-state ' + inter.state},[interactionLabel(inter)]));
     }
+    if(rec.why) main.appendChild(h('div',{class:'gt-rec'},['→ ' + rec.why]));
 
     var row = h('div',{class:'gt-row' + (needsOutcome ? ' needs-outcome' : '')},[
       h('span',{class:'gt-score ' + r.band, title:'Ghost Score ' + r.score + ' — ' + r.band},[String(r.score)]),

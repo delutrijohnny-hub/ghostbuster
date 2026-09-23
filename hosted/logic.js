@@ -163,6 +163,9 @@ var HOURBEFORE_FLOOR_MIN = 10;
    Today for a human to answer rather than for a template to fire. */
 var REPLY_PAUSE_DAYS = 3;
 var PAUSE_EXEMPT_STAGES = {dayof: true, hourbefore: true};
+// When more than one of these is due, the nearest-term one wins: 45 minutes
+// out, the short link-first reminder beats the morning-of text.
+var STAGE_PRIORITY = ['hourbefore', 'dayof'];
 
 // When the automated cadence may resume, or null if nothing has been replied
 // to. respondedAt is when the reply was LOGGED; for the replies recovered from
@@ -1060,6 +1063,114 @@ function computeVariantPerformance(state, now){
   });
   out.sort(function(a, b){ return a.stage.localeCompare(b.stage); });
   return out;
+}
+
+
+/* ---- the recommended next action ----
+   Ghost Score answers who. The cadence answers when. This answers HOW: call,
+   text, or leave them alone — one obvious next move per contact rather than a
+   row of equally-weighted buttons.
+
+   Rules, not a model, for the same reason the Ghost Score is: a recommendation
+   nobody can interrogate gets ignored, and there is nowhere near enough
+   outcome data here to learn channel choice from.
+
+   The one empirical input is the channel-switch threshold. Measured on this
+   book, reply rate runs ~22% for the first couple of texts and roughly halves
+   to ~12% after that — real, but noisy enough (one bucket bounces back to 21%
+   on n=28) that it supports "texting is working less well by now", not a
+   precise cutoff. UNANSWERED_SWITCH_AT is therefore a deliberate heuristic and
+   is named so it can be moved when better data exists. */
+var UNANSWERED_SWITCH_AT = 3;
+
+function consecutiveUnanswered(client){
+  var log = client.messageLog || [];
+  var run = 0;
+  for(var i = log.length - 1; i >= 0; i--){
+    if(!log[i].reviewed) continue;    // unchecked is not evidence of silence
+    if(log[i].responded) break;
+    run++;
+  }
+  return run;
+}
+
+// {action, label, why, stage} — stage is set only when the action is to send a
+// specific cadence message, so the caller knows which template to render.
+function recommendNextAction(client, now){
+  now = now || new Date();
+  if(!client || client.ignored) return {action:'none', label:'Archived', why:'', stage:null};
+
+  var inter = lastInteraction(client, now);
+  var due = computeDue(client, now);
+  var hasPhone = !!String(client.phone || '').replace(/\D/g, '');
+  var callDate = safeDate(client.callDateTime);
+  var minsToCall = callDate ? (callDate.getTime() - now.getTime()) / 60000 : null;
+
+  // They wrote back and the cadence is held: a person owes them a person.
+  if(inter.state === 'replied' && inter.pausedUntil && inter.pausedUntil > now.getTime()){
+    return {action:'reply', label:'Reply to them', stage:null,
+      why:'They wrote back. Automated follow-ups are paused until you answer.'};
+  }
+
+  // Minutes from the call and nothing has confirmed them — a call beats a text
+  // when there is no time left for a text to be read.
+  if(minsToCall !== null && minsToCall > 0 && minsToCall <= 15 && !stopsCadence(client.status) && hasPhone){
+    return {action:'call', label:'Call now', stage:null,
+      why:'Starting in ' + Math.round(minsToCall) + ' minutes and not confirmed.'};
+  }
+
+  if(due.length){
+    // Several touches can be due at once. The appointment-critical ones win:
+    // a stale welcome is not more urgent than the meeting link for a call
+    // starting in an hour, and taking due[0] made that choice by accident.
+    var stage = null;
+    for(var p = 0; p < STAGE_PRIORITY.length && !stage; p++){
+      if(due.indexOf(STAGE_PRIORITY[p]) !== -1) stage = STAGE_PRIORITY[p];
+    }
+    if(!stage) stage = due[0];
+    var unanswered = consecutiveUnanswered(client);
+    // Texting has stopped working for this person. Switching channel is the
+    // standard play, and the cadence message stays available underneath.
+    if(unanswered >= UNANSWERED_SWITCH_AT && hasPhone && !PAUSE_EXEMPT_STAGES[stage]){
+      return {action:'call', label:'Call instead', stage:stage,
+        why:unanswered + ' texts with no answer. Reply rate roughly halves past this point.'};
+    }
+    return {action:'text', label:'Send the ' + stage + ' text', stage:stage,
+      why:'This touch is due today.'};
+  }
+
+  if(inter.state === 'waiting'){
+    return {action:'wait', label:'Waiting for reply', stage:null,
+      why:'Sent ' + Math.round(inter.hoursAgo) + 'h ago. Give it until tomorrow.'};
+  }
+
+  if(inter.state === 'needs_outcome'){
+    return {action:'outcome', label:'What happened?', stage:null,
+      why:'No answer yet. Logging it keeps the message stats honest.'};
+  }
+
+  if(!hasPhone){
+    return {action:'none', label:'No phone number', stage:null,
+      why:'Nothing can be sent until a number is on file.'};
+  }
+
+  // The score and the cadence can disagree, and when they do the score is
+  // usually right. Kevin scores 90 — a call in 48 hours after a month of
+  // silence — while the cadence has nothing left to fire because every
+  // scheduled touch already went out. Answering "nothing due" there is worse
+  // than useless: the queue has just explained at length why this person needs
+  // attention, and then offers no way to give it. So a contact the score ranks
+  // as worth chasing, with no template left to send, gets the honest
+  // recommendation — pick up the phone — carrying the score's own reasoning.
+  var g = computeGhostScore(client, now);
+  if(g.score >= 51){
+    var top = g.reasons.filter(function(r){ return r.points > 0 && r.label !== 'Baseline'; })
+      .sort(function(a, b){ return b.points - a.points; })[0];
+    return {action:'call', label:'Reach out', stage:null,
+      why:(top ? top.label + '. ' : '') + 'No scheduled touch left — this one needs a person.'};
+  }
+
+  return {action:'none', label:'Nothing due', stage:null, why:''};
 }
 
 
@@ -2479,7 +2590,7 @@ var __LOGIC_EXPORTS__ = {
   parseDatetimeLocalInTZ: parseDatetimeLocalInTZ, startOfLocalDay: startOfLocalDay,
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
   hasSentStage: hasSentStage, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
-  REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, replyPauseUntil: replyPauseUntil,
+  REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
   buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
   describeTrigger: describeTrigger,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
@@ -2487,6 +2598,8 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
+  recommendNextAction: recommendNextAction, consecutiveUnanswered: consecutiveUnanswered,
+  UNANSWERED_SWITCH_AT: UNANSWERED_SWITCH_AT,
   computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
