@@ -1474,6 +1474,65 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- pause on reply ---');
+
+const repliedMsg = (over) => Object.assign({stage:'welcome', variantId:'w1', text:'x',
+  sentAt: isoDaysAgo(2), responded:true, respondedAt: isoDaysAgo(1), reviewed:true}, over || {});
+
+test('a recent reply holds the automated cadence', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(6),
+    messageLog: [repliedMsg()]
+  });
+  const due = GB.computeDue(c, new Date());
+  assert.ok(!due.includes('monday') && !due.includes('midcheckin'),
+    'nudges should be held while they are mid-conversation, got ' + JSON.stringify(due));
+});
+
+test('but never holds a reminder for an imminent appointment', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(10),
+    callDateTime: new Date(Date.now() + 45 * 60000).toISOString(),
+    messageLog: [repliedMsg()]
+  });
+  const due = GB.computeDue(c, new Date());
+  assert.ok(due.includes('hourbefore'),
+    'a reply must not cost someone their meeting link, got ' + JSON.stringify(due));
+});
+
+test('the pause expires so a good conversation cannot become a forgotten lead', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(30), callDateTime: isoDaysFromNow(6),
+    messageLog: [repliedMsg({sentAt: isoDaysAgo(20), respondedAt: isoDaysAgo(20)})]
+  });
+  const due = GB.computeDue(c, new Date());
+  assert.ok(due.length > 0, 'a reply 20 days ago must not still be suppressing follow-ups');
+});
+
+test('a reply with no logged time produces no pause rather than a fictional one', () => {
+  // The 459 replies recovered from Messages have no responded_at at all.
+  const c = freshClient({
+    bookedDate: isoDaysAgo(30), callDateTime: isoDaysFromNow(6),
+    messageLog: [repliedMsg({sentAt: isoDaysAgo(25), respondedAt: null})]
+  });
+  assert.ok(GB.computeDue(c, new Date()).length > 0,
+    'falling back to a months-old send time should not pause anything today');
+});
+
+test('an unanswered contact is unaffected', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(6),
+    messageLog: [repliedMsg({responded:false, respondedAt:null})]
+  });
+  assert.strictEqual(GB.replyPauseUntil(c), null);
+});
+
+test('a held contact says it is waiting on a human, not that it is handled', () => {
+  const c = freshClient({messageLog:[repliedMsg()]});
+  const label = GB.interactionLabel(GB.lastInteraction(c, new Date()));
+  assert.ok(/your turn/.test(label), 'got: ' + label);
+});
+
 console.log('\n--- variant performance ---');
 
 function perfClient(id, over){

@@ -144,6 +144,40 @@ var FOLLOWUP_REFIRE_DAYS = 4;
 var HOURBEFORE_LEAD_MIN = 75;
 var HOURBEFORE_FLOOR_MIN = 10;
 
+/* ---- pause on reply ----
+   Once someone writes back, they are in a conversation with a person, and
+   firing the next scheduled template at them is the single most visible way a
+   follow-up system annoys the people it exists to win over.
+
+   So a logged reply pauses the automated cadence for a few days. It does not
+   pause everything: a reply should never cancel a reminder for an appointment
+   that is hours away. Those two stages are about a specific scheduled event
+   rather than about nudging a quiet lead, and suppressing them would lose a
+   call to a missing link.
+
+   The pause expires rather than latching. Someone who replied and then went
+   quiet again does need chasing, and a permanent pause would quietly turn
+   every good conversation into a forgotten lead — the exact failure
+   GhostBuster exists to prevent. While paused the contact is not forgotten
+   either: replying raises their Ghost Score, so they surface in GhostBuster
+   Today for a human to answer rather than for a template to fire. */
+var REPLY_PAUSE_DAYS = 3;
+var PAUSE_EXEMPT_STAGES = {dayof: true, hourbefore: true};
+
+// When the automated cadence may resume, or null if nothing has been replied
+// to. respondedAt is when the reply was LOGGED; for the replies recovered from
+// Messages it is absent entirely, so those fall back to the send time and
+// simply produce no pause rather than a fictional one.
+function replyPauseUntil(client){
+  var latest = null;
+  (client.messageLog || []).forEach(function(m){
+    if(!m.responded) return;
+    var t = Date.parse(m.respondedAt || m.sentAt);
+    if(!isNaN(t) && (latest === null || t > latest)) latest = t;
+  });
+  return latest === null ? null : latest + REPLY_PAUSE_DAYS * 86400000;
+}
+
 
 /* ---------- small utils ---------- */
 function uid(){ return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -596,6 +630,13 @@ function computeDue(client, now){
   // touch — it self-expires the moment the snoozed-until date is reached.
   var snoozed = client.snoozedUntil || {};
   due = due.filter(function(stage){ return !(snoozed[stage] && todayKey < snoozed[stage]); });
+
+  // They wrote back: hold the automated nudges, keep the appointment-critical
+  // reminders. See replyPauseUntil.
+  var pauseUntil = replyPauseUntil(client);
+  if(pauseUntil !== null && now.getTime() < pauseUntil){
+    due = due.filter(function(stage){ return !!PAUSE_EXEMPT_STAGES[stage]; });
+  }
 
   return due;
 }
@@ -1062,7 +1103,8 @@ function lastInteraction(client, now){
   var sent = Date.parse(m.sentAt);
   return {
     message: m, idx: idx, state: messageState(m, now),
-    hoursAgo: isNaN(sent) ? null : (now.getTime() - sent) / 3600000
+    hoursAgo: isNaN(sent) ? null : (now.getTime() - sent) / 3600000,
+    pausedUntil: replyPauseUntil(client)
   };
 }
 
@@ -1070,6 +1112,12 @@ function lastInteraction(client, now){
 // the vocabulary stays consistent across surfaces.
 function interactionLabel(inter){
   if(!inter || inter.state === 'none') return 'No messages yet';
+  // A replied-to contact whose cadence is held should say so: "Replied" alone
+  // reads as handled, when in fact it is waiting on a human.
+  if(inter.state === 'replied' && inter.pausedUntil && inter.pausedUntil > Date.now()){
+    var days = Math.max(1, Math.ceil((inter.pausedUntil - Date.now()) / 86400000));
+    return 'They replied — your turn (auto follow-ups held ' + days + 'd)';
+  }
   var h = inter.hoursAgo;
   var when = (h === null) ? '' :
     h < 1 ? 'just now' :
@@ -2334,6 +2382,7 @@ var __LOGIC_EXPORTS__ = {
   parseDatetimeLocalInTZ: parseDatetimeLocalInTZ, startOfLocalDay: startOfLocalDay,
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
   hasSentStage: hasSentStage, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
+  REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, replyPauseUntil: replyPauseUntil,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
