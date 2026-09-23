@@ -506,8 +506,11 @@ function renderGhostToday(){
     if(rec.action === 'call' && digits){
       primary = h('a',{class:'gt-primary', href: telHref(c.phone), title: rec.why},['📞 ' + rec.label]);
     } else if((rec.action === 'text' || rec.action === 'reply') && smsTo){
-      var body = rec.stage ? getCardText(STATE, c, rec.stage) : '';
-      primary = h('a',{class:'gt-primary', href: smsTo + (body ? '&body=' + encodeURIComponent(body) : ''),
+      // Named msgBody, not body: `var` is function-scoped, so a `body` here
+      // hoists over the panel's own `body` container and turns
+      // body.appendChild(row) at the end of this loop into a call on a string.
+      var msgBody = rec.stage ? getCardText(STATE, c, rec.stage) : '';
+      primary = h('a',{class:'gt-primary', href: smsTo + (msgBody ? '&body=' + encodeURIComponent(msgBody) : ''),
         title: rec.why},['💬 ' + rec.label]);
     } else if(rec.action === 'wait'){
       primary = h('span',{class:'gt-primary muted', title: rec.why},['⏳ ' + rec.label]);
@@ -652,15 +655,33 @@ function renderClientsTab(){
   var list = clients.filter(function(c){ return !c.ignored; });
   if(UI.statusFilter) list = list.filter(function(c){ return c.status===UI.statusFilter; });
   if(q) list = list.filter(function(c){ return c.name.toLowerCase().indexOf(q)!==-1; });
-  list.sort(byCallDate);
+
+  // Scored once per render and cached on the row: sorting by score would
+  // otherwise recompute it for every comparison, and computeGhostScore calls
+  // computeDue, which is not free across 140 clients.
+  var scoreNow = new Date();
+  var scored = list.map(function(c){ return {client: c, g: computeGhostScore(c, scoreNow)}; });
+  if(UI.clientsSort === 'score'){
+    scored.sort(function(a, b){
+      if(b.g.score !== a.g.score) return b.g.score - a.g.score;
+      return byCallDate(a.client, b.client);
+    });
+  } else {
+    scored.sort(function(a, b){ return byCallDate(a.client, b.client); });
+  }
+  var heads = document.querySelectorAll('#tab-clients th.sortable');
+  for(var hi = 0; hi < heads.length; hi++){
+    heads[hi].classList.toggle('active', heads[hi].getAttribute('data-sort') === (UI.clientsSort || 'call'));
+  }
 
   var tbody = el('clients-table-body'); tbody.innerHTML = '';
   if(!list.length){
-    var emptyTd = h('td',{colspan:'6'},[]);
+    var emptyTd = h('td',{colspan:'7'},[]);
     emptyTd.innerHTML = '<div class="empty-mascot">' + slimerSvg(56) + '<div>No clients found.</div></div>';
     tbody.appendChild(h('tr',{},[emptyTd]));
   }
-  list.forEach(function(c){
+  scored.forEach(function(row){
+    var c = row.client;
     var d = safeDate(c.callDateTime);
     var when = d ? (fmtDate(d, c.timezone) + ' ' + fmtTime(d, c.timezone)) : '—';
     var lastIdx = lastMessageIndex(c);
@@ -674,7 +695,16 @@ function renderClientsTab(){
       var glyph = st === 'replied' ? '👍' : st === 'waiting' ? '⏳' : st === 'no_reply' ? '—' : '?';
       repliedCell = h('td',{class:'replied-cell', title: interactionLabel(lastInteraction(c, new Date()))},[glyph]);
     }
+    // The reasons travel with the number. A score with no explanation is one
+    // people learn to ignore — same principle as the ranked queue, in a
+    // tooltip because a table row has no room for prose.
+    var why = row.g.reasons.filter(function(r){ return r.points > 0 && r.label !== 'Baseline'; })
+      .map(function(r){ return r.label + ' +' + r.points; }).join('\n');
     var tr = h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
+      h('td',{class:'score-cell'},[
+        h('span',{class:'score-dot ' + row.g.band, title: why || 'Nothing pushing this one up right now'},
+          [String(row.g.score)])
+      ]),
       h('td',{},[c.name]),
       h('td',{},[when]),
       h('td',{},[h('span',{class:'status-pill st-'+c.status},[statusLabel(c.status)])]),
@@ -1774,6 +1804,10 @@ document.addEventListener('click', function(ev){
       break;
     case 'save-settings':
       saveSettingsDraft();
+      break;
+    case 'sort-clients':
+      UI.clientsSort = target.getAttribute('data-sort');
+      renderClientsTab();
       break;
     case 'ghost-filter':
       UI.ghostFilter = target.getAttribute('data-band');

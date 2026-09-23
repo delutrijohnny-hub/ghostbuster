@@ -1923,6 +1923,99 @@ test('buildTimeline never throws on sparse or broken data', () => {
   assert.doesNotThrow(() => GB.buildTimeline(freshClient({}), [{kind:'x', at:'not-a-date', data:null}], new Date()));
 });
 
+console.log('\n--- hosted render smoke test ---');
+
+/* The hosted build had never actually been rendered by a test — only parsed,
+   and checked for orphaned functions and undefined calls. That gap shipped a
+   real bug to production: inside the GhostBuster Today row loop a local named
+   `body` (the SMS message text) hoisted over the panel's own `body` container,
+   so body.appendChild(row) became a call on a string and the whole panel threw.
+   It parsed fine, every function it called existed, and every test passed.
+
+   This runs the hosted files against the same DOM stub and asserts the render
+   path does not throw for each shape of row the panel can produce. */
+function makeHostedCtx(){
+  const box = {};
+  box.localStorage = new LocalStorageStub();
+  box.document = makeDocumentStub();
+  box.window = box;
+  box.navigator = { clipboard: undefined };
+  box.console = console;
+  box.getComputedStyle = () => ({ getPropertyValue: () => '#000000' });
+  box.setTimeout = setTimeout; box.clearTimeout = clearTimeout;
+  box.setInterval = () => 0; box.clearInterval = () => {};
+  box.alert = () => {}; box.confirm = () => true; box.prompt = () => '';
+  box.Chart = function(){ this.destroy = () => {}; };
+  box.FileReader = function(){}; box.Blob = function(){};
+  box.URL = { createObjectURL: () => '', revokeObjectURL: () => {} };
+  box.encodeURIComponent = encodeURIComponent;
+  box.GB_SUPABASE = { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) },
+                      from: () => ({ select: () => ({ eq: () => ({ order: () => ({ limit: async () => ({data:[],error:null}) }) }) }) }) };
+  const ctx = vm.createContext(box);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','logic.js'),'utf8'), ctx, {filename:'hosted/logic.js'});
+  // data.js provides loadState/saveState/fetchClientEvents that app.js expects
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','data.js'),'utf8'), ctx, {filename:'hosted/data.js'});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','app.js'),'utf8'), ctx, {filename:'hosted/app.js'});
+  return ctx;
+}
+
+test('every GhostBuster Today row shape renders without throwing', () => {
+  const ctx = makeHostedCtx();
+  // One contact per branch the row builder can take: a due text, a call
+  // recommendation, a waiting send, an unanswered one, and a reply.
+  const seed = `
+    STATE = buildDefaultState();
+    var mk = function(id, over){
+      var c = sanitizeClient(Object.assign({id:id, name:id, phone:'2135550100',
+        bookedDate: new Date(Date.now()-20*86400000).toISOString(),
+        timezone:'America/Chicago', status:'Booked'}, over));
+      STATE.clients[id] = c; return c;
+    };
+    mk('due',      {callDateTime: new Date(Date.now()+5*86400000).toISOString()});
+    mk('imminent', {status:'Confirmed', callDateTime: new Date(Date.now()+8*60000).toISOString()});
+    mk('waiting',  {callDateTime: new Date(Date.now()+9*86400000).toISOString(),
+                    messageLog:[{id:'m1',stage:'welcome',variantId:'w1',text:'hi',
+                      sentAt:new Date(Date.now()-3*3600000).toISOString(),responded:false,respondedAt:null,reviewed:false}]});
+    mk('unanswered',{callDateTime: new Date(Date.now()+9*86400000).toISOString(),
+                    messageLog:[{id:'m2',stage:'welcome',variantId:'w1',text:'hi',
+                      sentAt:new Date(Date.now()-4*86400000).toISOString(),responded:false,respondedAt:null,reviewed:false}]});
+    mk('replied',  {callDateTime: new Date(Date.now()+9*86400000).toISOString(),
+                    messageLog:[{id:'m3',stage:'welcome',variantId:'w1',text:'hi',
+                      sentAt:new Date(Date.now()-2*86400000).toISOString(),responded:true,
+                      respondedAt:new Date(Date.now()-1*86400000).toISOString(),reviewed:true}]});
+    mk('nophone',  {phone:'', callDateTime: new Date(Date.now()+9*86400000).toISOString()});
+  `;
+  vm.runInContext(seed, ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderGhostToday()', ctx),
+    'the ranked queue must render for every row shape');
+});
+
+test('the whole hosted render pass does not throw', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    for (var i = 0; i < 6; i++){
+      var id = 'c' + i;
+      STATE.clients[id] = sanitizeClient({id:id, name:'Client ' + i, phone:'2135550100',
+        bookedDate: new Date(Date.now()-30*86400000).toISOString(),
+        callDateTime: new Date(Date.now() + (i-2)*86400000).toISOString(),
+        timezone:'America/Chicago',
+        status:['Booked','Confirmed','Completed','No-show','Ghosted','Rescheduled'][i],
+        messageLog:[{id:'x'+i,stage:'welcome',variantId:'w1',text:'hi',
+          sentAt:new Date(Date.now()-5*86400000).toISOString(),
+          responded: i % 2 === 0, respondedAt: i % 2 === 0 ? new Date(Date.now()-4*86400000).toISOString() : null,
+          reviewed:true}]});
+    }
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
+});
+
+test('the hosted render pass survives an empty account', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext('STATE = buildDefaultState();', ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
+});
+
 console.log('\n--- incremental persistence (hosted/data.js) ---');
 
 // hosted/data.js is browser+Supabase code, so it gets its own vm context with a
