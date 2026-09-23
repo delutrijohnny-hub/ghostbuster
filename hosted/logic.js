@@ -543,6 +543,39 @@ function inRange(dateVal, range, now){
 
 function hasSentStage(client, stage){ return client.messageLog.some(function(m){ return m.stage === stage; }); }
 
+// When the current appointment was last moved, or null if it never has been.
+// recordReschedule stamps these at the moment the change is seen, so the most
+// recent one marks the start of "this appointment" as distinct from the one
+// that was booked before it.
+function appointmentSetAt(client){
+  var rs = client.reschedules || [];
+  if(!rs.length) return null;
+  var last = Date.parse(rs[rs.length - 1]);
+  return isNaN(last) ? null : last;
+}
+
+/* Has this stage been sent FOR THE CURRENT APPOINTMENT?
+
+   hasSentStage asks whether a stage was ever sent, which silently breaks the
+   moment a call moves. A day-of text goes out, the client reschedules three
+   weeks later, and the new date never gets one — the stage is marked sent
+   forever. On the live book that had stranded 11 upcoming clients, including
+   one whose day-of text was sent on 19 August for a call on 24 September.
+
+   Appointment-anchored touches therefore only count sends made since the
+   appointment was last moved. Touches anchored to the contact rather than the
+   appointment — the welcome — deliberately keep using hasSentStage: somebody
+   rescheduling does not make them a stranger again. */
+function hasSentStageThisAppointment(client, stage){
+  var since = appointmentSetAt(client);
+  if(since === null) return hasSentStage(client, stage);
+  return client.messageLog.some(function(m){
+    if(m.stage !== stage) return false;
+    var t = Date.parse(m.sentAt);
+    return !isNaN(t) && t >= since;
+  });
+}
+
 function lastSentAtMs(client, stage){
   var latest = null;
   client.messageLog.forEach(function(m){
@@ -649,7 +682,12 @@ function stepIsDue(step, client, now, ctx){
   // Everything below is a once-only touch on the way to an appointment, so it
   // stops as soon as the appointment is resolved and never repeats.
   if(ctx.stopCadence) return false;
-  if(hasSentStage(client, stage)) return false;
+  // 'on_create' is anchored to the contact, not the appointment: rescheduling
+  // does not make someone a stranger who needs welcoming again.
+  var alreadySent = (t.type === 'on_create')
+    ? hasSentStage(client, stage)
+    : hasSentStageThisAppointment(client, stage);
+  if(alreadySent) return false;
 
   switch(t.type){
     case 'on_create':
@@ -2589,7 +2627,8 @@ var __LOGIC_EXPORTS__ = {
   tzOffsetMinutes: tzOffsetMinutes, formatDatetimeLocalInTZ: formatDatetimeLocalInTZ,
   parseDatetimeLocalInTZ: parseDatetimeLocalInTZ, startOfLocalDay: startOfLocalDay,
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
-  hasSentStage: hasSentStage, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
+  hasSentStage: hasSentStage, hasSentStageThisAppointment: hasSentStageThisAppointment,
+  appointmentSetAt: appointmentSetAt, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
   REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
   buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
   describeTrigger: describeTrigger,

@@ -639,23 +639,26 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
   <div class="tab-panel active" id="tab-calls">
     <div id="on-deck"></div>
-    <div id="ghost-today"></div>
+    <!-- The texts due today come first. The ranked list below is for deciding
+         who else deserves attention; this is the work itself, and burying it
+         under two panels made the daily job harder rather than easier. -->
+    <div class="board board-single">
+      <div class="board-col">
+        <h3>Text today <span id="count-today"></span></h3>
+        <div class="col-body" id="col-text-today"></div>
+      </div>
+    </div>
     <div class="calls-toolbar">
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>
     </div>
+    <div id="ghost-today"></div>
     <div class="recent-sends" id="recent-sends-block">
       <button class="recent-sends-toggle" data-action="toggle-recent-sends" type="button">
         <span id="recent-sends-title">Recent sends</span>
         <span id="recent-sends-chevron">▾</span>
       </button>
       <div class="recent-sends-body" id="recent-sends-body"></div>
-    </div>
-    <div class="board board-single">
-      <div class="board-col">
-        <h3>Text today <span id="count-today"></span></h3>
-        <div class="col-body" id="col-text-today"></div>
-      </div>
     </div>
   </div>
 

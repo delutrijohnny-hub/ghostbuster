@@ -1474,6 +1474,62 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- a reschedule restarts the appointment touches ---');
+
+test('a moved call gets a fresh day-of text', () => {
+  // The live bug: a day-of text sent for the OLD date marked the stage sent
+  // forever, so the new date never got one. 11 upcoming clients were stranded.
+  const c = freshClient({
+    bookedDate: isoDaysAgo(40),
+    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),  // today
+    reschedules: [isoDaysAgo(3)],
+    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: isoDaysAgo(30),
+      responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('dayof'),
+    'a day-of text sent for a call a month ago must not block today’s');
+});
+
+test('but the same text sent since the move is not sent twice', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(40),
+    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),
+    reschedules: [isoDaysAgo(3)],
+    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: new Date().toISOString(),
+      responded:false, respondedAt:null, reviewed:false}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('dayof'));
+});
+
+test('rescheduling does not make someone a stranger again', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(40), callDateTime: isoDaysFromNow(5),
+    reschedules: [isoDaysAgo(1)],
+    messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt: isoDaysAgo(39),
+      responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('welcome'),
+    'the welcome is anchored to the contact, not the appointment');
+});
+
+test('a contact who never rescheduled behaves exactly as before', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(10),
+    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),
+    reschedules: [],
+    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: new Date().toISOString(),
+      responded:false, respondedAt:null, reviewed:false}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('dayof'));
+});
+
+test('appointmentSetAt reads the most recent move', () => {
+  const c = freshClient({reschedules: [isoDaysAgo(9), isoDaysAgo(4), isoDaysAgo(1)]});
+  const at = GB.appointmentSetAt(c);
+  assert.ok(Math.abs(at - Date.parse(isoDaysAgo(1))) < 1000, 'should use the latest reschedule');
+  assert.strictEqual(GB.appointmentSetAt(freshClient({reschedules: []})), null);
+});
+
 console.log('\n--- recommended next action ---');
 
 test('a reply means a person owes them a person', () => {
