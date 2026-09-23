@@ -816,6 +816,106 @@ function toggleReplied(state, clientId, msgIndex){
 }
 
 
+/* ---- contact timeline ----
+   One chronological story per contact, assembled from two sources.
+
+   The events table only started recording today, so a timeline reading events
+   alone would be empty for every contact that already exists — 143 of them
+   here, with months of history. Most of that history is already stored, just
+   not as events: message_log has every send and every logged reply,
+   clients.reschedules has the moves, bookedDate and callDateTime bracket the
+   appointment. So the timeline DERIVES the past from those records and MERGES
+   the events recorded from now on.
+
+   The derived entries are reconstructions, not recordings — a reply logged
+   long after it arrived carries the logging time, not the reply time, and a
+   status change that happened before the events table existed has no timestamp
+   at all and simply cannot appear. Marking each entry's source keeps that
+   honest rather than implying a precision the data does not have.
+   ============================================================ */
+
+function timelineEntry(at, kind, label, detail, source){
+  var t = Date.parse(at);
+  return {at: at, ms: isNaN(t) ? 0 : t, kind: kind, label: label, detail: detail || '', source: source};
+}
+
+// EVENT_LABELS keeps the phrasing in one place so the timeline and any future
+// activity feed can't drift apart.
+var EVENT_LABELS = {
+  'contact.created':        'Added to GhostBuster',
+  'contact.deleted':        'Deleted',
+  'appointment.scheduled':  'Appointment scheduled',
+  'appointment.rescheduled':'Appointment rescheduled',
+  'appointment.booked':     'Appointment booked',
+  'message.sent':           'Message sent',
+  'message.replied':        'Reply received',
+  'message.no_reply':       'Marked no reply',
+  'stage.changed':          'Stage changed',
+  'outcome.logged':         'Outcome logged',
+  'interaction.outcome':    'Outcome recorded',
+  'followup.snoozed':       'Follow-up snoozed'
+};
+
+function buildTimeline(client, events, now){
+  now = now || new Date();
+  var out = [];
+  if(!client) return out;
+
+  // --- derived from stored records (the past) ---
+  if(client.bookedDate){
+    out.push(timelineEntry(client.bookedDate, 'contact.created', 'Added to GhostBuster',
+      client.manuallyAdded ? 'Added by hand' : 'From the calendar', 'derived'));
+  }
+  (client.messageLog || []).forEach(function(m){
+    out.push(timelineEntry(m.sentAt, 'message.sent', 'Message sent',
+      m.stage + (m.variantId ? ' · ' + m.variantId : ''), 'derived'));
+    // respondedAt is when the reply was LOGGED, which can be much later than
+    // when it arrived. Fall back to the send time rather than inventing one.
+    if(m.responded){
+      out.push(timelineEntry(m.respondedAt || m.sentAt, 'message.replied', 'Reply received',
+        m.respondedAt ? '' : 'time approximate', 'derived'));
+    }
+  });
+  (client.reschedules || []).forEach(function(r){
+    out.push(timelineEntry(r, 'appointment.rescheduled', 'Appointment rescheduled', '', 'derived'));
+  });
+  if(client.callDateTime){
+    var cd = safeDate(client.callDateTime);
+    var future = cd && cd.getTime() > now.getTime();
+    out.push(timelineEntry(client.callDateTime, 'appointment.scheduled',
+      future ? 'Appointment scheduled' : 'Appointment time', '', 'derived'));
+  }
+
+  // --- recorded events (from today onward) ---
+  (events || []).forEach(function(e){
+    var d = e.data || {};
+    var detail = '';
+    if(e.kind === 'stage.changed') detail = (d.from || '?') + ' → ' + (d.to || '?');
+    else if(e.kind === 'interaction.outcome') detail = String(d.outcome || '').replace(/_/g, ' ');
+    else if(e.kind === 'message.sent') detail = (d.stage || '') + (d.variantId ? ' · ' + d.variantId : '');
+    else if(e.kind === 'outcome.logged') detail = d.outcome || '';
+    out.push(timelineEntry(e.at, e.kind, EVENT_LABELS[e.kind] || e.kind, detail, 'event'));
+  });
+
+  // A derived send and a recorded send for the same message are the same fact
+  // seen twice. Recorded wins — it carries channel and variant context the
+  // reconstruction cannot.
+  var seen = {};
+  var deduped = [];
+  out.sort(function(a, b){
+    if(a.ms !== b.ms) return a.ms - b.ms;
+    return a.source === 'event' ? -1 : 1;
+  });
+  out.forEach(function(e){
+    var key = e.kind + '|' + Math.floor(e.ms / 60000);   // same kind within the same minute
+    if(seen[key]) return;
+    seen[key] = true;
+    deduped.push(e);
+  });
+  return deduped;
+}
+
+
 /* ---- one interaction lifecycle ----
    "Message sent" and "did they write back?" were two workflows asking about
    one thing. They are states of a single interaction:
@@ -2130,6 +2230,7 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
+  buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
   stageWithRole: stageWithRole, recordInteractionOutcome: recordInteractionOutcome,

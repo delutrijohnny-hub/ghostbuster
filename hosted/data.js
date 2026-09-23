@@ -304,6 +304,26 @@ function diff(prev, next){
   return out;
 }
 
+// Events are fetched per contact rather than loaded into state: the table is
+// append-only and grows without bound, and the only place it is read is one
+// contact's timeline. Keeping it out of the in-memory state is what stops
+// memory and every save's diff from growing with history.
+async function fetchClientEvents(clientId){
+  var sb = window.GB_SUPABASE;
+  try{
+    var res = await sb.from('events').select('kind, at, data')
+      .eq('client_id', clientId).order('at', {ascending: true}).limit(200);
+    if(res.error){ console.error('GhostBuster: events fetch failed', res.error); return []; }
+    return res.data || [];
+  }catch(e){
+    // A timeline that cannot load is a degraded view, never a broken modal —
+    // the derived history still renders from records already in memory.
+    console.error('GhostBuster: events fetch threw', e);
+    return [];
+  }
+}
+
+
 async function saveState(state){
   var sb = window.GB_SUPABASE;
   var userRes = await sb.auth.getUser();

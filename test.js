@@ -1442,6 +1442,72 @@ test('the analytics that read reply data still work after an outcome', () => {
   assert.ok(g.reasons.some(r => /replied before/.test(r.label)), 'Ghost Score must still see the reply');
 });
 
+console.log('\n--- contact timeline ---');
+
+test('history is reconstructed for contacts that predate the events table', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(30), callDateTime: isoDaysAgo(10),
+    reschedules: [isoDaysAgo(20)],
+    messageLog: [
+      {stage:'welcome',variantId:'w1',text:'a',sentAt:isoDaysAgo(29),responded:true,respondedAt:isoDaysAgo(28),reviewed:true},
+      {stage:'dayof',variantId:'d1',text:'b',sentAt:isoDaysAgo(10),responded:false,respondedAt:null,reviewed:true}
+    ]
+  });
+  const tl = GB.buildTimeline(c, [], new Date());
+  const kinds = tl.map(e => e.kind);
+  assert.ok(kinds.includes('contact.created'), 'missing creation');
+  assert.ok(kinds.filter(k => k === 'message.sent').length === 2, 'both sends should appear');
+  assert.ok(kinds.includes('message.replied'), 'the logged reply should appear');
+  assert.ok(kinds.includes('appointment.rescheduled'), 'the reschedule should appear');
+  assert.ok(tl.every(e => e.source === 'derived'), 'with no events, everything is derived');
+});
+
+test('entries are in chronological order', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(30), callDateTime: isoDaysAgo(2),
+    messageLog: [
+      {stage:'monday',variantId:'m1',text:'b',sentAt:isoDaysAgo(5),responded:false,respondedAt:null,reviewed:true},
+      {stage:'welcome',variantId:'w1',text:'a',sentAt:isoDaysAgo(25),responded:false,respondedAt:null,reviewed:true}
+    ]
+  });
+  const tl = GB.buildTimeline(c, [], new Date());
+  for(let i = 1; i < tl.length; i++){
+    assert.ok(tl[i].ms >= tl[i-1].ms, 'timeline out of order at index ' + i);
+  }
+});
+
+test('recorded events merge in and win over the derived version of the same fact', () => {
+  const sentAt = isoDaysAgo(3);
+  const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: null,
+    messageLog: [{stage:'welcome',variantId:'w1',text:'a',sentAt,responded:false,respondedAt:null,reviewed:true}]});
+  const events = [{kind:'message.sent', at: sentAt, data:{stage:'welcome', variantId:'w1', channel:'sms'}}];
+  const tl = GB.buildTimeline(c, events, new Date());
+  const sends = tl.filter(e => e.kind === 'message.sent');
+  assert.strictEqual(sends.length, 1, 'the same send must not appear twice');
+  assert.strictEqual(sends[0].source, 'event', 'the recorded version carries more context and should win');
+});
+
+test('an unknown event kind still renders rather than disappearing', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(2)});
+  const tl = GB.buildTimeline(c, [{kind:'something.new', at: isoDaysAgo(1), data:{}}], new Date());
+  assert.ok(tl.some(e => e.kind === 'something.new'), 'unrecognised kinds must not be dropped');
+});
+
+test('a reply logged late is marked approximate rather than given a false time', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: null,
+    messageLog: [{stage:'welcome',variantId:'w1',text:'a',sentAt:isoDaysAgo(5),responded:true,respondedAt:null,reviewed:true}]});
+  const tl = GB.buildTimeline(c, [], new Date());
+  const reply = tl.find(e => e.kind === 'message.replied');
+  assert.ok(reply, 'expected the reply');
+  assert.ok(/approximate/.test(reply.detail), 'a missing reply time must be admitted, not invented');
+});
+
+test('buildTimeline never throws on sparse or broken data', () => {
+  assert.doesNotThrow(() => GB.buildTimeline(null, [], new Date()));
+  assert.doesNotThrow(() => GB.buildTimeline(freshClient({bookedDate:null, callDateTime:null}), null, new Date()));
+  assert.doesNotThrow(() => GB.buildTimeline(freshClient({}), [{kind:'x', at:'not-a-date', data:null}], new Date()));
+});
+
 console.log('\n--- incremental persistence (hosted/data.js) ---');
 
 // hosted/data.js is browser+Supabase code, so it gets its own vm context with a

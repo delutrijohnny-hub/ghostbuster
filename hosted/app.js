@@ -1188,10 +1188,14 @@ function openClientModal(clientId){
   if(!c) return;
   var d = safeDate(c.callDateTime);
   var callVal = d ? formatDatetimeLocalInTZ(d, c.timezone || 'America/New_York') : '';
-  var msgLog = c.messageLog.map(function(m, idx){
-    return '<div class="msg-log-item"><div class="meta">' + m.stage + ' · ' + m.variantId + ' · ' + new Date(m.sentAt).toLocaleString() +
-      ' <label style="float:right;"><input type="checkbox" data-action="toggle-replied" data-cid="'+c.id+'" data-idx="'+idx+'" '+(m.responded?'checked':'')+'> replied</label></div>' +
-      escapeHtml(m.text) + '</div>';
+  // The message log is now one strand of the timeline rather than its own
+  // list with its own reply checkbox — the reply question is asked once, in
+  // GhostBuster Today. Text bodies stay here because this is the one place
+  // someone goes to read what was actually said.
+  var msgLog = c.messageLog.map(function(m){
+    return '<div class="msg-log-item"><div class="meta">' + escapeHtml(m.stage) + ' · ' + escapeHtml(m.variantId || '') + ' · ' +
+      new Date(m.sentAt).toLocaleString() + ' · ' + escapeHtml(interactionLabel({state: messageState(m, new Date()), hoursAgo: null})) +
+      '</div>' + escapeHtml(m.text) + '</div>';
   }).join('') || '<div style="color:var(--ink-faint);font-size:12px;">No messages sent yet.</div>';
 
   var outcomeButtons = ['Booked','Confirmed','Showed','Rescheduled','No-show','Ghosted'].map(function(o){
@@ -1213,10 +1217,55 @@ function openClientModal(clientId){
       '<button class="btn btn-sm' + (c.closeOutcome==='Closed'?' btn-green':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Closed">Closed</button>' +
       '<button class="btn btn-sm' + (c.closeOutcome==='Not closed'?' btn-primary':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Not closed">Not closed</button>' +
     '</div></div>' +
+    '<div class="field-row"><label>Timeline</label><div id="tl-mount" class="timeline"><div class="tl-loading">Loading history…</div></div></div>' +
     '<div class="field-row"><label>Message log</label>' + msgLog + '</div>' +
     '<div class="field-row" style="text-align:right;"><a href="#" class="delete-client-link" data-action="delete-client-quick" data-cid="'+c.id+'" title="Remove this client entirely">Delete client</a></div>',
     true
   );
+
+  // The derived half of the timeline renders immediately from data already in
+  // memory; recorded events are fetched after, so a slow or failed events
+  // query degrades the timeline rather than delaying the modal.
+  renderTimeline(c, []);
+  fetchClientEvents(c.id).then(function(events){
+    // The modal may have been closed or switched to another contact while the
+    // request was in flight — only paint if this one is still on screen.
+    var mount = el('tl-mount');
+    if(mount && mount.getAttribute('data-cid') === c.id) renderTimeline(c, events);
+  });
+}
+
+
+// Icons carry the kind at a glance; the label carries it precisely. Anything
+// unrecognised still renders, with a neutral dot, rather than vanishing.
+var TIMELINE_ICONS = {
+  'contact.created':'✨', 'appointment.scheduled':'📅', 'appointment.rescheduled':'🔁',
+  'appointment.booked':'📅', 'message.sent':'💬', 'message.replied':'💚',
+  'message.no_reply':'🔇', 'stage.changed':'↗', 'outcome.logged':'✅',
+  'interaction.outcome':'✅', 'followup.snoozed':'😴', 'contact.deleted':'🗑'
+};
+
+function renderTimeline(client, events){
+  var mount = el('tl-mount');
+  if(!mount) return;
+  mount.setAttribute('data-cid', client.id);
+  var entries = buildTimeline(client, events, new Date());
+  mount.innerHTML = '';
+  if(!entries.length){
+    mount.appendChild(h('div',{class:'tl-loading'},['Nothing recorded yet.']));
+    return;
+  }
+  // Newest first: the useful question is almost always "what just happened?"
+  entries.slice().reverse().forEach(function(e){
+    var when = e.ms ? new Date(e.ms) : null;
+    mount.appendChild(h('div',{class:'tl-item' + (e.source === 'derived' ? ' derived' : '')},[
+      h('span',{class:'tl-icon'},[TIMELINE_ICONS[e.kind] || '•']),
+      h('div',{class:'tl-body'},[
+        h('div',{class:'tl-label'},[e.label + (e.detail ? '  ·  ' + e.detail : '')]),
+        h('div',{class:'tl-when'},[when ? when.toLocaleString() : ''])
+      ])
+    ]));
+  });
 }
 
 
