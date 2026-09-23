@@ -319,6 +319,45 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .recent-send-row .replied-label{display:flex;align-items:center;gap:5px;flex:0 0 auto;font-size:11.5px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
 .recent-sends-empty{padding:16px 14px;color:var(--ink-faint);font-size:13px;}
 
+/* GhostBuster Today — the work list. Ranked by Ghost Score, and every row
+   shows why it is there, because a priority nobody can explain is a priority
+   nobody trusts. */
+.gt{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow);}
+.gt-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:13px 14px;border-bottom:1px solid var(--border);}
+.gt-head h3{margin:0;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--ink);}
+.gt-head .count{font-size:13px;color:var(--ink-soft);}
+.gt-filters{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap;}
+.gt-chip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
+.gt-chip.active{background:var(--ink);border-color:var(--ink);color:var(--card);}
+.gt-body{max-height:460px;overflow-y:auto;}
+.gt-row{display:flex;align-items:flex-start;gap:12px;padding:11px 14px;border-bottom:1px solid var(--border);}
+.gt-row:last-child{border-bottom:none;}
+.gt-score{flex:0 0 auto;width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:#fff;}
+.gt-score.immediate{background:var(--red);}
+.gt-score.high{background:#e2683c;}
+.gt-score.soon{background:var(--amber);}
+.gt-score.nurture{background:var(--green);}
+.gt-score.low{background:var(--ink-faint);}
+.gt-main{flex:1;min-width:0;}
+.gt-name{font-weight:700;font-size:14px;cursor:pointer;}
+.gt-name:hover{text-decoration:underline;}
+.gt-why{font-size:11.5px;color:var(--ink-soft);margin-top:3px;line-height:1.45;}
+.gt-why .pt{color:var(--ink-faint);font-variant-numeric:tabular-nums;}
+.gt-acts{display:flex;gap:6px;flex:0 0 auto;align-items:center;}
+.gt-acts a,.gt-acts button{font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:99px;border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;text-decoration:none;white-space:nowrap;}
+.gt-acts a:hover,.gt-acts button:hover{border-color:var(--ink-faint);color:var(--ink);}
+.gt-empty{padding:18px 14px;font-size:13px;color:var(--ink-soft);}
+/* On a phone the three action buttons take ~160px of a 353px row, crushing the
+   name and reasons into a ~97px column and stretching each row to 187px tall.
+   Drop the actions onto their own line, indented to sit under the text rather
+   than under the score badge. */
+@media (max-width: 560px){
+  .gt-row{flex-wrap:wrap;row-gap:8px;}
+  .gt-main{flex:1 1 calc(100% - 54px);}
+  .gt-acts{flex:1 1 100%;padding-left:54px;}
+  .gt-acts a,.gt-acts button{padding:6px 14px;}
+}
+
 /* review queue — the answer to "did they write back?", asked once per send.
    Deliberately loud: every unanswered row is a send the bandit can't learn
    from, so this is the one panel that should nag. */
@@ -545,6 +584,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
   <div class="tab-panel active" id="tab-calls">
     <div id="on-deck"></div>
+    <div id="ghost-today"></div>
     <div class="calls-toolbar">
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>

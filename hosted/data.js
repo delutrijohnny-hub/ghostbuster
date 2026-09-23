@@ -63,9 +63,23 @@ async function loadState(){
     epsilon: settingsRes.data ? Number(settingsRes.data.epsilon) : 0.2,
     senderName: (settingsRes.data && settingsRes.data.sender_name) || deriveSenderName(user.email),
     poolsLearning: !!(settingsRes.data && settingsRes.data.pools_learning),
+    // null/absent means "use the built-in defaults" — an empty array is
+    // treated the same way rather than as a pipeline with no stages, which
+    // would strand every contact on an unrecognised stage.
+    pipeline: (settingsRes.data && Array.isArray(settingsRes.data.pipeline) && settingsRes.data.pipeline.length)
+      ? settingsRes.data.pipeline : null,
+    terminology: (settingsRes.data && settingsRes.data.terminology) || null,
+    scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
     pendingEvents: [],
     lastSync: null
   };
+
+  // Activate before anything reads a stage role or renders a noun. These are
+  // module-level in logic.js precisely so computeDue and friends don't need the
+  // state threaded through them; the cost is that they must be set here, once,
+  // before the first render.
+  setPipeline(state.pipeline);
+  setTerminology(state.terminology);
 
   (clientsRes.data || []).forEach(function(row){
     state.clients[row.id] = {
@@ -271,7 +285,10 @@ function snapshot(state, uid){
   });
   snap.settings = {
     user_id: uid, epsilon: state.epsilon,
-    sender_name: state.senderName, pools_learning: !!state.poolsLearning
+    sender_name: state.senderName, pools_learning: !!state.poolsLearning,
+    pipeline: state.pipeline || null,
+    terminology: state.terminology || null,
+    score_weights: state.scoreWeights || null
   };
   return snap;
 }

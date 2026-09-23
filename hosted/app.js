@@ -92,6 +92,7 @@ function renderAll(){
   renderTodos();
   renderOnDeck();
   renderCallsBoard();
+  renderGhostToday();
   renderReviewQueue();
   renderRecentSends();
   renderClientsTab();
@@ -421,6 +422,102 @@ function renderCallsBoard(){
 // Two explicit buttons rather than a checkbox, because a checkbox left
 // unticked is ambiguous — and that ambiguity is exactly what broke the stats
 // in the first place.
+/* GhostBuster Today — the answer to "who should I contact?".
+   Ranked by Ghost Score, and every row carries its reasons, because the whole
+   value of a priority list is that the person working it believes the order.
+   An unexplained ranking gets ignored, and an ignored list is worth nothing. */
+function renderGhostToday(){
+  var box = el('ghost-today');
+  if(!box) return;
+  box.innerHTML = '';
+  var now = new Date();
+  var ranked = rankByGhostScore(STATE, now, {min: 26});   // nurture and above
+
+  var counts = {immediate:0, high:0, soon:0, nurture:0};
+  ranked.forEach(function(r){ counts[r.band] = (counts[r.band] || 0) + 1; });
+
+  // Default to what is genuinely actionable today rather than everything
+  // scoring above the floor. "65 need attention" is a number that gets a list
+  // closed, not worked — and if everything is urgent then nothing is. Nurture
+  // is real but it is this week's problem, so it sits behind a chip.
+  var actionable = ranked.filter(function(r){ return r.band !== 'nurture'; });
+  var filter = UI.ghostFilter || 'actionable';
+  var shown = filter === 'actionable' ? actionable
+            : filter === 'all' ? ranked
+            : ranked.filter(function(r){ return r.band === filter; });
+
+  var head = h('div',{class:'gt-head'},[
+    h('h3',{},['👻 GhostBuster Today']),
+    h('span',{class:'count'},[
+      actionable.length
+        ? (actionable.length + ' ' + (actionable.length === 1 ? termLower('contact') : termLower('contactPlural')) + ' need attention')
+        : (ranked.length ? 'Nothing urgent — ' + ranked.length + ' resting in nurture' : 'Nothing needs chasing right now')
+    ])
+  ]);
+
+  var filters = h('span',{class:'gt-filters'},[]);
+  [['actionable','Today',actionable.length],['immediate','Immediate',counts.immediate],
+   ['high','High',counts.high],['soon','Soon',counts.soon],['nurture','Nurture',counts.nurture],
+   ['all','All',ranked.length]
+  ].forEach(function(f){
+    // A filter that would show an empty list is worse than no filter — it
+    // reads as a bug. Hide bands nobody is in, but always keep All and Today.
+    if(f[0] !== 'all' && f[0] !== 'actionable' && !f[2]) return;
+    filters.appendChild(h('button',{
+      class: 'gt-chip' + (filter === f[0] ? ' active' : ''),
+      'data-action':'ghost-filter','data-band':f[0]
+    },[f[1] + ' ' + f[2]]));
+  });
+  head.appendChild(filters);
+
+  var body = h('div',{class:'gt-body'},[]);
+  if(!shown.length){
+    body.appendChild(h('div',{class:'gt-empty'},[
+      ranked.length
+        ? 'Nothing here right now. ' + (filter === 'actionable' ? 'Check Nurture for the slower burners.' : 'Try another band.')
+        : 'Every ' + termLower('contact') + ' is either handled or resting in the ' + termLower('graveyard') + '.'
+    ]));
+  }
+
+  shown.slice(0, 25).forEach(function(r){
+    var c = r.client;
+    var digits = String(c.phone || '').replace(/\D/g,'');
+    var acts = h('span',{class:'gt-acts'},[]);
+    if(digits){
+      acts.appendChild(h('a',{href: telHref(c.phone), title:'Call ' + c.name},['Call']));
+      acts.appendChild(h('a',{href:'sms:' + (digits.length===10 ? '+1'+digits : '+'+digits), title:'Text ' + c.name},['Text']));
+    }
+    acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
+
+    // Only the contributions that pushed this contact UP are worth showing —
+    // the penalties explain why someone is lower, which is not what a person
+    // working the list from the top needs to know.
+    var why = r.reasons.filter(function(x){ return x.points > 0 && x.label !== 'Baseline'; });
+    var whyEl = h('div',{class:'gt-why'},[]);
+    why.forEach(function(x, i){
+      if(i) whyEl.appendChild(document.createTextNode('  ·  '));
+      whyEl.appendChild(document.createTextNode(x.label + ' '));
+      whyEl.appendChild(h('span',{class:'pt'},['+' + x.points]));
+    });
+
+    body.appendChild(h('div',{class:'gt-row'},[
+      h('span',{class:'gt-score ' + r.band, title:'Ghost Score ' + r.score + ' — ' + r.band},[String(r.score)]),
+      h('div',{class:'gt-main'},[
+        h('div',{class:'gt-name','data-action':'open-client','data-cid':c.id},[c.name + '  ·  ' + statusLabel(c.status)]),
+        whyEl
+      ]),
+      acts
+    ]));
+  });
+
+  if(shown.length > 25){
+    body.appendChild(h('div',{class:'gt-empty'},['+ ' + (shown.length - 25) + ' more below this cut.']));
+  }
+
+  box.appendChild(h('div',{class:'gt'},[head, body]));
+}
+
+
 function renderReviewQueue(){
   var box = el('review-queue');
   if(!box) return;
@@ -1316,6 +1413,10 @@ document.addEventListener('click', function(ev){
       // where popping a modal open on a single tap would defeat the point
       doToggleReplied(cid, parseInt(target.getAttribute('data-idx'),10));
       renderAll();
+      break;
+    case 'ghost-filter':
+      UI.ghostFilter = target.getAttribute('data-band');
+      renderGhostToday();
       break;
     case 'review-replied':
       reviewMessage(STATE, cid, parseInt(target.getAttribute('data-idx'),10), true);

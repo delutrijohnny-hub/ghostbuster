@@ -56,6 +56,49 @@ function buildDefaultPipeline(){
 // set once at load, alongside the existing module-level caches. Anything that
 // hasn't called setPipeline() gets the defaults, so logic.js stays usable
 // standalone — which the tests and the Edge Functions both rely on.
+/* ---- terminology ----
+   The same problem as stages, one layer up: "Client" is agency vocabulary. A
+   recruiter has Candidates, an HVAC shop has Customers, a real estate team has
+   Leads. Nothing in the engine depends on the word, so it is data too.
+
+   Only nouns the UI actually says are listed. Resisting the urge to make every
+   string configurable is the point: a fully translatable UI is a different and
+   much larger project, and a half-done one reads worse than a consistent
+   default. */
+function buildDefaultTerminology(){
+  return {
+    contact:        'Client',
+    contactPlural:  'Clients',
+    appointment:    'Call',
+    appointmentPlural: 'Calls',
+    graveyard:      'Graveyard'
+  };
+}
+
+var ACTIVE_TERMS = buildDefaultTerminology();
+
+function setTerminology(terms){
+  var base = buildDefaultTerminology();
+  if(terms && typeof terms === 'object'){
+    Object.keys(base).forEach(function(k){
+      if(typeof terms[k] === 'string' && terms[k].trim()) base[k] = terms[k].trim();
+    });
+  }
+  ACTIVE_TERMS = base;
+}
+function getTerminology(){ return ACTIVE_TERMS; }
+
+// term('contact') -> 'Client'. Unknown keys return the key itself rather than
+// undefined, so a typo shows up as visible text instead of silently rendering
+// "undefined" into the interface.
+function term(key){
+  return Object.prototype.hasOwnProperty.call(ACTIVE_TERMS, key) ? ACTIVE_TERMS[key] : key;
+}
+// Title-case is wrong mid-sentence ("no Clients need attention"); this is the
+// lowercase form for that position.
+function termLower(key){ return String(term(key)).toLowerCase(); }
+
+
 var ACTIVE_PIPELINE = buildDefaultPipeline();
 
 function setPipeline(stages){
@@ -1925,6 +1968,8 @@ function buildClientsCsv(state){
 var __LOGIC_EXPORTS__ = {
   STORAGE_KEY: STORAGE_KEY, VALID_STATUSES: VALID_STATUSES, STOP_1TO4: STOP_1TO4,
   buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
+  buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  getTerminology: getTerminology, term: term, termLower: termLower,
   stageRole: stageRole, stageLabel: stageLabel, isWon: isWon, isMissed: isMissed,
   isStalledStage: isStalledStage, isOpenStage: isOpenStage, isResolvedStage: isResolvedStage,
   stopsCadence: stopsCadence,
