@@ -33,6 +33,37 @@ var HOURBEFORE_FLOOR_MIN = 10;
 /* ---------- small utils ---------- */
 function uid(){ return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 
+// message_log.id is a uuid column, so message rows need real uuids — uid()'s
+// 'c<base36>' shape is for clients.id, which is text. Generating the id on the
+// client (rather than letting Postgres default it) is what gives a message
+// stable identity the moment it exists, which is what lets saveState write
+// incrementally instead of deleting and reinserting the whole log.
+function uuid(){
+  if(typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(ch){
+    var r = Math.random() * 16 | 0;
+    return (ch === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+
+/* ---- event timeline ----
+   Append-only facts about a contact, drained to the events table by
+   saveState. Kept as a pending queue rather than loaded into state so memory
+   stays flat as history grows — the timeline UI will query it on demand.
+   recordEvent never throws: a failure to log history must never take down the
+   mutation that was actually being performed. */
+function recordEvent(state, clientId, kind, data){
+  try{
+    if(!state) return;
+    if(!Array.isArray(state.pendingEvents)) state.pendingEvents = [];
+    state.pendingEvents.push({
+      id: uuid(), clientId: clientId || null, kind: kind,
+      at: nowISO(), data: data || {}
+    });
+  }catch(e){ /* history is best-effort; the mutation is not */ }
+}
+
 function nowISO(){ return new Date().toISOString(); }
 
 function safeDate(iso){ if(!iso) return null; var d = new Date(iso); return isNaN(d.getTime()) ? null : d; }
@@ -150,6 +181,7 @@ function sanitizeClient(raw, fallbackId){
   var id = (typeof raw.id === 'string' && raw.id) ? raw.id : fallbackId;
   var messageLog = Array.isArray(raw.messageLog) ? raw.messageLog.filter(function(m){ return m && typeof m === 'object'; }).map(function(m){
     return {
+      id: (typeof m.id === 'string' && m.id) ? m.id : uuid(),
       stage: typeof m.stage === 'string' ? m.stage : 'welcome',
       variantId: typeof m.variantId === 'string' ? m.variantId : '',
       text: typeof m.text === 'string' ? m.text : '',
@@ -565,6 +597,7 @@ function markSent(state, clientId, stage, text){
   var wasCustomized = text !== renderTemplate(variant.text, client, state.senderName);
   var loggedVariantId = wasCustomized ? 'custom' : variant.id;
   client.messageLog.push({
+    id: uuid(),
     stage: stage,
     variantId: loggedVariantId,
     text: text,
@@ -582,6 +615,7 @@ function markSent(state, clientId, stage, text){
   // least. An unreviewed send is now simply absent from the math instead of
   // being counted as a failure.
 
+  var statusBefore = client.status;
   if(!STOP_1TO4[client.status]){
     if((stage === 'monday' || stage === 'midcheckin') && client.status === 'Booked'){
       client.status = 'Confirmed';
@@ -589,6 +623,13 @@ function markSent(state, clientId, stage, text){
       client.status = 'Reminded';
     }
   }
+  recordEvent(state, clientId, 'message.sent', {
+    stage: stage, variantId: loggedVariantId, customized: wasCustomized, channel: 'sms'
+  });
+  if(client.status !== statusBefore){
+    recordEvent(state, clientId, 'stage.changed', {from: statusBefore, to: client.status, cause: 'message.sent:' + stage});
+  }
+
   delete editedTextCache[clientId + '|' + stage];
   delete stickyVariantCache[clientId + '|' + stage];
   if(client.snoozedUntil) delete client.snoozedUntil[stage];
@@ -606,6 +647,7 @@ function snoozeTouch(state, clientId, stage, now){
   var tomorrowKey = keyPlusDays(tzDateKey(now, tz), 1);
   if(!client.snoozedUntil) client.snoozedUntil = {};
   client.snoozedUntil[stage] = tomorrowKey;
+  recordEvent(state, clientId, 'followup.snoozed', {stage: stage, until: tomorrowKey});
   saveState(state);
 }
 
@@ -642,6 +684,9 @@ function reviewMessage(state, clientId, msgIndex, didReply){
 
   m.responded = didReply;
   m.respondedAt = didReply ? nowISO() : null;
+  recordEvent(state, clientId, didReply ? 'message.replied' : 'message.no_reply', {
+    stage: m.stage, variantId: m.variantId
+  });
   saveState(state);
 }
 
@@ -715,7 +760,16 @@ function setOutcome(state, clientId, buttonLabel, when){
   } else {
     client.stalledSince = null;
   }
+  var outcomeStatusBefore = client.status;
   client.status = newStatus;
+  // The outcome IS the event here — a no-show, a close, a reschedule are the
+  // facts every conversion and sales-cycle metric will later be derived from.
+  recordEvent(state, clientId, 'outcome.logged', {
+    outcome: buttonLabel, from: outcomeStatusBefore, to: newStatus, at: when.toISOString()
+  });
+  if(outcomeStatusBefore !== newStatus){
+    recordEvent(state, clientId, 'stage.changed', {from: outcomeStatusBefore, to: newStatus, cause: 'outcome:' + buttonLabel});
+  }
   saveState(state);
 }
 
@@ -991,9 +1045,11 @@ function commitImportedClients(state, parsedList){
       var oldT = safeDate(existing.callDateTime);
       var newT = safeDate(p.callDateTime);
       if(oldT && newT && oldT.getTime() !== newT.getTime()){
+        var fromWhen = existing.callDateTime;
         recordReschedule(existing, new Date());
         existing.callDateTime = p.callDateTime;
         existing.status = 'Confirmed';
+        recordEvent(state, existing.id, 'appointment.rescheduled', {from: fromWhen, to: p.callDateTime, source: 'calendar'});
         rescheduled++;
       }
       existing.name = p.name || existing.name;
@@ -1034,6 +1090,11 @@ function commitImportedClients(state, parsedList){
         stalledSince: null, ignored:false, manuallyAdded: !p.googleEventId, snoozedUntil:{},
         rebooked: isRebooking, hadPriorCall: hadPriorCall
       };
+      recordEvent(state, id, 'contact.created', {
+        source: p.googleEventId ? 'calendar' : 'import',
+        rebooked: isRebooking, hadPriorCall: hadPriorCall
+      });
+      if(p.callDateTime) recordEvent(state, id, 'appointment.scheduled', {at: p.callDateTime, source: 'calendar'});
       added++;
     }
   });
@@ -1054,12 +1115,18 @@ function addManualClient(state, fields){
     closeOutcome: undefined, reschedules:[], rescheduleCount:0,
     stalledSince: null, ignored:false, manuallyAdded:true, snoozedUntil:{}
   };
+  recordEvent(state, id, 'contact.created', {source: 'manual'});
+  if(state.clients[id].callDateTime) recordEvent(state, id, 'appointment.scheduled', {at: state.clients[id].callDateTime, source: 'manual'});
   saveState(state);
   return id;
 }
 
 
 function deleteClient(state, clientId){
+  // Recorded before the delete so the client_id still resolves; the events row
+  // is then removed by the clients FK cascade, which is the intended behaviour
+  // — a deleted contact should not leave orphaned history behind.
+  recordEvent(state, clientId, 'contact.deleted', {});
   delete state.clients[clientId];
   saveState(state);
 }
@@ -1629,6 +1696,7 @@ var __LOGIC_EXPORTS__ = {
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
+  uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
   HOURBEFORE_LEAD_MIN: HOURBEFORE_LEAD_MIN, HOURBEFORE_FLOOR_MIN: HOURBEFORE_FLOOR_MIN,
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,

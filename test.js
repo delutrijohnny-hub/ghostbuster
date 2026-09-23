@@ -107,16 +107,31 @@ const GBFull = sandbox.GhostBuster;
 assert.ok(GBFull, 'GhostBuster test hook was not exposed on window');
 
 let failures = 0;
+// Async tests are queued and awaited before the summary. Without this, an
+// async fn() returns a promise the runner drops on the floor: a failing
+// assertion inside it becomes an unhandled rejection while the test still
+// prints "ok". A test that cannot fail is worse than no test.
+const pendingTests = [];
+function reportFail(name, e) {
+  failures++;
+  console.log('  FAIL -', name);
+  console.log('       ', e && e.message);
+  if (e && e.stack) console.log(e.stack.split('\n').slice(1,4).join('\n'));
+}
 function test(name, fn) {
   try {
     GB._resetCaches();
-    fn();
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pendingTests.push(result.then(
+        () => console.log('  ok  -', name),
+        (e) => reportFail(name, e)
+      ));
+      return;
+    }
     console.log('  ok  -', name);
   } catch (e) {
-    failures++;
-    console.log('  FAIL -', name);
-    console.log('       ', e && e.message);
-    console.log(e.stack.split('\n').slice(1,4).join('\n'));
+    reportFail(name, e);
   }
 }
 
@@ -140,6 +155,17 @@ function isoDaysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString(
 // their contents match. Compare by value via JSON instead.
 function assertDue(actual, expected) {
   assert.strictEqual(JSON.stringify(Array.from(actual)), JSON.stringify(expected));
+}
+
+// hosted/logic.js must stay byte-identical to logic.js — they are the same
+// file served two ways, and the tests only load one of them. This drifted
+// silently once already: uuid() and recordEvent() were added to one copy and
+// the deployed build shipped without them.
+{
+  const a = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const b = fs.readFileSync(path.join(__dirname, 'hosted', 'logic.js'), 'utf8');
+  assert.strictEqual(a, b, 'logic.js and hosted/logic.js have drifted — run: cp logic.js hosted/logic.js');
+  console.log('  ok  - logic.js and hosted/logic.js are byte-identical');
 }
 
 console.log('\n--- computeDue ---');
@@ -1114,5 +1140,132 @@ test('legacy data: a logged reply counts as reviewed, an unanswered one does not
   assert.strictEqual(migrated.messageLog[1].reviewed, false, 'never-answered stays unknown, not a rejection');
 });
 
-console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
-process.exit(failures ? 1 : 0);
+console.log('\n--- incremental persistence (hosted/data.js) ---');
+
+// hosted/data.js is browser+Supabase code, so it gets its own vm context with a
+// recording stub in place of supabase-js. These tests exist for one reason: the
+// old saveState deleted the entire message log on every call, and "it only
+// deletes things it should" is exactly the property that silently stops holding.
+// mutators call saveState() fire-and-forget; let those microtasks settle
+// rather than issuing a second, racing save from the test itself.
+const flush = () => new Promise(r => setTimeout(r, 0));
+
+function makeDataCtx(){
+  const calls = [];
+  function table(name){
+    const rec = (op) => (payload) => {
+      const entry = {table: name, op, payload, filters: []};
+      calls.push(entry);
+      const chain = {
+        eq(k,v){ entry.filters.push(['eq',k,v]); return chain; },
+        in(k,v){ entry.filters.push(['in',k,v]); return chain; },
+        not(k,o,v){ entry.filters.push(['not',k,o,v]); return chain; },
+        then(res){ return Promise.resolve({error:null, data:[]}).then(res); }
+      };
+      return chain;
+    };
+    return {upsert: rec('upsert'), insert: rec('insert'), delete: rec('delete'), select: rec('select')};
+  }
+  const sandbox = {
+    console, JSON, Date, Math, Promise, Object, Array, String, Number, isNaN, parseInt, parseFloat,
+    crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2,10) },
+    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table } }
+  };
+  sandbox.window.window = sandbox.window;
+  const ctx = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','logic.js'),'utf8'), ctx, {filename:'hosted/logic.js'});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','data.js'),'utf8'), ctx, {filename:'hosted/data.js'});
+  return {ctx, calls, run: (src) => vm.runInContext(src, ctx)};
+}
+
+test('hosted/data.js parses and defines the persistence seam', () => {
+  const d = makeDataCtx();
+  assert.strictEqual(d.run('typeof saveState'), 'function');
+  assert.strictEqual(d.run('typeof snapshot'), 'function');
+  assert.strictEqual(d.run('typeof diff'), 'function');
+});
+
+test('with no baseline loaded, a save NEVER issues a delete', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  const deletes = d.calls.filter(c => c.op === 'delete');
+  assert.deepStrictEqual(deletes, [], 'a save before any load must not delete anything, got ' + JSON.stringify(deletes));
+});
+
+test('an unchanged save writes nothing at all', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  const after = d.calls.length;
+  await d.run('saveState(st)');
+  assert.strictEqual(d.calls.length, after, 'a no-op save should issue zero writes');
+});
+
+test('reviewing one message writes only that message, and deletes nothing', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    var c = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+    st.clients['c1'] = c;
+    markSent(st, 'c1', 'welcome', 'hello there');
+  `);
+  await d.run('saveState(st)');
+  d.calls.length = 0;
+  d.run("reviewMessage(st, 'c1', 0, true)");   // saves internally
+  await flush();
+  const msgWrites = d.calls.filter(c => c.table === 'message_log');
+  const deletes = d.calls.filter(c => c.op === 'delete');
+  assert.deepStrictEqual(deletes, [], 'reviewing must never delete — the old code deleted the whole log here');
+  assert.strictEqual(msgWrites.length, 1, 'exactly one message write expected, got ' + msgWrites.length);
+  assert.strictEqual(msgWrites[0].payload.length, 1, 'only the reviewed message should be written');
+});
+
+test('deleting a client deletes by explicit id, never by a negated filter', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+    st.clients['c2'] = sanitizeClient({id:'c2', name:'B', phone:'5125551235'});
+  `);
+  await d.run('saveState(st)');
+  d.calls.length = 0;
+  d.run("deleteClient(st, 'c2')");   // saves internally
+  await flush();
+  const del = d.calls.filter(c => c.op === 'delete' && c.table === 'clients');
+  assert.strictEqual(del.length, 1);
+  // vm-realm arrays aren't deepStrictEqual-compatible with this realm's (see
+  // the note by isoDaysAgo) — compare by value.
+  assert.strictEqual(JSON.stringify(del[0].filters), JSON.stringify([['in','id',['c2']]]),
+    'must target exactly the removed id');
+});
+
+test('events are appended, never rewritten', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+    markSent(st, 'c1', 'welcome', 'hello there');
+  `);
+  await d.run('saveState(st)');
+  const ev = d.calls.filter(c => c.table === 'events');
+  assert.ok(ev.length >= 1, 'expected an events write');
+  assert.ok(ev.every(e => e.op === 'insert'), 'events must only ever be inserted');
+  const kinds = ev.flatMap(e => e.payload.map(r => r.kind));
+  assert.ok(kinds.includes('message.sent'), 'expected message.sent, got ' + kinds.join(','));
+  // and they must not be re-sent on the next save
+  d.calls.length = 0;
+  await d.run('saveState(st)');
+  assert.deepStrictEqual(d.calls.filter(c => c.table === 'events'), [], 'drained events must not be written twice');
+});
+
+Promise.all(pendingTests).then(() => {
+  console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
+  process.exit(failures ? 1 : 0);
+});

@@ -7,14 +7,17 @@
    local build always did, since no call site ever awaited or used its
    return value.
 
-   saveState() does a full resync of the in-memory state on every call
-   (upsert every client/todo/variant/variant_stat row, delete-and-reinsert
-   message_log per user) rather than a surgical incremental diff. At this
-   data scale (tens to low hundreds of clients) that's milliseconds of work
-   and it sidesteps an entire class of client-side diffing bugs — worth the
-   trade. It also avoids needing a server-generated id round-tripped back
-   into an in-memory message_log entry before it's addressable: message_log
-   rows are never referenced by id from the client at all.
+   saveState() writes incrementally: it diffs the in-memory state against
+   SYNCED (what the database was last known to hold) and issues only the rows
+   that actually changed. It previously did a full resync — upserting every
+   row and deleting anything absent from memory, including a
+   delete-the-whole-log-and-reinsert for message_log. That was acceptable
+   while one user owned one dataset and nothing else could write to it; it is
+   not survivable once two people share data, because the last save wins by
+   deleting the other's work. Message rows now carry a client-generated uuid
+   so they have stable identity from the moment they exist, which is what
+   makes a surgical diff possible at all. See the persistence section below
+   for the two invariants that keep deletes safe.
 
    Depends on window.GB_SUPABASE, the supabase-js client created once in
    auth.js. Loaded after logic.js, before app.js. */
@@ -60,6 +63,7 @@ async function loadState(){
     epsilon: settingsRes.data ? Number(settingsRes.data.epsilon) : 0.2,
     senderName: (settingsRes.data && settingsRes.data.sender_name) || deriveSenderName(user.email),
     poolsLearning: !!(settingsRes.data && settingsRes.data.pools_learning),
+    pendingEvents: [],
     lastSync: null
   };
 
@@ -75,6 +79,7 @@ async function loadState(){
         return new Date(a.sent_at) - new Date(b.sent_at);
       }).map(function(m){
         return {
+          id: m.id,
           stage: m.stage, variantId: m.variant_key, text: m.text,
           sentAt: m.sent_at, responded: !!m.responded, respondedAt: m.responded_at,
           reviewed: !!m.reviewed
@@ -166,7 +171,120 @@ async function loadState(){
     if(settingsSeedRes.error) throw settingsSeedRes.error;
   }
 
+  // The baseline every later save diffs against: what the database is known to
+  // hold right now. Until this is set, saveState refuses to delete anything —
+  // so a failed or partial load can never be mistaken for "the user emptied
+  // their account".
+  SYNCED = snapshot(state, uid);
+
   return state;
+}
+
+/* ============================================================
+   INCREMENTAL PERSISTENCE
+
+   saveState used to do a full resync on every call: upsert every row, then
+   delete anything not present in memory, and for message_log delete the whole
+   log and reinsert it. At one user per account that was merely wasteful. It is
+   not survivable the moment two people share a dataset — whoever saves last
+   deletes the other's work, silently, with no error. It is also unrecoverable
+   rather than merely wrong: the delete lands even if the process dies before
+   the reinsert.
+
+   This version diffs against SYNCED, a snapshot of exactly what the database
+   was last known to hold, and writes only what actually changed. Two
+   invariants make it safe:
+
+     1. Deletes are always by explicit id — never "delete everything not in
+        this list". A partial or failed load can therefore never cascade into
+        data loss.
+     2. Nothing is deleted at all unless SYNCED exists, i.e. unless this tab
+        has genuinely loaded the data it is about to reconcile against.
+
+   SYNCED is only advanced after a write succeeds, so a failed save leaves the
+   next save with the same work to do rather than quietly dropping it.
+   ============================================================ */
+
+var SYNCED = null;
+// saveState is fire-and-forget and every mutator calls it, so two saves can be
+// in flight at once. The writes themselves are idempotent (upserts, plus
+// deletes by explicit id), but if an older save finishes last it would install
+// a staler baseline than the one already there — costing redundant writes on
+// every later save. Each save claims a ticket and only advances SYNCED if no
+// newer save has already landed.
+var SAVE_SEQ = 0;
+var SAVE_LANDED = 0;
+
+function rowClient(c, uid){
+  return {
+    id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
+    name: c.name, phone: c.phone, email: c.email,
+    youtube_link: c.youtubeLink, meet_link: c.meetLink,
+    call_date_time: c.callDateTime, booked_date: c.bookedDate,
+    timezone: c.timezone, timezone_confirmed: !!c.timezoneConfirmed, status: c.status,
+    notes: c.notes, recap: c.recap, close_outcome: c.closeOutcome || null,
+    reschedules: c.reschedules, reschedule_count: c.rescheduleCount,
+    stalled_since: c.stalledSince, ignored: !!c.ignored, manually_added: !!c.manuallyAdded,
+    snoozed_until: c.snoozedUntil || {}
+  };
+}
+function rowMessage(m, clientId){
+  return {
+    id: m.id, client_id: clientId, stage: m.stage, variant_key: m.variantId || '',
+    text: m.text, sent_at: m.sentAt, responded: !!m.responded,
+    responded_at: m.respondedAt, reviewed: !!m.reviewed
+  };
+}
+function rowTodo(t, uid){
+  return {id: t.id, user_id: uid, text: t.text, done: !!t.done, created_at: t.createdAt, done_at: t.doneAt};
+}
+function rowVariant(v, stage, uid){
+  return {user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel};
+}
+function rowStat(s, stage, vk, uid){
+  return {user_id: uid, stage: stage, variant_key: vk, sends: s.sends, responses: s.responses};
+}
+
+// Row objects are built with a fixed key order above, so stringify is a stable
+// identity test — no key sorting needed.
+function same(a, b){ return JSON.stringify(a) === JSON.stringify(b); }
+
+// Snapshot of everything persistable, keyed the way the diff needs it.
+function snapshot(state, uid){
+  var snap = {clients:{}, messages:{}, todos:{}, variants:{}, stats:{}, settings:null};
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    snap.clients[cid] = rowClient(c, uid);
+    c.messageLog.forEach(function(m){
+      if(!m.id) m.id = uuid();           // legacy rows loaded before ids existed
+      snap.messages[m.id] = rowMessage(m, cid);
+    });
+  });
+  (state.todos || []).forEach(function(t){ snap.todos[t.id] = rowTodo(t, uid); });
+  Object.keys(state.variants).forEach(function(stage){
+    (state.variants[stage] || []).forEach(function(v){ snap.variants[stage + '|' + v.id] = rowVariant(v, stage, uid); });
+  });
+  Object.keys(state.variantStats).forEach(function(stage){
+    Object.keys(state.variantStats[stage] || {}).forEach(function(vk){
+      snap.stats[stage + '|' + vk] = rowStat(state.variantStats[stage][vk], stage, vk, uid);
+    });
+  });
+  snap.settings = {
+    user_id: uid, epsilon: state.epsilon,
+    sender_name: state.senderName, pools_learning: !!state.poolsLearning
+  };
+  return snap;
+}
+
+// Returns {added:[row], changed:[row], removedKeys:[key]} for one bucket.
+function diff(prev, next){
+  var out = {added: [], changed: [], removedKeys: []};
+  Object.keys(next).forEach(function(k){
+    if(!prev || !(k in prev)) out.added.push(next[k]);
+    else if(!same(prev[k], next[k])) out.changed.push(next[k]);
+  });
+  if(prev) Object.keys(prev).forEach(function(k){ if(!(k in next)) out.removedKeys.push(k); });
+  return out;
 }
 
 async function saveState(state){
@@ -176,67 +294,79 @@ async function saveState(state){
   if(!user) return;
   var uid = user.id;
 
+  var ticket = ++SAVE_SEQ;
+  var next = snapshot(state, uid);
+  var prev = SYNCED;
+  var writes = [];
+
   try{
-    await sb.from('app_settings').upsert({user_id: uid, epsilon: state.epsilon, sender_name: state.senderName, updated_at: new Date().toISOString()});
-
-    var todoIds = state.todos.map(function(t){ return t.id; });
-    var todoRows = state.todos.map(function(t){
-      return {id: t.id, user_id: uid, text: t.text, done: !!t.done, created_at: t.createdAt, done_at: t.doneAt};
-    });
-    if(todoRows.length) await sb.from('todos').upsert(todoRows);
-    var delTodos = sb.from('todos').delete().eq('user_id', uid);
-    delTodos = todoIds.length ? delTodos.not('id', 'in', '(' + todoIds.join(',') + ')') : delTodos;
-    await delTodos;
-
-    var clientIds = Object.keys(state.clients);
-    var clientRows = clientIds.map(function(id){
-      var c = state.clients[id];
-      return {
-        id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
-        name: c.name, phone: c.phone, email: c.email,
-        youtube_link: c.youtubeLink, meet_link: c.meetLink,
-        call_date_time: c.callDateTime, booked_date: c.bookedDate,
-        timezone: c.timezone, timezone_confirmed: !!c.timezoneConfirmed, status: c.status,
-        notes: c.notes, recap: c.recap, close_outcome: c.closeOutcome || null,
-        reschedules: c.reschedules, reschedule_count: c.rescheduleCount,
-        stalled_since: c.stalledSince, ignored: !!c.ignored, manually_added: !!c.manuallyAdded,
-        snoozed_until: c.snoozedUntil || {}, updated_at: new Date().toISOString()
-      };
-    });
-    if(clientRows.length) await sb.from('clients').upsert(clientRows);
-    var delClients = sb.from('clients').delete().eq('user_id', uid);
-    delClients = clientIds.length ? delClients.not('id', 'in', '(' + clientIds.join(',') + ')') : delClients;
-    await delClients;
-
-    if(clientIds.length) await sb.from('message_log').delete().in('client_id', clientIds);
-    var msgRows = [];
-    clientIds.forEach(function(id){
-      state.clients[id].messageLog.forEach(function(m){
-        msgRows.push({
-          client_id: id, stage: m.stage, variant_key: m.variantId || '', text: m.text,
-          sent_at: m.sentAt, responded: !!m.responded, responded_at: m.respondedAt,
-          reviewed: !!m.reviewed
-        });
+    var c = diff(prev && prev.clients, next.clients);
+    var upClients = c.added.concat(c.changed);
+    if(upClients.length){
+      // Stamped onto a copy, never onto the snapshot row itself: these objects
+      // become SYNCED, and a server-side bookkeeping column baked into the
+      // baseline would make every subsequent diff see a phantom change.
+      var stamped = upClients.map(function(r){
+        var out = {}; Object.keys(r).forEach(function(k){ out[k] = r[k]; });
+        out.updated_at = new Date().toISOString();
+        return out;
       });
-    });
-    if(msgRows.length) await sb.from('message_log').insert(msgRows);
+      writes.push(sb.from('clients').upsert(stamped));
+    }
+    // Explicit ids only. Never a "delete everything not in this set" filter.
+    if(prev && c.removedKeys.length) writes.push(sb.from('clients').delete().in('id', c.removedKeys));
 
-    var variantRows = [];
-    Object.keys(state.variants).forEach(function(stage){
-      (state.variants[stage] || []).forEach(function(v){
-        variantRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel});
-      });
-    });
-    if(variantRows.length) await sb.from('variants').upsert(variantRows, {onConflict: 'user_id,stage,variant_key'});
+    var m = diff(prev && prev.messages, next.messages);
+    if(m.added.length) writes.push(sb.from('message_log').insert(m.added));
+    // Messages change only via review (responded/reviewed), so an upsert keyed
+    // on the client-generated id is enough — no delete-and-reinsert.
+    if(m.changed.length) writes.push(sb.from('message_log').upsert(m.changed));
+    if(prev && m.removedKeys.length) writes.push(sb.from('message_log').delete().in('id', m.removedKeys));
 
-    var statRows = [];
-    Object.keys(state.variantStats).forEach(function(stage){
-      Object.keys(state.variantStats[stage] || {}).forEach(function(vk){
-        var s = state.variantStats[stage][vk];
-        statRows.push({user_id: uid, stage: stage, variant_key: vk, sends: s.sends, responses: s.responses});
-      });
-    });
-    if(statRows.length) await sb.from('variant_stats').upsert(statRows, {onConflict: 'user_id,stage,variant_key'});
+    var t = diff(prev && prev.todos, next.todos);
+    var upTodos = t.added.concat(t.changed);
+    if(upTodos.length) writes.push(sb.from('todos').upsert(upTodos));
+    if(prev && t.removedKeys.length) writes.push(sb.from('todos').delete().in('id', t.removedKeys));
+
+    var v = diff(prev && prev.variants, next.variants);
+    var upVars = v.added.concat(v.changed);
+    if(upVars.length) writes.push(sb.from('variants').upsert(upVars, {onConflict: 'user_id,stage,variant_key'}));
+
+    var st = diff(prev && prev.stats, next.stats);
+    var upStats = st.added.concat(st.changed);
+    if(upStats.length) writes.push(sb.from('variant_stats').upsert(upStats, {onConflict: 'user_id,stage,variant_key'}));
+
+    if(!prev || !same(prev.settings, next.settings)){
+      var s = {};
+      Object.keys(next.settings).forEach(function(k){ s[k] = next.settings[k]; });
+      s.updated_at = new Date().toISOString();
+      writes.push(sb.from('app_settings').upsert(s));
+    }
+
+    // Append-only history. Drained here rather than held in state so memory
+    // stays flat as the timeline grows.
+    var pending = (state.pendingEvents || []).slice();
+    if(pending.length){
+      writes.push(sb.from('events').insert(pending.map(function(e){
+        return {id: e.id, user_id: uid, client_id: e.clientId, kind: e.kind, at: e.at, data: e.data};
+      })));
+    }
+
+    if(!writes.length) return;
+
+    var results = await Promise.all(writes);
+    var failed = results.filter(function(r){ return r && r.error; });
+    if(failed.length){
+      // Leave SYNCED where it is so the same diff is retried on the next save
+      // rather than being silently forgotten.
+      console.error('GhostBuster: saveState partial failure', failed.map(function(r){ return r.error; }));
+      return;
+    }
+
+    if(pending.length){
+      state.pendingEvents = (state.pendingEvents || []).slice(pending.length);
+    }
+    if(ticket > SAVE_LANDED){ SAVE_LANDED = ticket; SYNCED = next; }
   }catch(e){
     console.error('GhostBuster: saveState failed', e);
   }
