@@ -359,6 +359,23 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .tl-label{font-size:12.5px;font-weight:600;}
 .tl-when{font-size:11px;color:var(--ink-faint);font-variant-numeric:tabular-nums;}
 .tl-loading{padding:12px;font-size:12.5px;color:var(--ink-faint);}
+/* variant performance — reply rate is the easy number; appointments and closes
+   are the ones worth optimising. Comparisons are within a stage only. */
+.vp{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:14px;box-shadow:var(--shadow);}
+.vp h3{margin:0 0 3px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;}
+.vp .hint{font-size:11.5px;color:var(--ink-faint);margin-bottom:10px;line-height:1.5;}
+.vp-stage{margin-bottom:14px;}
+.vp-stage:last-child{margin-bottom:0;}
+.vp-stage h4{margin:0 0 5px;font-size:12px;font-weight:800;color:var(--ink);}
+.vp-stage h4 .note{font-weight:600;color:var(--ink-faint);text-transform:none;font-size:11px;letter-spacing:0;}
+table.vp-table{width:100%;border-collapse:collapse;}
+table.vp-table th,table.vp-table td{text-align:right;padding:5px 7px;font-size:12.5px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;}
+table.vp-table th:first-child,table.vp-table td:first-child{text-align:left;}
+table.vp-table th{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-faint);font-weight:700;}
+table.vp-table tr.thin td{color:var(--ink-faint);}
+table.vp-table tr.leader td{background:var(--green-soft);}
+.vp-lead{font-size:11.5px;color:var(--green);font-weight:700;margin-top:5px;}
+@media (max-width:560px){ table.vp-table th,table.vp-table td{padding:5px 4px;font-size:11.5px;} }
 /* business settings — the pipeline editor and vocabulary. Stages are rows
    rather than free text so a role is always chosen deliberately: the role is
    what the engine acts on, and a stage without one silently behaves as 'open'. */
@@ -654,6 +671,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       <label style="font-weight:700;font-size:12px;">Exploration rate (ε): <span id="epsilon-val">0.20</span></label>
       <input type="range" id="epsilon-slider" min="0" max="1" step="0.05" value="0.2">
     </div>
+    <div id="variant-performance"></div>
     <div id="variant-stage-blocks"></div>
   </div>
 

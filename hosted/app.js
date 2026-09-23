@@ -108,6 +108,7 @@ function renderAll(){
   renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
+  renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
   renderDeadTab();
@@ -703,6 +704,68 @@ function renderDeadTab(){
     ]);
     tbody.appendChild(tr);
   });
+}
+
+
+/* Does this message produce appointments, not just replies?
+
+   Rates are shown only where the sample supports them. A variant with three
+   credited appointments showing "67%" looks authoritative and is noise — and
+   noise printed as a percentage is how someone ends up rewriting a template
+   that was fine. Thin rows show their raw counts and say so. */
+function renderVariantPerformance(){
+  var box = el('variant-performance');
+  if(!box) return;
+  box.innerHTML = '';
+  var groups = computeVariantPerformance(STATE, new Date());
+  if(!groups.length) return;
+
+  var wrap = h('div',{class:'vp'},[
+    h('h3',{},['What actually produces appointments']),
+    h('div',{class:'hint'},[
+      'Outcomes are credited to the last message sent before the appointment. ' +
+      'Variants are only ever compared within a stage: a day-of text is always the last touch for ' +
+      'anyone who showed up, so ranking it against a Monday text would measure timing, not copy.'
+    ])
+  ]);
+
+  var pct = function(x){ return x === null ? '—' : Math.round(x * 100) + '%'; };
+
+  groups.forEach(function(g){
+    var stageBox = h('div',{class:'vp-stage'},[]);
+    var head = h('h4',{},[g.stage]);
+    if(!g.comparable) head.appendChild(h('span',{class:'note'},['   too few appointments yet to compare']));
+    stageBox.appendChild(head);
+
+    var table = document.createElement('table');
+    table.className = 'vp-table';
+    table.innerHTML = '<thead><tr><th>Variant</th><th>Sent</th><th>Reply</th>' +
+      '<th>Credited</th><th>Showed</th><th>Closed</th></tr></thead>';
+    var tb = document.createElement('tbody');
+    g.rows.forEach(function(r){
+      var tr = document.createElement('tr');
+      tr.className = (!r.enoughData ? 'thin' : '') + (g.leader && g.leader.variantId === r.variantId ? ' leader' : '');
+      tr.innerHTML =
+        '<td>' + escapeHtml(r.variantId) + '</td>' +
+        '<td>' + r.sends + '</td>' +
+        '<td>' + pct(r.replyRate) + '</td>' +
+        '<td>' + r.credited + '</td>' +
+        '<td>' + (r.enoughData ? pct(r.showRate)
+          : '<span title="not enough credited appointments to put a rate on">' + r.appointments + ' of ' + r.credited + '</span>') + '</td>' +
+        '<td>' + r.closes + '</td>';
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb);
+    stageBox.appendChild(table);
+    if(g.leader){
+      stageBox.appendChild(h('div',{class:'vp-lead'},[
+        '→ ' + g.leader.variantId + ' leads on appointments (' + pct(g.leader.showRate) +
+        ' of ' + g.leader.credited + ')'
+      ]));
+    }
+    wrap.appendChild(stageBox);
+  });
+  box.appendChild(wrap);
 }
 
 

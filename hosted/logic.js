@@ -816,6 +816,115 @@ function toggleReplied(state, clientId, msgIndex){
 }
 
 
+/* ---- variant performance beyond reply rate ----
+   Reply rate answers "did this message get a response". The question that
+   actually matters is "did it produce an appointment, and a deal".
+
+   Attribution is last-touch: the outcome is credited to the last message sent
+   before the appointment. That is a choice with a known bias, and the bias is
+   large enough that it dictates the shape of this whole function.
+
+   Across stages, last-touch is close to meaningless here. A 'dayof' message
+   goes out on the morning of the call, so it is ALWAYS the last touch for
+   anyone who showed up — it inherits the credit for every show regardless of
+   what it said. Ranking d2 against m1 would be measuring when a stage fires,
+   not how well its copy works.
+
+   So comparisons are only ever made WITHIN a stage, where every variant went
+   out at the same point in the cadence to a comparable audience and the copy
+   is the only thing that differs. That is the same reasoning that made the
+   monday m1-vs-m2 result trustworthy while the cross-stage 'dayof wins'
+   reading was not.
+
+   Small samples are reported as small rather than rounded into a percentage
+   that looks authoritative. A variant with 3 credited appointments has no
+   rate worth printing, and printing one anyway is how a bandit ends up
+   chasing noise. */
+var VARIANT_MIN_SAMPLE = 10;
+
+function computeVariantPerformance(state, now){
+  now = now || new Date();
+  var byStage = {};
+
+  function bucket(stage, variantId){
+    if(!byStage[stage]) byStage[stage] = {};
+    if(!byStage[stage][variantId]){
+      byStage[stage][variantId] = {
+        variantId: variantId, stage: stage,
+        sends: 0, replies: 0,        // from the message log (reviewed only)
+        credited: 0, appointments: 0, closes: 0
+      };
+    }
+    return byStage[stage][variantId];
+  }
+
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    if(c.ignored) return;
+
+    var log = (c.messageLog || []).slice().sort(function(a, b){
+      return Date.parse(a.sentAt) - Date.parse(b.sentAt);
+    });
+
+    log.forEach(function(m){
+      if(!m.variantId || m.variantId === 'custom') return;
+      // Unreviewed sends stay out of the denominator, exactly as they do for
+      // the bandit: nobody checked, so they are not evidence either way.
+      if(!m.reviewed) return;
+      var b = bucket(m.stage, m.variantId);
+      b.sends++;
+      if(m.responded) b.replies++;
+    });
+
+    // Credit the appointment outcome to the last touch before the call.
+    var call = safeDate(c.callDateTime);
+    if(!call) return;
+    var before = log.filter(function(m){
+      var t = Date.parse(m.sentAt);
+      return !isNaN(t) && t < call.getTime() && m.variantId && m.variantId !== 'custom';
+    });
+    if(!before.length) return;
+    var last = before[before.length - 1];
+    var lb = bucket(last.stage, last.variantId);
+    lb.credited++;
+    if(isWon(c.status)) lb.appointments++;
+    if(c.closeOutcome === 'Closed') lb.closes++;
+  });
+
+  // Shape into per-stage tables, ranked, with honesty about sample size.
+  var out = [];
+  Object.keys(byStage).forEach(function(stage){
+    var rows = Object.keys(byStage[stage]).map(function(vid){
+      var r = byStage[stage][vid];
+      r.replyRate = r.sends ? r.replies / r.sends : null;
+      r.showRate = r.credited ? r.appointments / r.credited : null;
+      r.closeRate = r.credited ? r.closes / r.credited : null;
+      r.enoughData = r.credited >= VARIANT_MIN_SAMPLE;
+      return r;
+    });
+    rows.sort(function(a, b){
+      // Rank on what matters most that the data can actually support:
+      // appointments where the sample allows, reply rate otherwise.
+      var aKey = a.enoughData ? a.showRate : -1;
+      var bKey = b.enoughData ? b.showRate : -1;
+      if(aKey !== bKey) return bKey - aKey;
+      return (b.replyRate || 0) - (a.replyRate || 0);
+    });
+    var rated = rows.filter(function(r){ return r.enoughData; });
+    out.push({
+      stage: stage,
+      rows: rows,
+      // A leader is only claimed when at least two variants cleared the
+      // sample floor. One variant with data is not a comparison.
+      leader: rated.length >= 2 ? rated[0] : null,
+      comparable: rated.length >= 2
+    });
+  });
+  out.sort(function(a, b){ return a.stage.localeCompare(b.stage); });
+  return out;
+}
+
+
 /* ---- contact timeline ----
    One chronological story per contact, assembled from two sources.
 
@@ -2230,6 +2339,7 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
+  computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,

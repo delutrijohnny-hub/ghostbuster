@@ -1474,6 +1474,88 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- variant performance ---');
+
+function perfClient(id, over){
+  return freshClient(Object.assign({id, name:id, phone:'2135550100'}, over));
+}
+
+test('an outcome is credited to the last message before the appointment', () => {
+  const st = GB.buildDefaultState();
+  // The day-of text goes out hours before the call, not at the same instant —
+  // equal timestamps would not be "before" and the fixture would prove nothing.
+  st.clients['a'] = perfClient('a', {
+    status:'Completed', callDateTime: isoDaysAgo(2),
+    messageLog:[
+      {stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(9),responded:false,respondedAt:null,reviewed:true},
+      {stage:'dayof',variantId:'d2',text:'y',sentAt:isoDaysAgo(2.2),responded:false,respondedAt:null,reviewed:true}
+    ]});
+  const perf = GB.computeVariantPerformance(st, new Date());
+  const dayof = perf.find(g => g.stage === 'dayof').rows.find(r => r.variantId === 'd2');
+  const welcome = perf.find(g => g.stage === 'welcome').rows.find(r => r.variantId === 'w1');
+  assert.strictEqual(dayof.credited, 1, 'the last touch takes the credit');
+  assert.strictEqual(dayof.appointments, 1);
+  assert.strictEqual(welcome.credited, 0, 'earlier touches are not credited');
+  assert.strictEqual(welcome.sends, 1, 'but they still count as sends');
+});
+
+test('messages sent after the appointment are never credited for it', () => {
+  const st = GB.buildDefaultState();
+  st.clients['a'] = perfClient('a', {
+    status:'No-show', callDateTime: isoDaysAgo(5),
+    messageLog:[{stage:'noshow',variantId:'n1',text:'x',sentAt:isoDaysAgo(3),responded:false,respondedAt:null,reviewed:true}]});
+  const perf = GB.computeVariantPerformance(st, new Date());
+  const n1 = perf.find(g => g.stage === 'noshow').rows.find(r => r.variantId === 'n1');
+  assert.strictEqual(n1.credited, 0, 'a rescue text sent after the miss did not cause the miss');
+});
+
+test('a thin sample refuses to claim a rate or a leader', () => {
+  const st = GB.buildDefaultState();
+  for(let i = 0; i < 3; i++){
+    st.clients['c'+i] = perfClient('c'+i, {status:'Completed', callDateTime: isoDaysAgo(2),
+      messageLog:[{stage:'dayof',variantId:'d1',text:'x',sentAt:isoDaysAgo(3),responded:false,respondedAt:null,reviewed:true}]});
+  }
+  const g = GB.computeVariantPerformance(st, new Date()).find(x => x.stage === 'dayof');
+  assert.strictEqual(g.rows[0].enoughData, false, '3 credited is not enough to rate');
+  assert.strictEqual(g.leader, null, 'one variant with data is not a comparison');
+  assert.strictEqual(g.comparable, false);
+});
+
+test('a leader is only named once two variants clear the sample floor', () => {
+  const st = GB.buildDefaultState();
+  const mk = (i, vid, showed) => {
+    st.clients[vid+i] = perfClient(vid+i, {
+      status: showed ? 'Completed' : 'No-show', callDateTime: isoDaysAgo(2),
+      messageLog:[{stage:'dayof',variantId:vid,text:'x',sentAt:isoDaysAgo(3),responded:false,respondedAt:null,reviewed:true}]});
+  };
+  for(let i = 0; i < GB.VARIANT_MIN_SAMPLE; i++) mk(i, 'd1', i < 8);   // strong
+  for(let i = 0; i < GB.VARIANT_MIN_SAMPLE; i++) mk(i, 'd2', i < 2);   // weak
+  const g = GB.computeVariantPerformance(st, new Date()).find(x => x.stage === 'dayof');
+  assert.strictEqual(g.comparable, true);
+  assert.strictEqual(g.leader.variantId, 'd1', 'the higher appointment rate should lead');
+});
+
+test('unreviewed sends and custom text stay out of the numbers', () => {
+  const st = GB.buildDefaultState();
+  st.clients['a'] = perfClient('a', {status:'Completed', callDateTime: isoDaysAgo(1),
+    messageLog:[
+      {stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(5),responded:false,respondedAt:null,reviewed:false},
+      {stage:'welcome',variantId:'custom',text:'y',sentAt:isoDaysAgo(4),responded:true,respondedAt:isoDaysAgo(4),reviewed:true}
+    ]});
+  const g = GB.computeVariantPerformance(st, new Date()).find(x => x.stage === 'welcome');
+  const w1 = g ? g.rows.find(r => r.variantId === 'w1') : null;
+  assert.ok(!w1 || w1.sends === 0, 'an unreviewed send is not evidence');
+  assert.ok(!g || !g.rows.some(r => r.variantId === 'custom'), 'hand-written text is not a template result');
+});
+
+test('computeVariantPerformance survives sparse data', () => {
+  const st = GB.buildDefaultState();
+  st.clients['a'] = perfClient('a', {callDateTime: null, messageLog: []});
+  st.clients['b'] = perfClient('b', {callDateTime: 'nonsense', messageLog: [
+    {stage:'welcome',variantId:'w1',text:'x',sentAt:'also-nonsense',responded:false,respondedAt:null,reviewed:true}]});
+  assert.doesNotThrow(() => GB.computeVariantPerformance(st, new Date()));
+});
+
 console.log('\n--- contact timeline ---');
 
 test('history is reconstructed for contacts that predate the events table', () => {
