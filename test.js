@@ -1318,6 +1318,130 @@ test('scoring reads stage roles, so a custom pipeline scores correctly', () => {
   });
 });
 
+console.log('\n--- one interaction lifecycle ---');
+
+const hoursAgo = (n) => new Date(Date.now() - n * 3600000).toISOString();
+const msg = (over) => Object.assign({stage:'welcome', variantId:'w1', text:'x',
+  sentAt: hoursAgo(48), responded:false, respondedAt:null, reviewed:false}, over || {});
+
+test('a fresh send is waiting, not a question', () => {
+  assert.strictEqual(GB.messageState(msg({sentAt: hoursAgo(2)}), new Date()), 'waiting');
+  assert.strictEqual(GB.messageState(msg({sentAt: hoursAgo(23)}), new Date()), 'waiting');
+});
+
+test('past the reply window it becomes a question', () => {
+  assert.strictEqual(GB.messageState(msg({sentAt: hoursAgo(25)}), new Date()), 'needs_outcome');
+});
+
+test('an answered message is settled either way', () => {
+  assert.strictEqual(GB.messageState(msg({reviewed:true, responded:true}), new Date()), 'replied');
+  assert.strictEqual(GB.messageState(msg({reviewed:true, responded:false}), new Date()), 'no_reply');
+});
+
+test('the review queue no longer asks about anything inside the wait window', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({messageLog:[msg({sentAt: hoursAgo(3)})]});
+  st.clients[c.id] = c;
+  assert.strictEqual(GB.getAwaitingReview(st, new Date()).length, 0,
+    'asking 3 hours after a send is asking a question nobody can answer');
+});
+
+test('"No reply" resolves the interaction and feeds the bandit', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({callDateTime: isoDaysFromNow(3)});
+  st.clients[c.id] = c;
+  const v = GB.pickVariant(st, 'welcome', c);
+  GB.markSent(st, c.id, 'welcome', GB.renderTemplate(v.text, c, st.senderName));
+  c.messageLog[0].sentAt = hoursAgo(48);
+  GB.recordInteractionOutcome(st, c.id, 'no_reply', {});
+  assert.strictEqual(c.messageLog[0].reviewed, true);
+  assert.strictEqual(c.messageLog[0].responded, false);
+  assert.strictEqual(st.variantStats.welcome[v.id].sends, 1, 'the send must still reach the bandit');
+  assert.strictEqual(st.variantStats.welcome[v.id].responses, 0);
+});
+
+test('"They replied" credits the variant and stores the note', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({callDateTime: isoDaysFromNow(3)});
+  st.clients[c.id] = c;
+  const v = GB.pickVariant(st, 'welcome', c);
+  GB.markSent(st, c.id, 'welcome', GB.renderTemplate(v.text, c, st.senderName));
+  GB.recordInteractionOutcome(st, c.id, 'replied', {note:'said call me Friday'});
+  assert.strictEqual(st.variantStats.welcome[v.id].responses, 1);
+  assert.ok(/call me Friday/.test(c.notes));
+});
+
+test('"Booked" sets the appointment and returns the contact to an open stage', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({status:'Ghosted', stalledSince: isoDaysAgo(9)});
+  st.clients[c.id] = c;
+  GB.markSent(st, c.id, 'recovery', 'anything');
+  const when = isoDaysFromNow(4);
+  GB.recordInteractionOutcome(st, c.id, 'booked', {callDateTime: when});
+  assert.strictEqual(c.callDateTime, when);
+  assert.strictEqual(GB.isOpenStage(c.status), true, 'a booking must reopen the cadence, got ' + c.status);
+  assert.strictEqual(c.stalledSince, null);
+});
+
+test('"Not interested" moves the contact to a lost stage', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({status:'Booked'});
+  st.clients[c.id] = c;
+  GB.markSent(st, c.id, 'welcome', 'anything');
+  GB.recordInteractionOutcome(st, c.id, 'not_interested', {note:'too expensive'});
+  assert.strictEqual(GB.stageRole(c.status), 'lost');
+  assert.ok(/too expensive/.test(c.notes));
+});
+
+test('"Wrong contact" archives without pretending they replied', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({});
+  st.clients[c.id] = c;
+  GB.markSent(st, c.id, 'welcome', 'anything');
+  GB.recordInteractionOutcome(st, c.id, 'wrong_contact', {});
+  assert.strictEqual(c.ignored, true);
+  assert.strictEqual(c.messageLog[0].responded, false, 'a wrong number is not a reply');
+});
+
+test('outcomes work under a custom pipeline', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const st = GB.buildDefaultState();
+    const c = freshClient({status:'New Inquiry'});
+    st.clients[c.id] = c;
+    GB.markSent(st, c.id, 'welcome', 'anything');
+    GB.recordInteractionOutcome(st, c.id, 'not_interested', {});
+    assert.strictEqual(c.status, 'Lost', 'should land on the HVAC pipeline’s lost stage');
+  });
+});
+
+test('every outcome writes an event carrying the analytics context', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({callDateTime: isoDaysFromNow(3)});
+  st.clients[c.id] = c;
+  GB.markSent(st, c.id, 'welcome', 'anything custom');
+  st.pendingEvents = [];
+  GB.recordInteractionOutcome(st, c.id, 'replied', {});
+  const ev = st.pendingEvents.find(e => e.kind === 'interaction.outcome');
+  assert.ok(ev, 'expected an interaction.outcome event');
+  ['outcome','replied','stage','variantId','pipelineStage','hoursToResponse'].forEach(k => {
+    assert.ok(k in ev.data, 'event must carry ' + k + ' for later analytics');
+  });
+});
+
+test('the analytics that read reply data still work after an outcome', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({callDateTime: isoDaysAgo(1), status:'Completed'});
+  st.clients[c.id] = c;
+  GB.markSent(st, c.id, 'welcome', 'anything');
+  GB.recordInteractionOutcome(st, c.id, 'replied', {});
+  assert.doesNotThrow(() => GB.computeStats(st, 'all', new Date()));
+  assert.doesNotThrow(() => GB.computeInsights(st, new Date()));
+  assert.doesNotThrow(() => GB.computeRescueScorecard(st, new Date()));
+  assert.doesNotThrow(() => GB.buildWeeklyDigest(st, new Date()));
+  const g = GB.computeGhostScore(c, new Date());
+  assert.ok(g.reasons.some(r => /replied before/.test(r.label)), 'Ghost Score must still see the reply');
+});
+
 console.log('\n--- incremental persistence (hosted/data.js) ---');
 
 // hosted/data.js is browser+Supabase code, so it gets its own vm context with a

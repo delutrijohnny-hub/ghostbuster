@@ -93,7 +93,6 @@ function renderAll(){
   renderOnDeck();
   renderCallsBoard();
   renderGhostToday();
-  renderReviewQueue();
   renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
@@ -237,13 +236,14 @@ function buildTouchCard(client, stage, now){
 
   var lastIdx = lastMessageIndex(client);
   if(lastIdx !== -1){
-    var lastMsg = client.messageLog[lastIdx];
-    var quickReply = document.createElement('label');
+    // Was a "replied to last text" checkbox. The same question is now asked
+    // once, in GhostBuster Today, and only after the reply window has elapsed
+    // — asking it here as well made one interaction look like two chores.
+    // What remains is a read-only statement of where the interaction stands.
+    var inter = lastInteraction(client, now);
+    var quickReply = document.createElement('div');
     quickReply.className = 'quick-reply-toggle';
-    var qcb = h('input',{type:'checkbox','data-action':'toggle-replied-quick','data-cid':client.id,'data-idx':String(lastIdx)});
-    qcb.checked = !!lastMsg.responded;
-    quickReply.appendChild(qcb);
-    quickReply.appendChild(document.createTextNode('replied to last text (' + lastMsg.stage + ')'));
+    quickReply.appendChild(document.createTextNode(interactionLabel(inter)));
     card.appendChild(quickReply);
   }
 
@@ -489,6 +489,12 @@ function renderGhostToday(){
     }
     acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
 
+    // Where this contact sits in the one interaction lifecycle. Waiting is
+    // stated, not asked about; only an interaction past the reply window turns
+    // into a question, and then it is the single control below.
+    var inter = lastInteraction(c, now);
+    var needsOutcome = inter.state === 'needs_outcome';
+
     // Only the contributions that pushed this contact UP are worth showing —
     // the penalties explain why someone is lower, which is not what a person
     // working the list from the top needs to know.
@@ -500,14 +506,35 @@ function renderGhostToday(){
       whyEl.appendChild(h('span',{class:'pt'},['+' + x.points]));
     });
 
-    body.appendChild(h('div',{class:'gt-row'},[
+    var main = h('div',{class:'gt-main'},[
+      h('div',{class:'gt-name','data-action':'open-client','data-cid':c.id},[c.name + '  ·  ' + statusLabel(c.status)]),
+      whyEl
+    ]);
+    if(inter.state !== 'none'){
+      main.appendChild(h('div',{class:'gt-state ' + inter.state},[interactionLabel(inter)]));
+    }
+
+    var row = h('div',{class:'gt-row' + (needsOutcome ? ' needs-outcome' : '')},[
       h('span',{class:'gt-score ' + r.band, title:'Ghost Score ' + r.score + ' — ' + r.band},[String(r.score)]),
-      h('div',{class:'gt-main'},[
-        h('div',{class:'gt-name','data-action':'open-client','data-cid':c.id},[c.name + '  ·  ' + statusLabel(c.status)]),
-        whyEl
-      ]),
+      main,
       acts
-    ]));
+    ]);
+
+    // The one manual control, and only when GhostBuster genuinely can't tell.
+    if(needsOutcome){
+      var oc = h('div',{class:'gt-outcome'},[h('span',{class:'lbl'},['What happened?'])]);
+      INTERACTION_OUTCOMES.forEach(function(o){
+        oc.appendChild(h('button',{class:'oc-btn','data-action':'interaction-outcome',
+          'data-cid':c.id,'data-outcome':o.key},[o.label]));
+      });
+      row.appendChild(oc);
+      // Progressive disclosure: the follow-up field only exists once an
+      // outcome that needs one has been chosen.
+      if(UI.outcomeOpen && UI.outcomeOpen.cid === c.id){
+        row.appendChild(buildOutcomeDetail(c, UI.outcomeOpen.outcome));
+      }
+    }
+    body.appendChild(row);
   });
 
   if(shown.length > 25){
@@ -518,47 +545,28 @@ function renderGhostToday(){
 }
 
 
-function renderReviewQueue(){
-  var box = el('review-queue');
-  if(!box) return;
-  box.innerHTML = '';
-  var now = new Date();
-  var queue = getAwaitingReview(STATE, now);
-  if(!queue.length){
-    // Only worth showing the all-clear if there was ever anything to clear.
-    var anySends = Object.keys(STATE.clients).some(function(cid){ return STATE.clients[cid].messageLog.length; });
-    if(!anySends) return;
-    box.appendChild(h('div',{class:'review-q'},[
-      h('div',{class:'review-q-done'},['✅ Every send has a reply logged. The template stats are trustworthy.'])
-    ]));
-    return;
+// Progressive disclosure for the outcomes that need one more fact. Everything
+// else resolves in a single tap — "No reply" asks nothing, because there is
+// nothing more to know.
+function buildOutcomeDetail(client, outcome){
+  var box = h('div',{class:'gt-detail'},[]);
+  if(outcome === 'booked'){
+    box.appendChild(h('label',{},['When is it?']));
+    box.appendChild(h('input',{type:'datetime-local',id:'oc-when'}));
+  } else if(outcome === 'replied'){
+    box.appendChild(h('label',{},['What did they say? (optional)']));
+    box.appendChild(h('input',{type:'text',id:'oc-note',placeholder:'Paste their reply or a quick note…'}));
+  } else if(outcome === 'not_interested'){
+    box.appendChild(h('label',{},['Reason (optional)']));
+    box.appendChild(h('input',{type:'text',id:'oc-note',placeholder:'Too expensive, bad timing, went elsewhere…'}));
+  } else if(outcome === 'call_back'){
+    box.appendChild(h('label',{},['Call back when?']));
+    box.appendChild(h('input',{type:'date',id:'oc-until'}));
   }
-
-  var head = h('div',{class:'review-q-head'},[
-    h('h4',{},['Did they write back? — ' + queue.length]),
-    h('span',{class:'hint'},['Until you answer, these don\'t count either way'])
-  ]);
-  var body = h('div',{class:'review-q-body'},[]);
-
-  queue.slice(0, 40).forEach(function(it){
-    var sentAt = safeDate(it.message.sentAt);
-    var when = sentAt ? (fmtDate(sentAt, it.client.timezone) + ' ' + fmtTime(sentAt, it.client.timezone)) : '';
-    body.appendChild(h('div',{class:'review-row'},[
-      h('span',{class:'name','data-action':'open-client','data-cid':it.client.id},[it.client.name]),
-      h('span',{class:'stage-chip' + (it.message.stage==='noshow'?' noshow':'') + (it.message.stage==='recovery'?' recovery':'')},[it.message.stage]),
-      h('span',{class:'snippet'},[it.message.text]),
-      h('span',{class:'when'},[when]),
-      h('span',{class:'review-actions'},[
-        h('button',{class:'btn-reply-yes','data-action':'review-replied','data-cid':it.client.id,'data-idx':String(it.idx),title:'They responded'},['👍 replied']),
-        h('button',{class:'btn-reply-no','data-action':'review-silent','data-cid':it.client.id,'data-idx':String(it.idx),title:'No response'},['no reply'])
-      ])
-    ]));
-  });
-
-  if(queue.length > 40){
-    body.appendChild(h('div',{class:'review-q-done'},['+ ' + (queue.length - 40) + ' older ones behind these.']));
-  }
-  box.appendChild(h('div',{class:'review-q'},[head, body]));
+  box.appendChild(h('button',{class:'btn btn-sm btn-green','data-action':'interaction-confirm',
+    'data-cid':client.id,'data-outcome':outcome},['Save']));
+  box.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'interaction-cancel'},['Cancel']));
+  return box;
 }
 
 
@@ -580,9 +588,10 @@ function renderRecentSends(){
   recent.forEach(function(it){
     var sentAt = safeDate(it.message.sentAt);
     var when = sentAt ? (fmtDate(sentAt, it.client.timezone) + ' ' + fmtTime(sentAt, it.client.timezone)) : '';
-    var repliedCb = h('input',{type:'checkbox','data-action':'toggle-replied-quick','data-cid':it.client.id,'data-idx':String(it.idx)});
-    repliedCb.checked = !!it.message.responded;
-    var label = h('label',{class:'replied-label'},[repliedCb, 'replied']);
+    // History, not a form. The outcome is captured once in GhostBuster Today.
+    var label = h('span',{class:'replied-label'},[interactionLabel({
+      state: messageState(it.message, now), hoursAgo: null, message: it.message
+    })]);
     var stageChip = h('span',{class:'stage-chip' + (it.message.stage==='noshow'?' noshow':'') + (it.message.stage==='recovery'?' recovery':'')},[it.message.stage]);
     body.appendChild(h('div',{class:'recent-send-row'},[
       h('span',{class:'name'},[it.client.name]),
@@ -627,9 +636,11 @@ function renderClientsTab(){
     if(lastIdx === -1){
       repliedCell = h('td',{class:'replied-cell'},['—']);
     } else {
-      var repliedCb = h('input',{type:'checkbox','data-action':'toggle-replied-quick','data-cid':c.id,'data-idx':String(lastIdx)});
-      repliedCb.checked = !!c.messageLog[lastIdx].responded;
-      repliedCell = h('td',{class:'replied-cell'},[repliedCb]);
+      // Read-only: this column reports where the interaction stands rather
+      // than asking the same question a fourth time.
+      var st = messageState(c.messageLog[lastIdx], new Date());
+      var glyph = st === 'replied' ? '👍' : st === 'waiting' ? '⏳' : st === 'no_reply' ? '—' : '?';
+      repliedCell = h('td',{class:'replied-cell', title: interactionLabel(lastInteraction(c, new Date()))},[glyph]);
     }
     var tr = h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
       h('td',{},[c.name]),
@@ -1413,6 +1424,35 @@ document.addEventListener('click', function(ev){
       // where popping a modal open on a single tap would defeat the point
       doToggleReplied(cid, parseInt(target.getAttribute('data-idx'),10));
       renderAll();
+      break;
+    case 'interaction-outcome': {
+      var oKey = target.getAttribute('data-outcome');
+      // Outcomes needing nothing further resolve immediately — one tap, done.
+      if(oKey === 'no_reply' || oKey === 'wrong_contact'){
+        recordInteractionOutcome(STATE, cid, oKey, {});
+        UI.outcomeOpen = null;
+        renderAll();
+      } else {
+        UI.outcomeOpen = {cid: cid, outcome: oKey};
+        renderGhostToday();
+      }
+      break;
+    }
+    case 'interaction-confirm': {
+      var ck = target.getAttribute('data-outcome');
+      var whenEl = el('oc-when'), noteEl = el('oc-note'), untilEl = el('oc-until');
+      recordInteractionOutcome(STATE, cid, ck, {
+        callDateTime: whenEl && whenEl.value ? new Date(whenEl.value).toISOString() : null,
+        note: noteEl && noteEl.value ? noteEl.value : null,
+        until: untilEl && untilEl.value ? untilEl.value : null
+      });
+      UI.outcomeOpen = null;
+      renderAll();
+      break;
+    }
+    case 'interaction-cancel':
+      UI.outcomeOpen = null;
+      renderGhostToday();
       break;
     case 'ghost-filter':
       UI.ghostFilter = target.getAttribute('data-band');

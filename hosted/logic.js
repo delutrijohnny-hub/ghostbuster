@@ -816,9 +816,152 @@ function toggleReplied(state, clientId, msgIndex){
 }
 
 
+/* ---- one interaction lifecycle ----
+   "Message sent" and "did they write back?" were two workflows asking about
+   one thing. They are states of a single interaction:
+
+     created -> sent -> waiting -> replied | no_reply -> outcome -> next action
+
+   The important consequence is WHEN to ask. The old review queue surfaced a
+   message two hours after sending, which is too soon to know anything — a
+   question nobody can answer yet trains people to answer it carelessly, and a
+   careless answer is worse for the bandit than no answer. A message now sits
+   in 'waiting' until the reply window elapses, and only then becomes something
+   the salesperson is asked about.
+
+   Nothing here changes what is stored: reviewed/responded/respondedAt are the
+   same fields the analytics, the bandit and the Ghost Score already read. This
+   is a derived view over them, not a new source of truth. */
+var REPLY_WAIT_HOURS = 24;
+
+function messageState(m, now){
+  if(!m) return null;
+  if(m.reviewed) return m.responded ? 'replied' : 'no_reply';
+  var sent = Date.parse(m.sentAt);
+  if(isNaN(sent)) return 'waiting';
+  var hours = ((now || new Date()).getTime() - sent) / 3600000;
+  return hours < REPLY_WAIT_HOURS ? 'waiting' : 'needs_outcome';
+}
+
+// The contact's current position in that lifecycle, which is what both the
+// daily queue and the card render from — so they cannot disagree.
+function lastInteraction(client, now){
+  now = now || new Date();
+  var idx = lastMessageIndex(client);
+  if(idx === -1) return {message: null, idx: -1, state: 'none', hoursAgo: null};
+  var m = client.messageLog[idx];
+  var sent = Date.parse(m.sentAt);
+  return {
+    message: m, idx: idx, state: messageState(m, now),
+    hoursAgo: isNaN(sent) ? null : (now.getTime() - sent) / 3600000
+  };
+}
+
+// Human phrasing for the lifecycle, used in both the queue and the timeline so
+// the vocabulary stays consistent across surfaces.
+function interactionLabel(inter){
+  if(!inter || inter.state === 'none') return 'No messages yet';
+  var h = inter.hoursAgo;
+  var when = (h === null) ? '' :
+    h < 1 ? 'just now' :
+    h < 24 ? Math.round(h) + 'h ago' :
+    Math.round(h / 24) + 'd ago';
+  switch(inter.state){
+    case 'waiting':       return 'Waiting for reply · sent ' + when;
+    case 'needs_outcome': return 'No response yet · sent ' + when;
+    case 'replied':       return 'Replied';
+    case 'no_reply':      return 'No reply · sent ' + when;
+  }
+  return when;
+}
+
+/* The single manual control that replaces five separate reply checkboxes.
+   Every option resolves the interaction; the ones that mean something further
+   also move the pipeline, using ROLES so a custom pipeline works.
+
+   Deliberately built on the existing seams — reviewMessage for the reply fact,
+   setOutcome for the stage change — rather than a parallel outcome system that
+   the analytics would then have to learn about separately. */
+var INTERACTION_OUTCOMES = [
+  {key:'no_reply',       label:'No reply',       replied:false},
+  {key:'replied',        label:'They replied',   replied:true},
+  {key:'booked',         label:'Booked',         replied:true},
+  {key:'not_interested', label:'Not interested', replied:true},
+  {key:'call_back',      label:'Call back later',replied:true},
+  {key:'wrong_contact',  label:'Wrong contact',  replied:false}
+];
+
+// First stage carrying a given role, so outcomes work under any pipeline.
+function stageWithRole(role){
+  for(var i=0;i<ACTIVE_PIPELINE.length;i++){
+    if(ACTIVE_PIPELINE[i].role === role) return ACTIVE_PIPELINE[i].key;
+  }
+  return null;
+}
+
+function recordInteractionOutcome(state, clientId, outcomeKey, extra){
+  var client = state.clients[clientId];
+  if(!client) return;
+  extra = extra || {};
+  var def = null;
+  INTERACTION_OUTCOMES.forEach(function(o){ if(o.key === outcomeKey) def = o; });
+  if(!def) return;
+
+  var inter = lastInteraction(client, new Date());
+  if(inter.idx !== -1){
+    // Resolves the bandit's question as a side effect of the salesperson
+    // telling us what happened — they never answer it as a separate chore.
+    reviewMessage(state, clientId, inter.idx, def.replied);
+  }
+
+  if(extra.note){
+    client.notes = (client.notes ? client.notes + '\n' : '') +
+      '[' + new Date().toLocaleDateString() + '] ' + extra.note;
+  }
+
+  if(outcomeKey === 'booked'){
+    if(extra.callDateTime){
+      client.callDateTime = extra.callDateTime;
+      var open = stageWithRole('open');
+      if(open) client.status = open;
+      client.stalledSince = null;
+    }
+    recordEvent(state, clientId, 'appointment.booked', {at: extra.callDateTime || null, source: 'outcome'});
+  } else if(outcomeKey === 'not_interested'){
+    var lost = stageWithRole('lost');
+    if(lost) client.status = lost;
+    client.stalledSince = nowISO();
+  } else if(outcomeKey === 'call_back'){
+    // A deferral, not a dead end: snooze the cadence rather than change stage.
+    if(extra.until){
+      if(!client.snoozedUntil) client.snoozedUntil = {};
+      Object.keys(buildDefaultVariants()).forEach(function(stage){ client.snoozedUntil[stage] = extra.until; });
+    }
+  } else if(outcomeKey === 'wrong_contact'){
+    client.ignored = true;
+  }
+
+  recordEvent(state, clientId, 'interaction.outcome', {
+    outcome: outcomeKey,
+    replied: def.replied,
+    stage: inter.message ? inter.message.stage : null,
+    variantId: inter.message ? inter.message.variantId : null,
+    pipelineStage: client.status,
+    // Time-to-response is only meaningful when there was a response.
+    hoursToResponse: (def.replied && inter.hoursAgo !== null) ? Math.round(inter.hoursAgo * 10) / 10 : null,
+    hasNote: !!extra.note
+  });
+  saveState(state);
+}
+
+
 // Everything sent long enough ago that a reply would have landed by now, and
 // that nobody has answered the reply question for yet. This is the queue that
 // feeds the bandit — an empty one means the stats are trustworthy.
+//
+// The floor is REPLY_WAIT_HOURS rather than a couple of hours: asking two
+// hours after a send is asking a question nobody can answer, which teaches
+// people to answer carelessly. Until then the interaction is simply 'waiting'.
 //
 // The 3-day ceiling is doing real work. It keeps the queue to something
 // finishable in one sitting (a 14-day window opened at 129 rows, which is a
@@ -828,7 +971,7 @@ function toggleReplied(state, clientId, msgIndex){
 // that age out are simply never counted, which is the safe direction.
 function getAwaitingReview(state, now, minAgeHours, maxAgeDays){
   now = now || new Date();
-  minAgeHours = (typeof minAgeHours === 'number') ? minAgeHours : 2;
+  minAgeHours = (typeof minAgeHours === 'number') ? minAgeHours : REPLY_WAIT_HOURS;
   maxAgeDays = (typeof maxAgeDays === 'number') ? maxAgeDays : 3;
   var newest = now.getTime() - minAgeHours * 3600000;
   var oldest = now.getTime() - maxAgeDays * 86400000;
@@ -1987,6 +2130,9 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
+  REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
+  interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
+  stageWithRole: stageWithRole, recordInteractionOutcome: recordInteractionOutcome,
   HOURBEFORE_LEAD_MIN: HOURBEFORE_LEAD_MIN, HOURBEFORE_FLOOR_MIN: HOURBEFORE_FLOOR_MIN,
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,
   AREA_CODE_TZ: AREA_CODE_TZ, areaCodeFromPhone: areaCodeFromPhone, timezoneForClient: timezoneForClient,
