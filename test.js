@@ -1230,6 +1230,94 @@ test('setPipeline(null) and an empty list both fall back to the defaults', () =>
   assert.strictEqual(GB.stopsCadence('Completed'), true);
 });
 
+console.log('\n--- ghost score ---');
+
+test('the reasons ARE the arithmetic: they sum to the score', () => {
+  const c = freshClient({
+    callDateTime: isoDaysFromNow(1), bookedDate: isoDaysAgo(20), status: 'Confirmed',
+    messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(9),responded:true,respondedAt:isoDaysAgo(9),reviewed:true}]
+  });
+  const g = GB.computeGhostScore(c, new Date());
+  const summed = g.reasons.reduce((a, r) => a + r.points, 0);
+  assert.strictEqual(summed, g.raw, 'an explanation that does not add up is not an explanation');
+  assert.strictEqual(g.score, Math.min(100, Math.max(0, g.raw)));
+});
+
+test('score is always within 0-100 however the rules stack', () => {
+  const hot = freshClient({
+    callDateTime: isoDaysFromNow(1), bookedDate: isoDaysAgo(60), status: 'Booked',
+    messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(40),responded:true,respondedAt:isoDaysAgo(40),reviewed:true}]
+  });
+  const cold = freshClient({status:'Ghosted', bookedDate: isoDaysAgo(400), closeOutcome:'Lost', stalledSince: isoDaysAgo(300)});
+  [hot, cold].forEach(c => {
+    const g = GB.computeGhostScore(c, new Date());
+    assert.ok(g.score >= 0 && g.score <= 100, 'out of range: ' + g.score);
+  });
+});
+
+test('bands map to the documented thresholds', () => {
+  assert.strictEqual(GB.ghostScoreBand(95), 'immediate');
+  assert.strictEqual(GB.ghostScoreBand(91), 'immediate');
+  assert.strictEqual(GB.ghostScoreBand(90), 'high');
+  assert.strictEqual(GB.ghostScoreBand(76), 'high');
+  assert.strictEqual(GB.ghostScoreBand(75), 'soon');
+  assert.strictEqual(GB.ghostScoreBand(51), 'soon');
+  assert.strictEqual(GB.ghostScoreBand(50), 'nurture');
+  assert.strictEqual(GB.ghostScoreBand(26), 'nurture');
+  assert.strictEqual(GB.ghostScoreBand(25), 'low');
+});
+
+test('an imminent appointment with a history of replying and a month of silence ranks top', () => {
+  const c = freshClient({
+    callDateTime: isoDaysFromNow(1), bookedDate: isoDaysAgo(40), status: 'Confirmed',
+    messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(34),responded:true,respondedAt:isoDaysAgo(34),reviewed:true}]
+  });
+  const g = GB.computeGhostScore(c, new Date());
+  assert.ok(g.score >= 76, 'expected high or immediate, got ' + g.score + ' (' + g.band + ')');
+});
+
+test('a logged outcome drops a contact off the list', () => {
+  const base = {callDateTime: isoDaysAgo(3), bookedDate: isoDaysAgo(20), status:'Completed'};
+  const open = GB.computeGhostScore(freshClient(base), new Date());
+  const closed = GB.computeGhostScore(freshClient(Object.assign({}, base, {closeOutcome:'Closed'})), new Date());
+  assert.ok(closed.score < open.score, 'recording an outcome must reduce urgency, not raise it');
+});
+
+test('unreviewed sends are not counted as unanswered attempts', () => {
+  const mk = (reviewed) => freshClient({
+    status:'Booked', bookedDate: isoDaysAgo(20), callDateTime: null,
+    messageLog: [1,2,3,4,5].map(i => ({stage:'monday',variantId:'m1',text:'x',
+      sentAt: isoDaysAgo(i), responded:false, respondedAt:null, reviewed}))
+  });
+  const known = GB.computeGhostScore(mk(true), new Date());
+  const unknown = GB.computeGhostScore(mk(false), new Date());
+  const pen = g => g.reasons.filter(r => /unanswered/.test(r.label)).length;
+  assert.strictEqual(pen(known), 1, 'five confirmed-silent sends should carry a penalty');
+  assert.strictEqual(pen(unknown), 0, 'sends nobody checked are not evidence of silence');
+});
+
+test('ranking excludes archived contacts and sorts hottest first', () => {
+  const s = GB.buildDefaultState();
+  s.clients['a'] = freshClient({id:'a', name:'Hot', status:'Confirmed', callDateTime: isoDaysFromNow(1),
+    bookedDate: isoDaysAgo(40),
+    messageLog:[{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(34),responded:true,respondedAt:isoDaysAgo(34),reviewed:true}]});
+  s.clients['b'] = freshClient({id:'b', name:'Mild', status:'Booked', bookedDate: isoDaysAgo(5), callDateTime:null});
+  s.clients['c'] = freshClient({id:'c', name:'Archived', status:'Confirmed', ignored:true, callDateTime: isoDaysFromNow(1), bookedDate: isoDaysAgo(40)});
+  const ranked = GB.rankByGhostScore(s, new Date(), {min:0});
+  assert.ok(!ranked.some(r => r.client.id === 'c'), 'archived contacts must not appear');
+  assert.strictEqual(ranked[0].client.id, 'a');
+  assert.ok(ranked[0].score >= ranked[ranked.length-1].score);
+});
+
+test('scoring reads stage roles, so a custom pipeline scores correctly', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const c = freshClient({status:'Missed Estimate', callDateTime: isoDaysAgo(2), bookedDate: isoDaysAgo(20)});
+    const g = GB.computeGhostScore(c, new Date());
+    assert.ok(g.reasons.some(r => /Missed appointment/.test(r.label)),
+      'an HVAC missed-estimate must score like a no-show, got: ' + g.reasons.map(r=>r.label).join(' | '));
+  });
+});
+
 console.log('\n--- incremental persistence (hosted/data.js) ---');
 
 // hosted/data.js is browser+Supabase code, so it gets its own vm context with a

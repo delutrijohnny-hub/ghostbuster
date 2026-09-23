@@ -1205,6 +1205,168 @@ function deleteClient(state, clientId){
 
 
 /* ============================================================
+   6.5) GHOST SCORE — who deserves attention today
+
+   A transparent 0-100 rules engine, deliberately not a model. There is
+   nowhere near enough labelled outcome data here to learn conversion from
+   (489 reviewed sends, and stage history only began being recorded today),
+   and a number nobody can explain is worse than no number: a rep who can't
+   see why a lead is ranked high won't trust the list, and an unfollowed list
+   is worth nothing.
+
+   So every score is the sum of named contributions. computeGhostScore returns
+   those contributions alongside the total, and the UI can show exactly the
+   arithmetic that produced it. Weights live in one object so they can be tuned
+   per business later, and so a learned model can eventually replace the
+   weights — or the whole function — without anything else changing shape.
+
+   Everything here asks stage ROLES, never stage names, so a custom pipeline
+   scores correctly without this code knowing any of its stages.
+   ============================================================ */
+
+function buildDefaultScoreWeights(){
+  return {
+    // Calibrated against the real book rather than picked by eye. The first
+    // pass topped out at 72, leaving 'high' and 'immediate' permanently empty
+    // — bands that can never occur are worse than no bands, because they imply
+    // a severity the system will never report.
+    //
+    // The fix was not simply inflating everything until something crossed 91;
+    // that makes the number meaningless. It was deciding what 'immediate'
+    // should actually mean, and setting weights so that pattern reaches it: an
+    // appointment imminent AND something wrong — a month of silence, or a
+    // follow-up owed. A lone upcoming appointment with nothing wrong lands
+    // around 50, which is right: it is on the calendar and handled.
+    //
+    // These numbers are tuned to one book of ~140 contacts and should be
+    // revisited once other businesses are on the system; that is why they live
+    // in one object rather than scattered through the rules.
+    base:               12,   // everyone starts here; the signals move you
+    appointmentSoon:    38,   // a call in the next 48h is the most actionable thing there is
+    followupDue:        25,   // the cadence says today, and today hasn't happened yet
+    missedRecently:     26,   // no-show inside the rescue window
+    hasRepliedBefore:   18,   // engagement is the strongest predictor we actually have
+    stalled:            16,   // in limbo with no new date
+    needsClosing:       18,   // the appointment happened and no outcome was ever logged
+    silenceMax:         22,   // ramps with days since last contact, capped
+    silenceRampDays:    14,   // days to reach the full silence bonus
+    unansweredEach:     -5,   // each unanswered attempt past the second
+    unansweredFloor:    -20,  // but never more than this in total
+    staleNeverReplied:  -14,  // old and has never once responded
+    staleAfterDays:     45,
+    closed:             -45   // an outcome is on file; stop surfacing it
+  };
+}
+
+function ghostScoreBand(score){
+  if(score >= 91) return 'immediate';
+  if(score >= 76) return 'high';
+  if(score >= 51) return 'soon';
+  if(score >= 26) return 'nurture';
+  return 'low';
+}
+
+function daysBetween(aMs, bMs){ return (aMs - bMs) / 86400000; }
+
+// Returns {score, band, reasons:[{label, points}]} where the reasons sum to
+// the score before clamping — the explanation IS the calculation, not a
+// narrative written next to it.
+function computeGhostScore(client, now, weights, state){
+  now = now || new Date();
+  var w = weights || buildDefaultScoreWeights();
+  var reasons = [];
+  function add(label, points){ if(points) reasons.push({label: label, points: Math.round(points)}); }
+
+  add('Baseline', w.base);
+
+  var nowMs = now.getTime();
+  var log = client.messageLog || [];
+  var lastSent = null, everReplied = false, unanswered = 0;
+  log.forEach(function(m){
+    var t = Date.parse(m.sentAt);
+    if(!isNaN(t) && (lastSent === null || t > lastSent)) lastSent = t;
+    if(m.responded) everReplied = true;
+  });
+  // Unanswered run = consecutive reviewed-and-unreplied sends at the end of the
+  // log. Unreviewed sends are skipped: nobody checked, so they are not evidence
+  // of silence — the same distinction the bandit denominator turns on.
+  for(var i = log.length - 1; i >= 0; i--){
+    if(!log[i].reviewed) continue;
+    if(log[i].responded) break;
+    unanswered++;
+  }
+
+  var callMs = null;
+  var cd = safeDate(client.callDateTime);
+  if(cd) callMs = cd.getTime();
+
+  if(callMs !== null && callMs > nowMs && daysBetween(callMs, nowMs) <= 2 && !stopsCadence(client.status)){
+    add('Appointment in the next 48h', w.appointmentSoon);
+  }
+
+  var due = computeDue(client, now);
+  if(due.length) add('Follow-up due (' + due.join(', ') + ')', w.followupDue);
+
+  if(isMissed(client.status) && callMs !== null){
+    var sinceCall = daysBetween(nowMs, callMs);
+    if(sinceCall >= 0 && sinceCall <= 14) add('Missed appointment, rescue window open', w.missedRecently);
+  }
+
+  if(isStalledStage(client.status) && client.stalledSince) add('Stalled with no new date', w.stalled);
+
+  if(everReplied) add('Has replied before', w.hasRepliedBefore);
+
+  if(isWon(client.status) && !client.closeOutcome) add('Appointment happened, no outcome logged', w.needsClosing);
+
+  if(lastSent !== null){
+    var quiet = daysBetween(nowMs, lastSent);
+    if(quiet > 0){
+      var ramp = Math.min(quiet / w.silenceRampDays, 1) * w.silenceMax;
+      if(ramp >= 1) add('No contact for ' + Math.floor(quiet) + ' days', ramp);
+    }
+  }
+
+  if(unanswered > 2){
+    add(unanswered + ' unanswered attempts', Math.max((unanswered - 2) * w.unansweredEach, w.unansweredFloor));
+  }
+
+  var booked = safeDate(client.bookedDate);
+  if(booked && !everReplied && daysBetween(nowMs, booked.getTime()) > w.staleAfterDays){
+    add('Old lead that has never responded', w.staleNeverReplied);
+  }
+
+  if(client.closeOutcome) add('Outcome already recorded', w.closed);
+
+  var raw = reasons.reduce(function(acc, r){ return acc + r.points; }, 0);
+  var score = clamp(Math.round(raw), 0, 100);
+  return {score: score, band: ghostScoreBand(score), reasons: reasons, raw: raw};
+}
+
+// Everyone worth looking at today, hottest first. Archived contacts and the
+// Graveyard are excluded — this list is meant to be worked top to bottom, so
+// anything on it has to be actionable.
+function rankByGhostScore(state, now, opts){
+  now = now || new Date();
+  opts = opts || {};
+  var min = (typeof opts.min === 'number') ? opts.min : 26;
+  var w = state.scoreWeights || buildDefaultScoreWeights();
+  var out = [];
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    if(c.ignored) return;
+    var g = computeGhostScore(c, now, w, state);
+    if(g.score < min) return;
+    out.push({client: c, score: g.score, band: g.band, reasons: g.reasons});
+  });
+  out.sort(function(a, b){
+    if(b.score !== a.score) return b.score - a.score;
+    return String(a.client.name || '').localeCompare(String(b.client.name || ''));
+  });
+  return out;
+}
+
+
+/* ============================================================
    7) STATS & DATA HEALTH
    ============================================================ */
 
@@ -1790,6 +1952,8 @@ var __LOGIC_EXPORTS__ = {
   parseICSDate: parseICSDate, extractAttendeeEmails: extractAttendeeEmails, clientFromICSEvent: clientFromICSEvent,
   MONTHS: MONTHS, parseHeuristicDate: parseHeuristicDate, parseBulkBlock: parseBulkBlock, parseBulkPaste: parseBulkPaste,
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,
+  buildDefaultScoreWeights: buildDefaultScoreWeights, ghostScoreBand: ghostScoreBand,
+  computeGhostScore: computeGhostScore, rankByGhostScore: rankByGhostScore,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
