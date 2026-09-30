@@ -1509,6 +1509,31 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+// A stage that logic.js can produce but the database rejects makes every save
+// fail, not just that row — the whole batch is refused. 'revival' shipped that
+// way and broke saving outright until the constraint was widened. The three
+// tables carrying the same list are the reason this is easy to miss.
+{
+  const migrations = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+    .filter(f => f.endsWith('.sql')).sort();
+  let allowed = null;
+  migrations.forEach(f => {
+    const sql = fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8');
+    const matches = [...sql.matchAll(/check\s*\(stage in \(([^)]+)\)\)/g)];
+    matches.forEach(m => {
+      allowed = new Set(m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')));
+    });
+  });
+  assert.ok(allowed, 'could not find a stage constraint in any migration');
+  const produced = new Set(Object.keys(GB.buildDefaultVariants())
+    .concat(Object.keys(GB.buildDefaultEmailVariants()))
+    .concat(GB.buildDefaultSequence().map(s => s.stage)));
+  const rejected = [...produced].filter(st => !allowed.has(st));
+  assert.deepStrictEqual(rejected, [],
+    'logic.js can produce stage(s) the database will reject, which fails the entire save: ' + rejected.join(', '));
+  console.log('  ok  - every stage the app can produce is accepted by the database');
+}
+
 console.log('\n--- whose lead is it ---');
 
 const mine = ['john@marketmakermgmt.com'];
