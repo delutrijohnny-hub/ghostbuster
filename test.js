@@ -1500,6 +1500,78 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- skipping a touch for good ---');
+
+test('a skipped touch never comes back', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  st.clients['a'] = c;
+  assert.ok(GB.computeDue(c, new Date()).includes('welcome'));
+  GB.skipTouch(st, 'a', 'welcome');
+  assert.ok(!GB.computeDue(c, new Date()).includes('welcome'));
+  // and still gone a fortnight later, unlike a snooze
+  const later = new Date(Date.now() + 14 * 86400000);
+  assert.ok(!GB.computeDue(c, later).includes('welcome'),
+    'a skip is an answer, not a deferral');
+});
+
+test('skipping one touch leaves the rest of the cadence alone', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
+  st.clients['a'] = c;
+  const before = GB.computeDue(c, new Date());
+  assert.ok(before.length > 1, 'fixture should have several due');
+  GB.skipTouch(st, 'a', before[0]);
+  const after = GB.computeDue(c, new Date());
+  assert.ok(!after.includes(before[0]));
+  assert.ok(after.length === before.length - 1, 'only the skipped one goes');
+});
+
+test('skipping sends nothing and credits no variant', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  st.clients['a'] = c;
+  GB.skipTouch(st, 'a', 'welcome');
+  assert.strictEqual(c.messageLog.length, 0, 'nothing was sent, so nothing is logged');
+  const stats = st.variantStats.welcome || {};
+  assert.ok(Object.keys(stats).every(k => stats[k].sends === 0),
+    'a message never sent must not count toward what the templates are measured on');
+});
+
+test('a skip is recorded so it is auditable, not a silent gap', () => {
+  const st = GB.buildDefaultState();
+  st.clients['a'] = freshClient({id:'a', phone:'2135550001', callDateTime: isoDaysFromNow(5)});
+  st.pendingEvents = [];
+  GB.skipTouch(st, 'a', 'monday');
+  const ev = st.pendingEvents.find(e => e.kind === 'touch.skipped');
+  assert.ok(ev && ev.data.stage === 'monday');
+});
+
+test('a skip can be undone', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  st.clients['a'] = c;
+  GB.skipTouch(st, 'a', 'welcome');
+  GB.unskipTouch(st, 'a', 'welcome');
+  assert.ok(GB.computeDue(c, new Date()).includes('welcome'));
+});
+
+test('old data with no skippedStages loads without throwing', () => {
+  const c = GB.sanitizeClient({id:'old', name:'Old', phone:'2135550001'});
+  assert.deepStrictEqual(c.skippedStages, {});
+  assert.doesNotThrow(() => GB.computeDue(c, new Date()));
+});
+
+test('a snooze still expires — the two are different tools', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  st.clients['a'] = c;
+  GB.snoozeTouch(st, 'a', 'welcome', new Date());
+  assert.ok(!GB.computeDue(c, new Date()).includes('welcome'), 'gone today');
+  const tomorrow = new Date(Date.now() + 2 * 86400000);
+  assert.ok(GB.computeDue(c, tomorrow).includes('welcome'), 'and back afterwards');
+});
+
 console.log('\n--- unlogged outcomes are visible, not silent ---');
 
 test('an unlogged call is unknown, never counted as a no-show', () => {

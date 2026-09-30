@@ -144,6 +144,7 @@ function renderAll(){
   renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
+  renderClosedTab();
   renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;
   var eodEl = el('eod-count'); if(eodEl) eodEl.textContent = '(' + eodCount + ')';
@@ -352,6 +353,12 @@ function buildTouchCard(client, stage, now){
   }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'snooze-touch','data-cid':client.id,'data-stage':stage,title:'Push this to tomorrow'},['Not today']));
+  // "Not today" is for a badly timed text. This is for one that is not needed
+  // at all — without it, the only way to refuse a touch was to snooze it every
+  // morning forever.
+  actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'skip-touch',
+    'data-cid':client.id,'data-stage':stage,
+    title:'Never send this one to ' + client.name},['Skip']));
   var sentLabel = document.createElement('label');
   sentLabel.className = 'sent-label';
   var cb = h('input',{type:'checkbox','data-action':'mark-sent','data-cid':client.id,'data-stage':stage});
@@ -869,6 +876,63 @@ function lastFollowUpSentAt(client){
   });
   return latest;
 }
+
+/* Closed — the deals that actually landed.
+
+   Kept separate from the Graveyard rather than folded into it. A closed deal
+   and a written-off lead are opposite outcomes, and a single "done" bucket
+   would make both unreadable — you could no longer tell whether the pile was
+   success or failure.
+
+   Shows how many touches it took to get there, because that is the number
+   that tells you whether the follow-up is doing anything. */
+function renderClosedTab(){
+  var body = el('closed-table-body');
+  if(!body) return;
+  var all = Object.keys(STATE.clients).map(function(k){ return STATE.clients[k]; })
+    .filter(function(c){ return !c.ignored; });
+  var closed = all.filter(function(c){ return c.closeOutcome === 'Closed'; });
+  var decided = all.filter(function(c){ return c.closeOutcome; }).length;
+
+  var countEl = el('closed-count');
+  if(countEl) countEl.textContent = closed.length ? '(' + closed.length + ')' : '';
+
+  var summary = el('closed-summary');
+  if(summary){
+    // The rate is over the ones with a result recorded, and says so — the
+    // same honesty the show rate now carries.
+    var undecided = all.length - decided;
+    summary.textContent = decided
+      ? closed.length + ' of ' + decided + ' decided (' + Math.round(100 * closed.length / decided) + '%)' +
+        (undecided ? '  ·  ' + undecided + ' with no result recorded yet' : '')
+      : 'No results recorded yet.';
+  }
+
+  closed.sort(function(a, b){
+    var da = safeDate(a.callDateTime), db = safeDate(b.callDateTime);
+    return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+  });
+
+  body.innerHTML = '';
+  if(!closed.length){
+    var td = h('td',{colspan:'5'},[]);
+    td.innerHTML = '<div class="closed-empty">Nothing closed yet. Mark a result on a ' +
+      escapeHtml(termLower('appointment')) + ' that happened and it will show up here.</div>';
+    body.appendChild(h('tr',{},[td]));
+    return;
+  }
+  closed.forEach(function(c){
+    var d = safeDate(c.callDateTime);
+    body.appendChild(h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
+      h('td',{},[c.name]),
+      h('td',{},[d ? fmtDate(d, c.timezone) : '—']),
+      h('td',{},[d ? fmtDate(d, c.timezone) : '—']),
+      h('td',{},[String((c.messageLog || []).length)]),
+      h('td',{},[c.phone || '—'])
+    ]));
+  });
+}
+
 
 function renderDeadTab(){
   var tbody = el('dead-table-body'); if(!tbody) return;
@@ -2398,6 +2462,20 @@ document.addEventListener('click', function(ev){
     case 'focus-skip':
       focusAdvance();
       break;
+    case 'skip-touch': {
+      lastSnapshot = snapshot();
+      var skName = STATE.clients[cid] ? STATE.clients[cid].name : 'this contact';
+      skipTouch(STATE, cid, stage);
+      renderAll();
+      showToast('Skipped for ' + skName + '. It will not come back.', lastSnapshot);
+      break;
+    }
+    case 'focus-skip-forever': {
+      var fs = FOCUS.queue[FOCUS.i];
+      skipTouch(STATE, fs.cid, fs.stage);
+      focusAdvance();
+      break;
+    }
     case 'focus-snooze': {
       var fc = FOCUS.queue[FOCUS.i];
       snoozeTouch(STATE, fc.cid, fc.stage, new Date());
@@ -2593,8 +2671,10 @@ document.addEventListener('keydown', function(ev){
     return;
   }
   if(ev.key === '/'){ ev.preventDefault(); var s = el('calls-search'); if(s){ UI.tab='calls'; document.querySelector('[data-action=tab][data-tab=calls]').click(); s.focus(); } return; }
-  if(['1','2','3','4','5'].indexOf(ev.key) !== -1){
-    var tabs = ['calls','clients','variants','weekly','calendar'];
+  // Kept in step with the tab bar, including Closed and the Graveyard — a
+  // shortcut that stops halfway along the row is worse than none.
+  if(['1','2','3','4','5','6','7'].indexOf(ev.key) !== -1){
+    var tabs = ['calls','clients','variants','weekly','calendar','closed','dead'];
     var btn = document.querySelector('[data-action=tab][data-tab="'+tabs[+ev.key-1]+'"]');
     if(btn) btn.click();
   }
@@ -2771,8 +2851,9 @@ function renderFocus(){
         (smsHref
           ? '<a class="btn btn-primary btn-lg focus-send" href="' + smsHref + '" data-action="focus-send">Send &amp; next</a>'
           : '<button class="btn btn-lg" data-action="focus-copy">Copy &amp; next</button>') +
-        '<button class="btn" data-action="focus-skip">Skip</button>' +
+        '<button class="btn" data-action="focus-skip">Not now</button>' +
         '<button class="btn btn-ghost" data-action="focus-snooze">Not today</button>' +
+        '<button class="btn btn-ghost" data-action="focus-skip-forever">Never send this</button>' +
       '</div>' +
       '<div class="focus-hint">Enter to send · S to skip · Esc to stop</div>' +
     '</div>', true);

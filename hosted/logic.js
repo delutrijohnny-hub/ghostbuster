@@ -558,9 +558,22 @@ function sanitizeClient(raw, fallbackId){
     ignored: !!raw.ignored,
     manuallyAdded: !!raw.manuallyAdded,
     snoozedUntil: sanitizeSnoozedUntil(raw.snoozedUntil),
+    skippedStages: sanitizeSkipped(raw.skippedStages),
     rebooked: !!raw.rebooked,
     hadPriorCall: !!raw.hadPriorCall
   };
+}
+
+// Same defensive shape as snoozedUntil: anything that is not a stage mapped to
+// a timestamp is dropped rather than trusted.
+function sanitizeSkipped(raw){
+  var out = {};
+  if(raw && typeof raw === 'object'){
+    Object.keys(raw).forEach(function(stage){
+      if(typeof raw[stage] === 'string' && raw[stage]) out[stage] = raw[stage];
+    });
+  }
+  return out;
 }
 
 function sanitizeSnoozedUntil(raw){
@@ -982,6 +995,11 @@ function computeDue(client, now){
   var snoozed = client.snoozedUntil || {};
   due = due.filter(function(stage){ return !(snoozed[stage] && ctx.todayKey < snoozed[stage]); });
 
+  // Deliberately skipped for this contact, for good. Unlike a snooze this
+  // never expires: it is an answer, not a deferral.
+  var skipped = client.skippedStages || {};
+  due = due.filter(function(stage){ return !skipped[stage]; });
+
   // They wrote back: hold the automated nudges, keep the appointment-critical
   // reminders. See replyPauseUntil.
   var pauseUntil = replyPauseUntil(client);
@@ -1140,6 +1158,35 @@ function markSent(state, clientId, stage, text){
   delete editedTextCache[clientId + '|' + stage];
   delete stickyVariantCache[clientId + '|' + stage];
   if(client.snoozedUntil) delete client.snoozedUntil[stage];
+  saveState(state);
+}
+
+
+/* Drops a touch for this contact permanently.
+
+   "Not today" is for a text that is merely badly timed. This is for one that
+   is not needed at all — a mid-point check-in for someone you spoke to
+   yesterday, a Monday nudge for a call you have already confirmed by phone.
+   Snoozing those meant dismissing them again every morning and never seeing
+   the day's list reach zero.
+
+   Nothing is written to the message log and no variant is credited, because
+   nothing was sent. The event is recorded so a skipped touch is auditable
+   rather than a silent gap in the cadence. */
+function skipTouch(state, clientId, stage){
+  var client = state.clients[clientId];
+  if(!client) return;
+  if(!client.skippedStages) client.skippedStages = {};
+  client.skippedStages[stage] = nowISO();
+  recordEvent(state, clientId, 'touch.skipped', {stage: stage});
+  saveState(state);
+}
+
+function unskipTouch(state, clientId, stage){
+  var client = state.clients[clientId];
+  if(!client || !client.skippedStages) return;
+  delete client.skippedStages[stage];
+  recordEvent(state, clientId, 'touch.unskipped', {stage: stage});
   saveState(state);
 }
 
@@ -3080,7 +3127,8 @@ var __LOGIC_EXPORTS__ = {
   describeTrigger: describeTrigger,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
-  markSent: markSent, snoozeTouch: snoozeTouch, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
+  markSent: markSent, snoozeTouch: snoozeTouch, skipTouch: skipTouch, unskipTouch: unskipTouch,
+  sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
   recommendNextAction: recommendNextAction, consecutiveUnanswered: consecutiveUnanswered,

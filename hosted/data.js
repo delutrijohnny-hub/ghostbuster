@@ -114,7 +114,8 @@ async function loadState(){
       rescheduleCount: row.reschedule_count,
       stalledSince: row.stalled_since,
       ignored: !!row.ignored, manuallyAdded: !!row.manually_added,
-      snoozedUntil: row.snoozed_until || {}
+      snoozedUntil: row.snoozed_until || {},
+      skippedStages: row.skipped_stages || {}
     };
   });
 
@@ -266,7 +267,8 @@ function rowClient(c, uid){
     notes: c.notes, recap: c.recap, close_outcome: c.closeOutcome || null,
     reschedules: c.reschedules, reschedule_count: c.rescheduleCount,
     stalled_since: c.stalledSince, ignored: !!c.ignored, manually_added: !!c.manuallyAdded,
-    snoozed_until: c.snoozedUntil || {}
+    snoozed_until: c.snoozedUntil || {},
+    skipped_stages: c.skippedStages || {}
   };
 }
 function rowMessage(m, clientId){

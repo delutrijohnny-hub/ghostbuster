@@ -1,0 +1,15 @@
+-- Touches deliberately skipped for a contact, permanently.
+--
+-- "Not today" snoozes until tomorrow, which is right when a text is merely
+-- badly timed. It is the wrong tool when a touch simply is not needed for
+-- this person — then it reappears every morning and has to be dismissed
+-- again, and the daily count never settles.
+--
+-- Skipping is a decision, not a deferral, so it is recorded as one rather
+-- than inferred from someone pressing snooze repeatedly. A skipped touch is
+-- not a send: nothing enters the message log and no variant is credited,
+-- because nothing was sent.
+--
+-- Shape: {"midcheckin": "2026-09-30T14:02:00.000Z"} — the stage and when the
+-- call was made, so it stays auditable.
+alter table public.clients add column skipped_stages jsonb not null default '{}'::jsonb;

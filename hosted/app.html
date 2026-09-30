@@ -498,6 +498,12 @@ td.score-cell{width:1%;white-space:nowrap;}
 .ul-acts{display:flex;gap:5px;flex:0 0 auto;}
 .ul-more{padding:8px 14px;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
 .stat-note{margin-top:5px;font-size:11px;font-weight:700;color:var(--amber);cursor:pointer;}
+/* Closed — wins, kept well away from the Graveyard. One is a result, the
+   other is a write-off, and a tab that mixed them would make both meaningless. */
+.closed-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+.closed-head h3{margin:0;font-size:15px;}
+.closed-sub{font-size:12.5px;color:var(--ink-soft);}
+.closed-empty{padding:20px;color:var(--ink-faint);font-size:13px;}
 .stat-note:hover{text-decoration:underline;}
 .ul-more:hover{color:var(--ink);text-decoration:underline;}
 @media (max-width:560px){ .ul-acts{flex:1 1 100%;} }
@@ -789,6 +795,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <button class="tab-btn" data-action="tab" data-tab="variants">Messages</button>
   <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
+  <button class="tab-btn" data-action="tab" data-tab="closed">Closed <span id="closed-count"></span></button>
   <button class="tab-btn" data-action="tab" data-tab="dead"><span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
 </nav>
 
@@ -901,6 +908,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       </div>
     </div>
     <div id="calendar-body"></div>
+  </div>
+
+  <div class="tab-panel" id="tab-closed">
+    <div class="closed-head">
+      <h3>Closed</h3>
+      <span class="closed-sub" id="closed-summary"></span>
+    </div>
+    <table class="clients-table">
+      <thead><tr><th>Name</th><th>Call</th><th>Closed on</th><th>Touches</th><th>Phone</th></tr></thead>
+      <tbody id="closed-table-body"></tbody>
+    </table>
   </div>
 
   <div class="tab-panel" id="tab-dead">
