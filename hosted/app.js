@@ -346,11 +346,19 @@ function buildTouchCard(client, stage, now){
   if(!digits) smsLink.setAttribute('aria-disabled','true');
   actions.appendChild(smsLink);
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
-  // Only offered when it can actually work: an address on file and sending
-  // switched on. A button that always fails is worse than no button.
-  if(canEmail(client) && STATE.emailEnabled){
-    actions.appendChild(h('button',{class:'btn btn-sm','data-action':'compose-email',
-      'data-cid':client.id,'data-stage':stage,title:'Email ' + client.name + ' instead'},['✉ Email']));
+  /* Gmail rather than the in-app composer. It needs no provider account, it
+     sends from the salesperson's own mailbox so it lands in their Sent folder,
+     and the reply arrives where they already look. Offered whenever there is a
+     usable address — unlike the provider route it does not depend on
+     email_enabled, which is why email is usable today. */
+  if(canEmail(client)){
+    var gDraft = getEmailDraft(STATE, client, stage, STATE.senderName);
+    if(gDraft){
+      actions.appendChild(h('a',{class:'btn btn-sm', target:'_blank', rel:'noopener',
+        href: gmailComposeUrl(client.email, gDraft.subject, gDraft.text, STATE.emailFromAddress),
+        'data-action':'sent-by-email','data-cid':client.id,'data-stage':stage,
+        title:'Opens Gmail with this written and ready'},['✉ Email']));
+    }
   }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'snooze-touch','data-cid':client.id,'data-stage':stage,title:'Push this to tomorrow'},['Not today']));
@@ -647,9 +655,13 @@ function renderGhostToday(){
     // suggestion, not a restriction.
     if(digits && rec.action !== 'call') acts.appendChild(h('a',{href: telHref(c.phone)},['Call']));
     if(smsTo && rec.action !== 'text' && rec.action !== 'reply') acts.appendChild(h('a',{href: smsTo},['Text']));
-    if(canEmail(c) && STATE.emailEnabled){
-      acts.appendChild(h('button',{'data-action':'compose-email','data-cid':c.id,
-        'data-stage': rec.stage || 'custom'},['Email']));
+    if(canEmail(c)){
+      var gd = getEmailDraft(STATE, c, rec.stage || 'welcome', STATE.senderName);
+      if(gd){
+        acts.appendChild(h('a',{target:'_blank', rel:'noopener',
+          href: gmailComposeUrl(c.email, gd.subject, gd.text, STATE.emailFromAddress),
+          'data-action':'sent-by-email','data-cid':c.id,'data-stage': rec.stage || 'welcome'},['Email']));
+      }
     }
     acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
 
@@ -2319,6 +2331,23 @@ document.addEventListener('click', function(ev){
       // wizard never reappears.
       finishOnboarding(true);
       break;
+    case 'sent-by-email': {
+      // The link opens Gmail by itself; this records it. Optimistic, like the
+      // sms: path — GhostBuster cannot see whether Send was actually pressed,
+      // so it is logged and undoable rather than confirmed beforehand.
+      var eStage = target.getAttribute('data-stage');
+      var ec = STATE.clients[cid];
+      if(ec && eStage && eStage !== 'custom'){
+        var edraft = getEmailDraft(STATE, ec, eStage, STATE.senderName);
+        if(edraft){
+          lastSnapshot = snapshot();
+          markSentOnChannel(cid, eStage, edraft.subject + '\n\n' + edraft.text, 'email');
+          renderAll();
+          showToast('Logged as emailed to ' + ec.name + '.', lastSnapshot);
+        }
+      }
+      break;
+    }
     case 'compose-email':
       openEmailComposer(cid, target.getAttribute('data-stage'));
       break;
@@ -2828,6 +2857,28 @@ function doToggleReplied(cid, idx){
   var msg = client && client.messageLog[idx];
   toggleReplied(STATE, cid, idx);
   if(msg && msg.variantId !== 'custom') pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses', msg.responded ? 1 : -1);
+}
+
+/* Records a send on a specific channel.
+
+   markSent assumes SMS, because that was the only channel when it was written.
+   An email sent through Gmail still has to advance the cadence and count in
+   the stats, or the touch simply fires again tomorrow as though nothing
+   happened. */
+function markSentOnChannel(cid, stage, text, channel){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  markSent(STATE, cid, stage, text);
+  var logged = client.messageLog[client.messageLog.length - 1];
+  if(logged){
+    logged.channel = channel || 'sms';
+    // Only SMS templates carry the shared bandit stats. Crediting an email
+    // send to an SMS variant would make both numbers meaningless.
+    if(channel !== 'email' && logged.variantId !== 'custom'){
+      pooledIncrementIfBuiltin(stage, logged.variantId, 'sends');
+    }
+  }
+  saveState(STATE);
 }
 
 function doMarkSent(cid, stage){

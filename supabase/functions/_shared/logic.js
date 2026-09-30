@@ -545,54 +545,67 @@ function getEmailDraft(state, client, stage, senderName){
    Same placeholders as the SMS variants, so renderTemplate needs no changes
    and a business editing one channel is not learning a second syntax. */
 function buildDefaultEmailVariants(){
+  /* Starting points, not sending copy.
+
+     Drawn from MarketMakerMGMT's own sales document rather than invented:
+     the reminder phrasing ("Here's the meeting link for our call today"), the
+     positioning line ("not just for views, but as a tool for lead generation")
+     and the subject-line register are theirs. Writing these fresh would have
+     produced something that reads like software, and an email that reads like
+     software is the one nobody answers.
+
+     These are never sent automatically — the unattended sender skips any touch
+     the business has not written itself. They exist so the editor opens with
+     something to react to instead of a blank box, which is a much easier way
+     to write. */
   return {
     welcome: [
       {id:'ew1', builtin:true, channel:'email',
        subject:'Confirmed: {date} at {time}',
-       text:"Hi {name},\n\n{sender} here. You're on the calendar for {date} at {time}.\n\nI'll come ready to walk through what's working right now for businesses like yours, and where the quickest wins usually are. If anything specific is on your mind, reply and I'll make sure we cover it.\n\nTalk soon,\n{sender}"},
+       text:"Hi {name},\n\n{sender} here. You're locked in for {date} at {time}.\n\nWe help realtors and brands use YouTube not just for views, but as a tool for lead generation — so I'll come with specifics for your market rather than a generic pitch.\n\nIf there's one thing in particular you want covered, reply and I'll make sure we get to it.\n\n{sender}"},
       {id:'ew2', builtin:true, channel:'email',
-       subject:'{date} at {time} — a couple of things first',
-       text:"Hi {name},\n\nGood to have you booked for {date} at {time}.\n\nSo the time is useful rather than generic: is there one thing in particular you're hoping to fix? Even a sentence helps me prepare.\n\n{sender}"}
+       subject:'{date} at {time} — one question first',
+       text:"Hi {name},\n\nGood to have you booked for {date} at {time}.\n\nSo the time is actually useful: what's the one thing you'd most want fixed about your channel right now? Even a sentence helps me prepare.\n\n{sender}"}
     ],
     monday: [
       {id:'em1', builtin:true, channel:'email',
        subject:'This {weekday} at {time}',
-       text:"Hi {name},\n\nQuick note that we're on for {weekday} at {time}.\n\nNothing needed from you beforehand. If the time has stopped working, just say and I'll move it.\n\n{sender}"}
+       text:"Hi {name},\n\nI hope you had a great start to the week. Quick note that we're on for {weekday} at {time}.\n\nNothing needed from you beforehand. If the time has stopped working, just say and I'll move it.\n\n{sender}"}
     ],
     midcheckin: [
       {id:'ec1', builtin:true, channel:'email',
        subject:'Still good for {date}?',
-       text:"Hi {name},\n\nChecking in ahead of {date}. Still a good time on your end?\n\nIf something has shifted, no problem at all — reply and we'll find another slot.\n\n{sender}"}
+       text:"Hi {name},\n\nI hope your week is going well. Checking in ahead of {date} — still a good time on your end?\n\nIf something has shifted, no problem at all. Reply and we'll find another slot.\n\n{sender}"}
     ],
     dayof: [
       {id:'ed1', builtin:true, channel:'email',
        subject:'Today at {time}',
-       text:"Hi {name},\n\nWe're on today at {time}. Here's the link when you're ready:\n\n{link}\n\nSee you shortly,\n{sender}"}
+       text:"Hi {name},\n\nHere's the meeting link for our call today at {time}:\n\n{link}\n\nSee you shortly,\n{sender}"}
     ],
     hourbefore: [
       {id:'eh1', builtin:true, channel:'email',
        subject:'Starting soon — {time}',
        text:"Hi {name},\n\nWe're on in about an hour, at {time}. Link's here:\n\n{link}\n\n{sender}"}
     ],
-    revival: [
-      {id:'ev1', builtin:true, channel:'email',
-       subject:'Still on your list?',
-       text:"Hi {name},\n\nIt has been a while, so rather than guess I'll just ask: is this still something you want to look at?\n\nIf yes, send me a couple of times and I'll get us booked. If not, tell me and I'll stop landing in your inbox — either answer is genuinely fine.\n\n{sender}"}
-    ],
     recovery: [
       {id:'er1', builtin:true, channel:'email',
-       subject:'Worth picking this back up?',
-       text:"Hi {name},\n\nI know how weeks get. Is this still something you want to look at?\n\nIf yes, send me a couple of times that work and I'll get us booked. If the timing has passed, tell me that too — I'd rather know than keep chasing.\n\n{sender}"}
+       subject:'YouTube strategy ideas (spoke earlier)',
+       text:"Hi {name},\n\nI know how weeks get. Is getting your channel working still something you want to look at?\n\nIf yes, send me a couple of times that work and I'll get us booked. If the timing has passed, tell me that too — I'd rather know than keep chasing.\n\n{sender}"}
     ],
     noshow: [
       {id:'en1', builtin:true, channel:'email',
        subject:'Missed you on {date}',
        text:"Hi {name},\n\nLooks like {date} got away from us. Happens.\n\nWhat does later this week look like for you?\n\n{sender}"}
     ],
+    revival: [
+      {id:'ev1', builtin:true, channel:'email',
+       subject:'Still on your list?',
+       text:"Hi {name},\n\nIt's been a while, so rather than guess I'll just ask: is YouTube still something you're planning to take seriously this year?\n\nIf yes, send me a couple of times and I'll get us booked. If not, tell me and I'll stop landing in your inbox — either answer is genuinely fine.\n\n{sender}"}
+    ],
     rebooked: [
       {id:'erb1', builtin:true, channel:'email',
        subject:'Back on for {date} at {time}',
-       text:"Hi {name},\n\nGlad we got this back on the calendar — {date} at {time}.\n\nSame plan as before: I'll come ready with specifics for your situation.\n\n{sender}"}
+       text:"Hi {name},\n\nGlad we got this back on the calendar — {date} at {time}.\n\nSame plan as before: I'll come ready with specifics for your channel rather than a general overview.\n\n{sender}"}
     ],
     followup: [
       {id:'ef1', builtin:true, channel:'email',
@@ -601,7 +614,6 @@ function buildDefaultEmailVariants(){
     ]
   };
 }
-
 
 function buildDefaultState(){
   var variants = buildDefaultVariants();
@@ -1523,6 +1535,36 @@ function computeVariantPerformance(state, now){
   });
   out.sort(function(a, b){ return a.stage.localeCompare(b.stage); });
   return out;
+}
+
+
+/* A Gmail compose link, pre-filled and pointed at the right account.
+
+   This is how email gets used today. The provider route (send-email) needs an
+   account, a verified domain and DNS records; this needs nothing, works now,
+   and has a property the provider route does not: the message genuinely comes
+   from the salesperson's own mailbox, so it lands in their Sent folder and the
+   reply arrives where they already look.
+
+   authuser is the account to compose as. Gmail accepts an address there and
+   switches to that account, which matters for anyone signed into several —
+   sending a client email from a personal account by accident is exactly the
+   kind of small embarrassment software should prevent.
+
+   The trade is that GhostBuster cannot see the reply, so for this route the
+   reply still has to be logged by hand. Worth it: a channel that works today
+   beats one that works after a DNS change. */
+function gmailComposeUrl(toAddress, subject, body, fromAccount){
+  var params = [
+    'view=cm', 'fs=1',
+    'to=' + encodeURIComponent(toAddress || ''),
+    'su=' + encodeURIComponent(subject || ''),
+    'body=' + encodeURIComponent(body || '')
+  ];
+  // Only pins the account when one is configured; a bad authuser value sends
+  // people to an account chooser, which is worse than letting Gmail default.
+  if(fromAccount) params.unshift('authuser=' + encodeURIComponent(fromAccount));
+  return 'https://mail.google.com/mail/?' + params.join('&');
 }
 
 
@@ -3444,7 +3486,7 @@ var __LOGIC_EXPORTS__ = {
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
-  isOthersLead: isOthersLead, canEmail: canEmail,
+  isOthersLead: isOthersLead, canEmail: canEmail, gmailComposeUrl: gmailComposeUrl,
   getRecentSends: getRecentSends,
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,
   telHref: telHref, onDeckNudgeText: onDeckNudgeText,

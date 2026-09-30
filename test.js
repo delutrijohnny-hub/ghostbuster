@@ -1534,6 +1534,48 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+console.log('\n--- sending through the salesperson’s own Gmail ---');
+
+test('the link carries the recipient, subject and body', () => {
+  const u = GB.gmailComposeUrl('dana@example.com', 'Confirmed for Oct 2',
+    'Hi Dana,\n\nSee you then.\n\nJohnny', 'john@marketmakermgmt.com');
+  assert.ok(u.startsWith('https://mail.google.com/mail/'));
+  assert.ok(u.includes('to=dana%40example.com'));
+  assert.ok(u.includes('su=Confirmed%20for%20Oct%202'));
+  assert.ok(u.includes('body=Hi%20Dana'));
+  assert.ok(u.includes('view=cm'), 'without this Gmail opens the inbox, not a compose window');
+});
+
+test('it pins the sending account, so a client email cannot go from a personal one', () => {
+  const u = GB.gmailComposeUrl('a@b.com', 's', 'b', 'john@marketmakermgmt.com');
+  assert.ok(u.includes('authuser=john%40marketmakermgmt.com'));
+});
+
+test('with no account configured it lets Gmail decide', () => {
+  // A bad authuser value drops people on an account chooser, which is worse
+  // than letting Gmail use its default.
+  const u = GB.gmailComposeUrl('a@b.com', 's', 'b', null);
+  assert.ok(!u.includes('authuser='));
+});
+
+test('a body with newlines and symbols survives the round trip', () => {
+  const body = 'Hi Dana,\n\nHere is the link: https://meet.google.com/a-b-c?x=1&y=2\n\nJohnny';
+  const u = GB.gmailComposeUrl('a@b.com', 'Subject & more', body, null);
+  const parsed = new URL(u);
+  assert.strictEqual(parsed.searchParams.get('body'), body, 'the email must arrive as written');
+  assert.strictEqual(parsed.searchParams.get('su'), 'Subject & more');
+});
+
+test('the examples came from the business, not from invention', () => {
+  // Written fresh they read like software, which is the one thing nobody
+  // answers. These carry the phrasing from their own sales document.
+  const e = GB.buildDefaultEmailVariants();
+  assert.ok(/meeting link for our call/i.test(e.dayof[0].text),
+    'the day-of email should use their own reminder phrasing');
+  assert.ok(/not just for views/i.test(e.welcome[0].text),
+    'the welcome should carry their own positioning line');
+});
+
 console.log('\n--- your emails, GhostBuster’s timing ---');
 
 test('the unattended sender will not mail a built-in template', () => {
