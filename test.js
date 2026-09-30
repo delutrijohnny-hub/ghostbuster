@@ -1826,6 +1826,33 @@ test('a fully worked run-up reports complete', () => {
   assert.strictEqual(p.nextStage, null);
 });
 
+console.log('\n--- site routing ---');
+
+test('the app lives at /app and the landing page owns the root', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  const landing = fs.readFileSync(path.join(__dirname, 'hosted', 'index.html'), 'utf8');
+  assert.ok(app.includes('id="app-root"'), 'app.html should be the CRM shell');
+  assert.ok(app.includes('src="logic.js"') && app.includes('src="app.js"'),
+    'app.html must still load its scripts from the same directory');
+  assert.ok(!landing.includes('id="app-root"'), 'index.html should be the landing page, not the app');
+  assert.ok(landing.includes('href="/app"'), 'the landing page must link to the app');
+});
+
+test('cleanUrls is configured, or /app 404s in production', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'vercel.json'), 'utf8'));
+  assert.strictEqual(cfg.cleanUrls, true,
+    'without this, /app does not resolve to app.html and every sign-in link breaks');
+});
+
+test('the landing page does not promise anything that is not built', () => {
+  const landing = fs.readFileSync(path.join(__dirname, 'hosted', 'index.html'), 'utf8').toLowerCase();
+  // Email sending, billing and team features do not exist yet. Claiming them
+  // on the page someone signs up from is the fastest way to lose their trust.
+  ['email campaign', 'send emails', 'unlimited users', 'free trial', 'per month', 'integrations with']
+    .forEach(claim => assert.ok(!landing.includes(claim),
+      'landing page claims "' + claim + '", which is not built yet'));
+});
+
 console.log('\n--- industry templates ---');
 
 test('every template is a valid, workable configuration', () => {
