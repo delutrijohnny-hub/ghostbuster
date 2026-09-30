@@ -1534,6 +1534,69 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+console.log('\n--- a bounced address is a stop, not a retry ---');
+
+test('a healthy address can be emailed', () => {
+  assert.strictEqual(GB.canEmail(freshClient({email:'a@b.com'})), true);
+  assert.strictEqual(GB.canEmail(freshClient({email:'a@b.com', emailStatus:'ok'})), true);
+});
+
+test('bounced and complained addresses cannot', () => {
+  // Continuing to mail a dead box is how a sending domain's reputation goes,
+  // and that failure is not contained to one contact.
+  assert.strictEqual(GB.canEmail(freshClient({email:'a@b.com', emailStatus:'bounced'})), false);
+  assert.strictEqual(GB.canEmail(freshClient({email:'a@b.com', emailStatus:'complained'})), false);
+  assert.strictEqual(GB.canEmail(freshClient({email:'a@b.com', emailStatus:'unsubscribed'})), false);
+});
+
+test('no address at all is not emailable either', () => {
+  assert.strictEqual(GB.canEmail(freshClient({email:''})), false);
+  assert.strictEqual(GB.canEmail(null), false);
+});
+
+test('contacts default to emailable, so nothing existing is silently blocked', () => {
+  const c = GB.sanitizeClient({id:'x', name:'X', phone:'2135550100', email:'a@b.com'});
+  assert.strictEqual(c.emailStatus, 'ok');
+  assert.strictEqual(GB.canEmail(c), true);
+});
+
+{
+  const hook = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'email-webhook', 'index.ts'), 'utf8');
+
+  test('the webhook refuses to act without a verified signature', () => {
+    // An unverified webhook is an open endpoint that can mark any contact as
+    // having replied, or blacklist any address.
+    assert.ok(hook.includes('RESEND_WEBHOOK_SECRET'), 'must require a signing secret');
+    assert.ok(/if \(!WEBHOOK_SECRET\)/.test(hook), 'and refuse outright when it is absent');
+    assert.ok(hook.includes('wh.verify('), 'must verify, not merely receive');
+    assert.ok(hook.includes('Signature did not verify'), 'and reject on failure');
+  });
+
+  test('it records the raw payload before interpreting anything', () => {
+    const logAt = hook.indexOf("/email_events");
+    const actAt = hook.indexOf("email.delivered");
+    assert.ok(logAt > 0 && logAt < actAt,
+      'attribution involves judgement, so the evidence must be kept first');
+  });
+
+  test('a bounce stops future sending rather than just noting the failure', () => {
+    assert.ok(hook.includes("email_status: status === 'bounced'"),
+      'marking the message is not enough; the address has to be taken out of use');
+  });
+
+  test('a reply marks the message reviewed, not just answered', () => {
+    // The whole point: a reply GhostBuster saw itself needs no human
+    // confirmation afterwards.
+    assert.ok(/responded: true/.test(hook) && /reviewed: true/.test(hook));
+  });
+
+  test('an unrecognised sender is logged and ignored, not guessed at', () => {
+    assert.ok(hook.includes('sender not recognised'),
+      'attributing a reply to the wrong contact teaches the bandit the wrong lesson');
+  });
+}
+
 console.log('\n--- clearing an old backlog honestly ---');
 
 function staleState(){

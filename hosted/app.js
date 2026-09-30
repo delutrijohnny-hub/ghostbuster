@@ -347,7 +347,7 @@ function buildTouchCard(client, stage, now){
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
   // Only offered when it can actually work: an address on file and sending
   // switched on. A button that always fails is worse than no button.
-  if(client.email && STATE.emailEnabled){
+  if(canEmail(client) && STATE.emailEnabled){
     actions.appendChild(h('button',{class:'btn btn-sm','data-action':'compose-email',
       'data-cid':client.id,'data-stage':stage,title:'Email ' + client.name + ' instead'},['✉ Email']));
   }
@@ -646,7 +646,7 @@ function renderGhostToday(){
     // suggestion, not a restriction.
     if(digits && rec.action !== 'call') acts.appendChild(h('a',{href: telHref(c.phone)},['Call']));
     if(smsTo && rec.action !== 'text' && rec.action !== 'reply') acts.appendChild(h('a',{href: smsTo},['Text']));
-    if(c.email && STATE.emailEnabled){
+    if(canEmail(c) && STATE.emailEnabled){
       acts.appendChild(h('button',{'data-action':'compose-email','data-cid':c.id,
         'data-stage': rec.stage || 'custom'},['Email']));
     }
@@ -1745,6 +1745,12 @@ function openEmailComposer(clientId, stage){
   if(!c) return;
   if(!c.email){
     showToast('No email address on file for ' + c.name + '.');
+    return;
+  }
+  if(!canEmail(c)){
+    showToast(c.name + '’s address ' + (c.emailStatus === 'complained'
+      ? 'reported a previous email as junk. Sending again risks the whole domain.'
+      : 'bounced. Fix the address on their record first.'));
     return;
   }
   var draft = getEmailDraft(STATE, c, stage || 'welcome', STATE.senderName) ||

@@ -110,10 +110,18 @@ Deno.serve(async (req) => {
 
   // Ownership check. Service role bypasses RLS, so the caller's right to this
   // contact has to be proven explicitly rather than assumed.
-  const cRes = await db(`clients?id=eq.${clientId}&select=id,name,email,user_id`);
+  const cRes = await db(`clients?id=eq.${clientId}&select=id,name,email,user_id,email_status`);
   const client = (await cRes.json())?.[0];
   if (!client || client.user_id !== userId) return json({ error: 'Not your contact' }, 403);
   if (!client.email) return json({ error: 'That contact has no email address.', code: 'no_email' }, 400);
+  // A bounce or a complaint is a stop, not a retry. Sending anyway damages the
+  // domain's reputation, which degrades delivery for every other contact.
+  if ((client.email_status || 'ok') !== 'ok') {
+    return json({
+      error: `That address previously ${client.email_status === 'complained' ? 'reported email as junk' : 'bounced'}.`,
+      code: 'bad_address',
+    }, 400);
+  }
 
   const sent = await sendViaResend({
     from, to: client.email, subject, text,

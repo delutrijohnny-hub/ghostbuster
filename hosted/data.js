@@ -103,6 +103,7 @@ async function loadState(){
       id: row.id,
       googleEventId: row.google_event_id,
       organizerEmail: row.organizer_email,
+      emailStatus: row.email_status || 'ok',
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
@@ -270,6 +271,7 @@ function rowClient(c, uid){
   return {
     id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
     organizer_email: c.organizerEmail || null,
+    email_status: c.emailStatus || 'ok',
     name: c.name, phone: c.phone, email: c.email,
     youtube_link: c.youtubeLink, meet_link: c.meetLink,
     call_date_time: c.callDateTime, booked_date: c.bookedDate,

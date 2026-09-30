@@ -597,6 +597,7 @@ function sanitizeClient(raw, fallbackId){
     id: id,
     googleEventId: typeof raw.googleEventId === 'string' ? raw.googleEventId : null,
     organizerEmail: typeof raw.organizerEmail === 'string' ? raw.organizerEmail : null,
+    emailStatus: typeof raw.emailStatus === 'string' ? raw.emailStatus : 'ok',
     name: (typeof raw.name === 'string' && raw.name.trim()) ? raw.name.trim() : 'Unknown',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
     email: typeof raw.email === 'string' ? raw.email : '',
@@ -1475,6 +1476,22 @@ function computeVariantPerformance(state, now){
   });
   out.sort(function(a, b){ return a.stage.localeCompare(b.stage); });
   return out;
+}
+
+
+/* Can this contact still be emailed?
+
+   A bounce is not a delivery problem to retry, it is an address to stop using.
+   Continuing to send to a dead mailbox is how a sending domain's reputation is
+   destroyed, and that failure is not contained: once the domain is distrusted,
+   mail to every other contact starts landing in spam too.
+
+   A complaint is stronger still — somebody pressed "this is junk". Mailing
+   them again is both pointless and the fastest route to being blocked
+   outright. */
+function canEmail(client){
+  if(!client || !client.email) return false;
+  return (client.emailStatus || 'ok') === 'ok';
 }
 
 
@@ -3379,7 +3396,7 @@ var __LOGIC_EXPORTS__ = {
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
-  isOthersLead: isOthersLead,
+  isOthersLead: isOthersLead, canEmail: canEmail,
   getRecentSends: getRecentSends,
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,
   telHref: telHref, onDeckNudgeText: onDeckNudgeText,

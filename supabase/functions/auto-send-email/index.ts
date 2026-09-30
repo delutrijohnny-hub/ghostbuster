@@ -116,7 +116,13 @@ async function planForUser(settings: any, now: Date) {
     });
 
     if (client.ignored) { skip('archived'); continue; }
-    if (!client.email) { skip('no email address'); continue; }
+    // canEmail covers bounced and complained addresses too. Unattended sending
+    // to a dead mailbox is exactly how a sending domain's reputation goes, and
+    // by definition nobody is watching to notice.
+    if (!GB.canEmail(client)) {
+      skip(client.email ? 'address bounced or complained' : 'no email address');
+      continue;
+    }
 
     // computeDue already honours the reply pause and per-stage snoozes.
     const due = GB.computeDue(client, now);
