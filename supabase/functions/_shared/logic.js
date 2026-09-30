@@ -3361,22 +3361,54 @@ function getTextTodayList(state, now, searchQuery){
   // seeing them twice in the morning list is the same sloppiness by another
   // route. Keep whichever row's touch ranks highest.
   items = dedupeByPerson(items);
-  items.sort(function(a,b){
-    function rank(it){
-      if(it.stage === 'welcome' && !hasSentStage(it.client,'welcome')) return 0;
-      if(it.stage === 'rebooked' && !hasSentStage(it.client,'rebooked')) return 0;
-      if(it.stage === 'followup' && !hasSentStage(it.client,'followup')) return 0;
-      if(it.stage === 'noshow') return 1;
-      return 2;
-    }
-    var r = rank(a) - rank(b);
-    if(r !== 0) return r;
-    var da = safeDate(a.client.callDateTime), db = safeDate(b.client.callDateTime);
-    return (da?da.getTime():Infinity) - (db?db.getTime():Infinity);
-  });
+  items.sort(byTouchOrder);
   return items;
 }
 
+
+/* The order the morning list reads in.
+
+   It used to have three buckets: first-time welcomes, no-shows, and
+   everything else. That last one held day-of, hour-before, midpoint, Monday,
+   recovery and revival together, sorted by call date — so a recovery nudge to
+   someone who went cold in August sat between two day-of reminders, and the
+   list looked like people thrown at a page in no order.
+
+   Grouped by what the message IS, because that is how they get sent: you
+   write four introductions in the same frame of mind, not one introduction,
+   one reminder, one apology, one introduction.
+
+   Reading down the list is the arc of a booking — say hello, remind them as
+   the call approaches, rescue the ones who missed, then chase the cold ones
+   last. Time-critical calls are not at risk from this: imminent ones have
+   their own On deck panel with a live countdown. */
+var TOUCH_LIST_ORDER = [
+  // A first hello, and the two kinds of "we're back on".
+  'welcome', 'rebooked', 'followup',
+  // Reminders, in the order the cadence walks toward the call.
+  'monday', 'midcheckin', 'dayof', 'hourbefore',
+  // They missed it — the rescue window is short, so before the cold chasing.
+  'noshow',
+  // Chasing. Last, deliberately: these are the least time-bound and the most
+  // draining to write, and they should not be the first thing seen.
+  'recovery', 'revival'
+];
+
+function touchListRank(stage){
+  var i = TOUCH_LIST_ORDER.indexOf(stage);
+  // A stage from a custom sequence still has to land somewhere sensible:
+  // after the known reminders, before the cold chasing.
+  return i === -1 ? TOUCH_LIST_ORDER.indexOf('noshow') : i;
+}
+
+function byTouchOrder(a, b){
+  var r = touchListRank(a.stage) - touchListRank(b.stage);
+  if(r !== 0) return r;
+  // Within a group, soonest call first — so the day-of block reads in the
+  // order the calls actually happen.
+  var da = safeDate(a.client.callDateTime), db = safeDate(b.client.callDateTime);
+  return (da ? da.getTime() : Infinity) - (db ? db.getTime() : Infinity);
+}
 
 function byCallDate(a,b){ var da=safeDate(a.callDateTime), db=safeDate(b.callDateTime); return (da?da.getTime():0)-(db?db.getTime():0); }
 
@@ -3856,6 +3888,7 @@ var __LOGIC_EXPORTS__ = {
   getAuthoredEmailDraft: getAuthoredEmailDraft, stageTiming: stageTiming, emailEditableStages: emailEditableStages,
   calendarHealth: calendarHealth, describeCalendarHealth: describeCalendarHealth,
   STALE_AFTER_HOURS: STALE_AFTER_HOURS,
+  TOUCH_LIST_ORDER: TOUCH_LIST_ORDER, touchListRank: touchListRank, byTouchOrder: byTouchOrder,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,

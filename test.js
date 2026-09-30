@@ -1676,6 +1676,93 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- the morning list reads in an order ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const soon = (d) => new Date(Date.now() + d * 86400000).toISOString();
+  let ph = 3000;
+  const mk = (name, over) => GB.sanitizeClient(Object.assign({
+    id: name, name: name, phone: '21355' + (++ph), timezone: 'America/New_York',
+    status: 'Booked', bookedDate: ago(30)
+  }, over));
+
+  test('welcomes come first and the cold chasing comes last', () => {
+    // Johnny's ask, directly: a first hello should open the list, and a
+    // recovery nudge should not be sitting between two day-of reminders.
+    const items = [
+      {stage: 'recovery',   client: mk('cold')},
+      {stage: 'dayof',      client: mk('today')},
+      {stage: 'welcome',    client: mk('new')},
+      {stage: 'noshow',     client: mk('missed')},
+      {stage: 'midcheckin', client: mk('mid')},
+    ];
+    items.sort(GB.byTouchOrder);
+    assert.strictEqual(items[0].stage, 'welcome');
+    assert.strictEqual(items[items.length - 1].stage, 'recovery');
+  });
+
+  test('revival sits after recovery — it is the coldest thing in the list', () => {
+    const items = [{stage: 'revival', client: mk('ancient')}, {stage: 'recovery', client: mk('cold')}];
+    items.sort(GB.byTouchOrder);
+    assert.deepStrictEqual(items.map(i => i.stage), ['recovery', 'revival']);
+  });
+
+  test('the reminders read in the order the cadence walks toward the call', () => {
+    const items = [
+      {stage: 'hourbefore', client: mk('h')},
+      {stage: 'monday',     client: mk('m')},
+      {stage: 'dayof',      client: mk('d')},
+      {stage: 'midcheckin', client: mk('c')},
+    ];
+    items.sort(GB.byTouchOrder);
+    assert.deepStrictEqual(items.map(i => i.stage),
+      ['monday', 'midcheckin', 'dayof', 'hourbefore']);
+  });
+
+  test('inside a group, the soonest call comes first', () => {
+    // So the day-of block reads in the order the calls actually happen.
+    const at = (h) => { const d = new Date(); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+    const items = [
+      {stage: 'dayof', client: mk('four',  {callDateTime: at(16)})},
+      {stage: 'dayof', client: mk('nine',  {callDateTime: at(9)})},
+      {stage: 'dayof', client: mk('noon',  {callDateTime: at(12)})},
+    ];
+    items.sort(GB.byTouchOrder);
+    assert.deepStrictEqual(items.map(i => i.client.name), ['nine', 'noon', 'four']);
+  });
+
+  test('a stage from a custom sequence still lands somewhere sensible', () => {
+    // Not dumped at the top above the welcomes, and not below the cold
+    // chasing where it would never be seen.
+    const items = [
+      {stage: 'recovery',     client: mk('cold')},
+      {stage: 'second_visit', client: mk('custom')},
+      {stage: 'welcome',      client: mk('new')},
+    ];
+    items.sort(GB.byTouchOrder);
+    assert.strictEqual(items[0].stage, 'welcome');
+    assert.strictEqual(items[items.length - 1].stage, 'recovery');
+    assert.strictEqual(items[1].stage, 'second_visit');
+  });
+
+  test('the real list comes out grouped, not interleaved', () => {
+    // End to end through getTextTodayList, not just the comparator.
+    const clients = {};
+    const add = (c) => { clients[c.id] = c; };
+    add(mk('newA',  {callDateTime: soon(6)}));
+    add(mk('newB',  {callDateTime: soon(5)}));
+    add(mk('coldA', {status: 'Ghosted', callDateTime: ago(40), bookedDate: ago(90)}));
+    const state = {clients, variants: GB.buildDefaultVariants(), variantStats: {},
+                   todos: [], epsilon: 0.2, myCalendars: []};
+    const list = GB.getTextTodayList(state, new Date(), '');
+    const ranks = list.map(it => GB.touchListRank(it.stage));
+    const sorted = ranks.slice().sort((a, b) => a - b);
+    assert.deepStrictEqual(ranks, sorted,
+      'the list must come out already grouped: ' + JSON.stringify(list.map(i => i.stage)));
+  });
+}
+
 console.log('\n--- end of day closes the books, it does not repeat the day ---');
 
 {

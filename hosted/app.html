@@ -550,6 +550,15 @@ td.score-cell{width:1%;white-space:nowrap;}
 .cal-health .spacer{flex:1;}
 .cal-health .btn{background:#fff;border-color:#fff;color:#111;font-weight:800;}
 .cal-health.hidden{display:none;}
+/* Divider between runs of the same kind of message on the Today list. Quiet
+   on purpose: it is a signpost, not a headline, and it sits between cards
+   that already carry all the colour. */
+.touch-group{display:flex;align-items:center;gap:8px;margin:16px 0 7px;}
+.touch-group:first-child{margin-top:2px;}
+.touch-group-name{font-size:10.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--ink-faint);}
+.touch-group-count{font-size:10.5px;font-weight:700;color:var(--ink-faint);
+  background:var(--border);border-radius:9px;padding:1px 7px;}
 /* Phone layout for the library, the picker and the calendar notice.
 
    Reasoned from the widths rather than eyeballed, because a local file cannot

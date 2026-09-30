@@ -545,7 +545,26 @@ function renderCallsBoard(){
     if(!textToday.length){
       todayCol.appendChild(UI.callsSearch.trim() ? h('div',{class:'empty-note'},['No matches for "' + UI.callsSearch.trim() + '".']) : buildBustedPanel());
     }
-    textToday.forEach(function(it){ todayCol.appendChild(buildTouchCard(it.client, it.stage, now)); });
+    /* A heading each time the kind of message changes.
+
+       Sorting alone groups them, but a run of cards with no divider still
+       reads as one undifferentiated pile — which is the complaint. The
+       heading says what the next few are and how many, so the list can be
+       worked a block at a time: four introductions, then the reminders, then
+       the chasing. */
+    var lastStage = null;
+    textToday.forEach(function(it, i){
+      if(it.stage !== lastStage){
+        var runLength = 0;
+        for(var j = i; j < textToday.length && textToday[j].stage === it.stage; j++) runLength++;
+        todayCol.appendChild(h('div',{class:'touch-group'},[
+          h('span',{class:'touch-group-name'},[touchLabel(it.stage)]),
+          h('span',{class:'touch-group-count'},[String(runLength)])
+        ]));
+        lastStage = it.stage;
+      }
+      todayCol.appendChild(buildTouchCard(it.client, it.stage, now));
+    });
   }
   var countToday = el('count-today'); if(countToday) countToday.textContent = '(' + textToday.length + ')';
 }
