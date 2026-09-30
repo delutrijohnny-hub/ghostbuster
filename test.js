@@ -1534,6 +1534,71 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+console.log('\n--- clearing an old backlog honestly ---');
+
+function staleState(){
+  const st = GB.buildDefaultState();
+  st.clients['old1'] = freshClient({id:'old1', name:'Old1', phone:'2135550001', status:'Booked',
+    bookedDate: isoDaysAgo(120), callDateTime: isoDaysAgo(60)});
+  st.clients['old2'] = freshClient({id:'old2', name:'Old2', phone:'2135550002', status:'Booked',
+    bookedDate: isoDaysAgo(120), callDateTime: isoDaysAgo(45)});
+  st.clients['recent'] = freshClient({id:'recent', name:'Recent', phone:'2135550003', status:'Booked',
+    bookedDate: isoDaysAgo(20), callDateTime: isoDaysAgo(3)});
+  return st;
+}
+
+test('only the genuinely old ones are batched', () => {
+  const st = staleState();
+  const res = GB.resolveStaleCalls(st, 'archive', 30, new Date());
+  assert.strictEqual(res.count, 2, 'a call from three days ago is still worth answering properly');
+  assert.strictEqual(st.clients['recent'].ignored, false);
+});
+
+test('archiving asserts nothing about what happened', () => {
+  const st = staleState();
+  GB.resolveStaleCalls(st, 'archive', 30, new Date());
+  assert.strictEqual(st.clients['old1'].ignored, true);
+  assert.ok(!GB.isWon(st.clients['old1'].status) && !GB.isMissed(st.clients['old1'].status),
+    'archiving must not invent an outcome — unknown stays unknown');
+});
+
+test('archived calls stay out of the show rate rather than dragging it down', () => {
+  const st = staleState();
+  st.clients['good'] = freshClient({id:'good', name:'Good', phone:'2135550004',
+    status:'Completed', callDateTime: isoDaysAgo(10)});
+  const before = GB.computeStats(st, 'all', new Date()).showUpRate;
+  GB.resolveStaleCalls(st, 'archive', 30, new Date());
+  const after = GB.computeStats(st, 'all', new Date()).showUpRate;
+  assert.strictEqual(before, after,
+    'they were already excluded as unknown; archiving should not move the number');
+});
+
+test('marking them no-show does move the number, which is why it is a choice', () => {
+  const st = staleState();
+  st.clients['good'] = freshClient({id:'good', name:'Good', phone:'2135550004',
+    status:'Completed', callDateTime: isoDaysAgo(10)});
+  const before = GB.computeStats(st, 'all', new Date()).showUpRate;
+  GB.resolveStaleCalls(st, 'noshow', 30, new Date());
+  const after = GB.computeStats(st, 'all', new Date()).showUpRate;
+  assert.ok(after < before, 'asserting a guess changes the statistic, so the user has to make it');
+});
+
+test('a batch answer lands exactly like a manual one', () => {
+  const st = staleState();
+  st.pendingEvents = [];
+  GB.resolveStaleCalls(st, 'showed', 30, new Date());
+  assert.ok(GB.isWon(st.clients['old1'].status));
+  assert.ok(st.pendingEvents.some(e => e.kind === 'outcome.logged'),
+    'must route through setOutcome, not write status directly');
+});
+
+test('clearing the backlog empties the prompt', () => {
+  const st = staleState();
+  assert.strictEqual(GB.getUnloggedCalls(st, new Date()).length, 3);
+  GB.resolveStaleCalls(st, 'archive', 30, new Date());
+  assert.strictEqual(GB.getUnloggedCalls(st, new Date()).length, 1, 'only the recent one is left');
+});
+
 console.log('\n--- the analytics agree with each other ---');
 
 test('the unlogged count matches the list it links to', () => {

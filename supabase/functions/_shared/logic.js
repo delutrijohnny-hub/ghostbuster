@@ -3176,6 +3176,44 @@ function weekRangeLabel(anchor){
    It only ever grew because the question was asked somewhere you had to
    choose to go. Exposed here so it can be asked on the screen you already
    open. */
+/* Resolve a batch of old, unanswered calls in one go.
+
+   Anything past a month is beyond honest recall — you will not remember
+   whether a particular call in July happened. Answering those one at a time is
+   guesswork dressed up as diligence, so this offers the three answers that are
+   actually defensible at that distance:
+
+     showed / missed  a judgement applied deliberately across the batch
+     archive          "I do not know", which is the honest answer for most of
+                      them and the only one that asserts nothing
+
+   Archiving is not the same as a no-show. An unanswered call is already left
+   out of the show rate — unknown, not a failure — so archiving keeps the
+   number honest while clearing the list. Marking them missed would bias the
+   rate down on a guess; marking them showed would bias it up. Which is why
+   this asks rather than picking. */
+function resolveStaleCalls(state, mode, olderThanDays, now){
+  now = now || new Date();
+  olderThanDays = (typeof olderThanDays === 'number') ? olderThanDays : 30;
+  var targets = getUnloggedCalls(state, now).filter(function(it){
+    return it.daysAgo >= olderThanDays;
+  });
+  targets.forEach(function(it){
+    if(mode === 'archive'){
+      it.client.ignored = true;
+      recordEvent(state, it.client.id, 'contact.archived',
+        {reason: 'stale unlogged call', daysAgo: it.daysAgo});
+    } else {
+      // Routed through setOutcome so it lands exactly as a manual answer
+      // would, including the stage change and the event.
+      setOutcome(state, it.client.id, mode === 'showed' ? 'Showed' : 'No-show', now);
+    }
+  });
+  saveState(state);
+  return {mode: mode, count: targets.length, olderThanDays: olderThanDays};
+}
+
+
 function getUnloggedCalls(state, now){
   now = now || new Date();
   var out = [];
@@ -3339,7 +3377,7 @@ var __LOGIC_EXPORTS__ = {
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
-  getUnloggedCalls: getUnloggedCalls,
+  getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
   isOthersLead: isOthersLead,
   getRecentSends: getRecentSends,

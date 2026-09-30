@@ -2492,6 +2492,18 @@ document.addEventListener('click', function(ev){
     case 'focus-exit':
       exitFocusMode();
       break;
+    case 'resolve-stale': {
+      lastSnapshot = snapshot();
+      var mode = target.getAttribute('data-mode');
+      var res = resolveStaleCalls(STATE, mode, 30, new Date());
+      renderEndOfDay();
+      renderAll();
+      showToast(res.count + ' old ' + (res.count === 1 ? 'call' : 'calls') + ' ' +
+        (mode === 'archive' ? 'archived — they stay out of your rates either way'
+                            : 'marked ' + (mode === 'showed' ? 'showed' : 'no-show')) + '.',
+        lastSnapshot);
+      break;
+    }
     case 'eod-outcome':
       lastSnapshot = snapshot();
       setOutcome(STATE, cid, target.getAttribute('data-status'));
@@ -2923,8 +2935,20 @@ function renderEndOfDay(){
   html += section('Calls today with no outcome', 'log these while you remember them',
     groups['today-no-outcome'].map(function(it){ return outcomeRow(it.client, false); }).join(''));
 
-  html += section('Overdue, never logged', 'these are skewing your show rate',
-    groups['overdue-unlogged'].map(function(it){ return outcomeRow(it.client, true); }).join(''));
+  // Anything past a month is beyond recall, so it gets a batch answer rather
+  // than a row-by-row guess. Offered only when there is actually a pile.
+  var stale = getUnloggedCalls(STATE, new Date()).filter(function(it){ return it.daysAgo >= 30; });
+  var staleBar = stale.length >= 3
+    ? '<div class="eod-bulk">' +
+      '<span>' + stale.length + ' of these are over a month old — you will not remember them individually.</span>' +
+      '<button class="eod-btn" data-action="resolve-stale" data-mode="archive">Archive them</button>' +
+      '<button class="eod-btn bad" data-action="resolve-stale" data-mode="noshow">All no-show</button>' +
+      '<button class="eod-btn ok" data-action="resolve-stale" data-mode="showed">All showed</button>' +
+      '</div>'
+    : '';
+
+  html += section('Overdue, never logged', 'these are left out of your show rate until you answer',
+    staleBar + groups['overdue-unlogged'].map(function(it){ return outcomeRow(it.client, true); }).join(''));
 
   html += section('Showed, but no result recorded', '',
     groups['no-close'].map(function(it){
