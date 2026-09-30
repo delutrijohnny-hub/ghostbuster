@@ -542,6 +542,14 @@ td.score-cell{width:1%;white-space:nowrap;}
 .save-health strong{font-weight:800;}
 .save-health .btn{background:#fff;border-color:#fff;color:var(--red);font-weight:800;}
 .save-health.hidden{display:none;}
+.cal-health{position:sticky;top:0;z-index:59;display:flex;align-items:center;gap:12px;
+  flex-wrap:wrap;padding:9px 16px;font-size:12.5px;line-height:1.45;
+  background:var(--amber,#8a5a00);color:#fff;}
+.cal-health.severe{background:var(--red);}
+.cal-health strong{font-weight:800;}
+.cal-health .spacer{flex:1;}
+.cal-health .btn{background:#fff;border-color:#fff;color:#111;font-weight:800;}
+.cal-health.hidden{display:none;}
 @media (max-width:560px){
   .focus-who h2{font-size:20px;}
   .focus-acts{flex-direction:column;align-items:stretch;}
@@ -804,6 +812,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <div id="app-root" class="hidden">
 
 <div id="save-health" class="save-health hidden" role="alert"></div>
+<!-- A dead calendar connection stops every other thing in the app from
+     working, so it sits above the fold rather than inside the collapsed
+     alert summary. -->
+<div id="calendar-health" class="cal-health hidden" role="status"></div>
 
 <header class="app-header">
   <div class="brand">

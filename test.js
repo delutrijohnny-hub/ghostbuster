@@ -1676,6 +1676,109 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- a dead calendar connection says so ---');
+
+{
+  const ago = (hrs) => new Date(Date.now() - hrs * 3600000).toISOString();
+  const H = (conns) => GB.calendarHealth(conns, new Date());
+
+  test('a calendar syncing normally shows nothing at all', () => {
+    // A healthy account must not carry a warning bar. This is most of the
+    // time, and a bar that is always there is furniture.
+    assert.strictEqual(H([{calendarId:'a', lastSync: ago(3)}]).state, 'ok');
+    assert.strictEqual(GB.describeCalendarHealth(H([{calendarId:'a', lastSync: ago(3)}])), null);
+  });
+
+  test('a sync gap longer than the cron interval is a failure, not a quiet week', () => {
+    // The cron runs twice daily, so 36h+ means a sync FAILED rather than was
+    // not due. This is the gap that went unnoticed for days.
+    assert.strictEqual(H([{calendarId:'a', lastSync: ago(20)}]).state, 'ok',
+      'a normal overnight gap must not cry wolf');
+    assert.strictEqual(H([{calendarId:'a', lastSync: ago(40)}]).state, 'stale');
+  });
+
+  test('the message says what stopped and what to press, not "token expired"', () => {
+    const info = GB.describeCalendarHealth(H([{calendarId:'a', lastSync: ago(24 * 5)}]));
+    assert.strictEqual(info.severity, 'error');
+    assert.ok(/5 days/.test(info.text), 'name the gap: ' + info.text);
+    assert.ok(/[Rr]econnect/.test(info.action + info.text), 'say what to do: ' + info.text);
+    assert.ok(!/token|oauth|refresh_token|401/i.test(info.text),
+      'nobody outside this codebase knows what that means: ' + info.text);
+  });
+
+  test('a freshly connected calendar is given time before it is called broken', () => {
+    // Connected seconds ago and not yet synced is normal, not a fault.
+    assert.strictEqual(H([{calendarId:'a', connectedAt: ago(0.2)}]).state, 'ok');
+    // Connected yesterday and still never synced is a real problem.
+    const info = GB.describeCalendarHealth(H([{calendarId:'a', connectedAt: ago(30)}]));
+    assert.ok(/never finished a sync/.test(info.text), info.text);
+  });
+
+  test('one dead calendar out of two is reported without claiming both are down', () => {
+    const h = H([{calendarId:'work', lastSync: ago(2)}, {calendarId:'old', lastSync: ago(300)}]);
+    assert.strictEqual(h.state, 'partial');
+    const info = GB.describeCalendarHealth(h);
+    assert.ok(/One of your calendars/.test(info.text), info.text);
+  });
+
+  test('an account with no calendar connected is not nagged about syncing', () => {
+    // They get the onboarding prompt instead; two messages about the same
+    // thing is worse than one.
+    assert.strictEqual(H([]).state, 'none');
+    assert.strictEqual(GB.describeCalendarHealth(H([])), null);
+    assert.strictEqual(GB.describeCalendarHealth(H(null)), null);
+  });
+
+  test('every button in the app points at a handler that exists', () => {
+    /* The notice's button first said 'sync-calendar'. The handler is
+       'sync-calendar-now'. That would have shipped a warning bar whose only
+       button did nothing — worse than no bar, because it tells someone the
+       fix is one click away and then refuses.
+
+       The DOM stub is a noop proxy, so rendered markup cannot be read back to
+       catch this. It is checkable statically, and worth checking for every
+       button rather than just this one. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+
+    const used = new Set();
+    /* Two syntaxes, both real, matched precisely.
+
+       A first attempt matched only `'data-action': 'literal'` and PASSED on
+       the exact bug it was written for, because that action is chosen by a
+       ternary and the literal is not adjacent to the key. A second attempt
+       took every kebab-case literal on the line and drowned in tag names and
+       CSS classes. So: the direct value, and the two branches of a ternary. */
+    for (const m of app.matchAll(/'data-action'\s*:\s*'([a-z0-9-]+)'/g)) used.add(m[1]);
+    for (const m of app.matchAll(
+        /'data-action'\s*:[^,\n]*?\?\s*'([a-z0-9-]+)'\s*:\s*'([a-z0-9-]+)'/g)) {
+      used.add(m[1]); used.add(m[2]);
+    }
+    for (const m of app.matchAll(/data-action=\\?"([a-z0-9-]+)/g)) used.add(m[1]);
+    for (const m of html.matchAll(/data-action="([a-z0-9-]+)"/g)) used.add(m[1]);
+
+    const handled = new Set();
+    for (const m of app.matchAll(/case '([a-z0-9-]+)'/g)) handled.add(m[1]);
+    for (const m of app.matchAll(/=== '([a-z0-9-]+)'/g)) handled.add(m[1]);
+
+    assert.ok(used.size > 50, 'the scan found almost no buttons — has the markup style changed?');
+    assert.ok(used.has('sync-calendar-now'), 'sanity: the calendar notice\'s own action should be found');
+
+    const dead = [...used].filter(a => !handled.has(a)).sort();
+    assert.deepStrictEqual(dead, [],
+      'button(s) point at an action no handler implements: ' + dead.join(', '));
+  });
+
+  test('the full render pass still works with a dead connection', () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      STATE.calendarConnections = [{calendarId:'a@b.com', lastSync: '${ago(500)}'}];
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
+  });
+}
+
 console.log('\n--- nothing about one customer is hard-coded as everyone’s ---');
 
 test('the contact email is the outside guest, not a colleague on the booking', () => {

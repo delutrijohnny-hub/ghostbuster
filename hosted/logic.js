@@ -819,6 +819,100 @@ function exportFilename(base, when){
   return safe + '-' + stamp + '.txt';
 }
 
+
+/* Is the calendar still actually syncing?
+
+   Nobody should learn their calendar connection died by noticing, weeks
+   later, that no new bookings arrived. That is what happened to three people
+   in a row, and "press Sync and read the message" only helps someone who
+   already suspects something is wrong.
+
+   The reason this matters more than it should: while the Google consent
+   screen is in Testing mode, Google expires every refresh token after 7 days.
+   So a working account silently stops syncing roughly weekly, through no
+   fault of anyone using it. Pushing the consent screen to production is the
+   real fix and it is not a code change — but until it happens, and for the
+   ordinary revoked-access case afterwards, this is what turns a silent
+   outage into a sentence on screen.
+
+   The cron runs twice a day, so a gap beyond STALE_AFTER_HOURS means a sync
+   has failed rather than merely not been due. */
+var STALE_AFTER_HOURS = 36;
+// A connection made moments ago has not synced yet, and that is not a fault.
+var GRACE_AFTER_CONNECT_HOURS = 2;
+
+function calendarHealth(connections, now){
+  var at = now ? now.getTime() : Date.now();
+  var conns = Array.isArray(connections) ? connections : [];
+  if(!conns.length) return {state: 'none', stale: [], hoursSince: null};
+
+  var stale = [];
+  var freshest = null;
+
+  for(var i = 0; i < conns.length; i++){
+    var c = conns[i] || {};
+    var last = c.lastSync ? Date.parse(c.lastSync) : NaN;
+    var connected = c.connectedAt ? Date.parse(c.connectedAt) : NaN;
+
+    if(isNaN(last)){
+      // Never synced. Only a problem once it has had time to happen.
+      if(!isNaN(connected) && (at - connected) > GRACE_AFTER_CONNECT_HOURS * 3600000){
+        stale.push({calendar: c.calendarId || '', hours: null});
+      }
+      continue;
+    }
+    if(freshest === null || last > freshest) freshest = last;
+    var hours = (at - last) / 3600000;
+    if(hours > STALE_AFTER_HOURS) stale.push({calendar: c.calendarId || '', hours: hours});
+  }
+
+  return {
+    state: stale.length ? (stale.length === conns.length ? 'stale' : 'partial') : 'ok',
+    stale: stale,
+    hoursSince: freshest === null ? null : (at - freshest) / 3600000
+  };
+}
+
+/* What to tell someone about it, in their words rather than ours.
+
+   Deliberately does NOT say "token expired": that is true, unhelpful, and
+   nobody outside this codebase knows what it means. It says what stopped and
+   what to press. */
+function describeCalendarHealth(health){
+  if(!health || health.state === 'ok' || health.state === 'none') return null;
+
+  var never = health.stale.some(function(s){ return s.hours === null; });
+  if(never && health.state === 'stale'){
+    return {
+      severity: 'warn',
+      text: 'Your calendar is connected but has never finished a sync, so no ' +
+            termLower('appointmentPlural') + ' have come in yet.',
+      action: 'Sync now'
+    };
+  }
+
+  var days = Math.floor((health.hoursSince || 0) / 24);
+  var ago = health.hoursSince === null ? ''
+    : (days >= 1 ? (days === 1 ? ' since yesterday' : ' for ' + days + ' days') : ' today');
+
+  if(health.state === 'partial'){
+    return {
+      severity: 'warn',
+      text: 'One of your calendars has stopped syncing. New ' +
+            termLower('contactPlural') + ' from it will not appear until it is reconnected.',
+      action: 'Sync now'
+    };
+  }
+
+  return {
+    severity: 'error',
+    text: 'Your calendar has not synced' + ago + ', so new ' +
+          termLower('appointmentPlural') + ' are not reaching GhostBuster. ' +
+          'Google disconnects calendars periodically — reconnecting takes a few seconds.',
+    action: 'Reconnect calendar'
+  };
+}
+
 function buildDefaultState(){
   var variants = buildDefaultVariants();
   var variantStats = {};
@@ -3721,6 +3815,8 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultVariants: buildDefaultVariants, buildDefaultEmailVariants: buildDefaultEmailVariants,
   emailVariantsFor: emailVariantsFor, getEmailDraft: getEmailDraft,
   getAuthoredEmailDraft: getAuthoredEmailDraft, stageTiming: stageTiming, emailEditableStages: emailEditableStages,
+  calendarHealth: calendarHealth, describeCalendarHealth: describeCalendarHealth,
+  STALE_AFTER_HOURS: STALE_AFTER_HOURS,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,

@@ -84,9 +84,17 @@ async function loadState(){
     libRes = {data: [], error: null};
   }
 
-  var calRes = await sb.from('google_oauth_tokens').select('calendar_id').eq('user_id', uid);
+  // last_sync and connected_at come along so the app can tell somebody their
+  // calendar has stopped syncing, instead of waiting for them to notice that
+  // no new bookings have arrived.
+  var calRes = await sb.from('google_oauth_tokens')
+    .select('calendar_id, last_sync, connected_at').eq('user_id', uid);
   var myCalendars = (!calRes.error && calRes.data)
     ? calRes.data.map(function(r){ return r.calendar_id; }).filter(Boolean) : [];
+  var calConnections = (!calRes.error && calRes.data)
+    ? calRes.data.map(function(r){
+        return {calendarId: r.calendar_id, lastSync: r.last_sync, connectedAt: r.connected_at};
+      }) : [];
 
   var state = {
     clients: {},
@@ -94,6 +102,7 @@ async function loadState(){
     emailVariants: {},
     // Read by the Emails tab so it can explain itself, rather than showing an
     // empty library and letting someone conclude their emails were deleted.
+    calendarConnections: calConnections,
     emailLibraryUnavailable: libraryUnavailable,
     emailLibrary: (libRes.data || []).map(function(r){
       return {

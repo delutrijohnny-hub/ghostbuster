@@ -130,6 +130,7 @@ function renderAll(){
   // the first render so the wizard opens over a real app rather than a blank
   // page — seeing what it will look like is part of the pitch.
   if(!ONBOARDING && needsOnboarding()) setTimeout(startOnboarding, 0);
+  renderCalendarHealth();
   renderHealthAlerts();
   renderProgressBar();
   renderStats();
@@ -151,6 +152,35 @@ function renderAll(){
   var eodEl = el('eod-count'); if(eodEl) eodEl.textContent = '(' + eodCount + ')';
 }
 
+
+/* The calendar connection, stated before anyone has to wonder.
+
+   Every other feature depends on bookings arriving. When they stop arriving
+   the app looks fine and simply has less in it, which is indistinguishable
+   from a quiet week — so three people in a row waited days before mentioning
+   it, and one of them was diagnosed only after a full afternoon.
+
+   Above the fold and not inside the collapsed alert summary, because a
+   warning nobody expands is a warning nobody reads. */
+function renderCalendarHealth(){
+  var box = el('calendar-health');
+  if(!box) return;
+  var info = describeCalendarHealth(calendarHealth(STATE.calendarConnections, new Date()));
+  if(!info){
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.classList.toggle('severe', info.severity === 'error');
+  box.innerHTML = '';
+  box.appendChild(h('span', {}, [info.text]));
+  box.appendChild(h('span', {class: 'spacer'}, []));
+  box.appendChild(h('button', {
+    class: 'btn btn-sm',
+    'data-action': info.action === 'Sync now' ? 'sync-calendar-now' : 'connect-calendar'
+  }, [info.action]));
+}
 
 function renderHealthAlerts(){
   var box = el('health-alerts'); if(!box) return;
