@@ -615,6 +615,210 @@ function buildDefaultEmailVariants(){
   };
 }
 
+
+/* ---- the email library ----
+
+   Email is not the five-touch cadence in a different font.
+
+   A text is a nudge: three seconds on a lock screen, timed to a call, one of
+   five. Stage-keying it is exactly right. An email is a document — the pricing
+   breakdown, the case study, the post-call recap, the onboarding walkthrough.
+   It carries ten times the information, and it goes out when the conversation
+   asks for it, not when a clock says touch three is due.
+
+   Keying those to five stages did two bad things: the long ones had nowhere to
+   live, and a good email could only be reached by whichever contact happened
+   to be sitting at the matching stage. The library fixes both. It is flat and
+   hand-ordered, each entry says in plain words when to send it, and any entry
+   can be opened for any contact at any moment.
+
+   What it deliberately is NOT: automated. Nothing here sends itself. These are
+   documents a person picks, reads and sends — which is also why they can be as
+   long as they need to be. */
+
+/* A touch stage in English.
+
+   stageLabel answers for PIPELINE stages (Booked, Completed) and returns the
+   raw key for anything else, which is how a seeded library ended up titled
+   "midcheckin email". These are the cadence's touches, a different vocabulary
+   with a different audience: the person reading a library index. */
+var TOUCH_LABELS = {
+  welcome: 'Welcome', monday: 'Start of week', midcheckin: 'Mid-point check-in',
+  dayof: 'Day of the call', hourbefore: 'An hour before', recovery: 'Recovery',
+  noshow: 'After a no-show', revival: 'Long-term revival',
+  rebooked: 'Rebooked', followup: 'Follow-up call'
+};
+function touchLabel(stage){
+  if(TOUCH_LABELS[stage]) return TOUCH_LABELS[stage];
+  // An admin's own stage key, made presentable rather than printed raw.
+  var s = String(stage || '').replace(/[_-]+/g, ' ').trim();
+  if(!s) return 'Untitled';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// A library entry. Loose on input because these rows are hand-written and a
+// missing subject or an untitled draft should survive a round trip, not vanish.
+function sanitizeEmailDoc(raw, fallbackId){
+  if(!raw || typeof raw !== 'object') return null;
+  var title = (typeof raw.title === 'string' && raw.title.trim()) ? raw.title.trim() : '';
+  var subject = typeof raw.subject === 'string' ? raw.subject : '';
+  var body = typeof raw.body === 'string' ? raw.body : '';
+  // An entry with nothing in it at all is a discarded draft, not data.
+  if(!title && !subject && !body.trim()) return null;
+  return {
+    id: (typeof raw.id === 'string' && raw.id) ? raw.id : (fallbackId || uuid()),
+    title: title || 'Untitled email',
+    // Free text on purpose. "after they ask what it costs" is a real answer
+    // and is not one of five stages — that constraint is the thing being
+    // removed here.
+    whenToSend: typeof raw.whenToSend === 'string' ? raw.whenToSend.trim() : '',
+    subject: subject,
+    body: body,
+    sortOrder: Number.isFinite(raw.sortOrder) ? raw.sortOrder : 0,
+    archived: !!raw.archived,
+    updatedAt: (typeof raw.updatedAt === 'string' && !isNaN(Date.parse(raw.updatedAt))) ? raw.updatedAt : nowISO()
+  };
+}
+
+/* The library in the order the business put it in.
+
+   sortOrder first, then title, so two entries that were never reordered still
+   come out in a stable order rather than whatever the database felt like. */
+function emailLibrary(state, opts){
+  var includeArchived = !!(opts && opts.includeArchived);
+  var raw = (state && state.emailLibrary) || [];
+  var docs = [];
+  for(var i = 0; i < raw.length; i++){
+    var d = sanitizeEmailDoc(raw[i]);
+    if(d && (includeArchived || !d.archived)) docs.push(d);
+  }
+  docs.sort(function(a, b){
+    if(a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.title.localeCompare(b.title);
+  });
+  return docs;
+}
+
+/* Turn the old stage-keyed emails into library entries.
+
+   Run once, when an account has emails written against stages but no library
+   yet. Without this, moving email off the cadence would look to the business
+   exactly like their email copy being deleted — which is the single worst
+   thing a migration can do, and the reason the `variants` rows are left in
+   place rather than dropped.
+
+   Only what the business actually wrote. Seeding the built-in starting points
+   into the library would fill it with software's words on day one and bury the
+   two emails they cared about. */
+function seedEmailLibrary(emailVariants){
+  var out = [];
+  var order = emailEditableStages();
+  var seen = {};
+  function take(stage){
+    if(seen[stage]) return;
+    seen[stage] = true;
+    var list = (emailVariants && emailVariants[stage]) || [];
+    for(var i = 0; i < list.length; i++){
+      var v = list[i];
+      if(v.builtin) continue;
+      if(!(v.text || '').trim() && !(v.subject || '').trim()) continue;
+      out.push(sanitizeEmailDoc({
+        id: v.id,
+        title: touchLabel(stage) + ' email',
+        // The stage's timing, preserved as the label — so an email written for
+        // a specific moment does not lose the only note saying which moment.
+        whenToSend: stageTiming(stage),
+        subject: v.subject || '',
+        body: v.text || '',
+        sortOrder: out.length * 10
+      }));
+    }
+  }
+  order.forEach(take);
+  Object.keys(emailVariants || {}).forEach(take);
+  return out.filter(Boolean);
+}
+
+/* One library entry, filled in for a contact.
+
+   Same renderTemplate and the same placeholders as everything else, so nobody
+   learns a second syntax and an email moved into the library keeps working.
+   Returns null for a missing entry rather than an empty draft, so the caller
+   can say "that email is gone" instead of opening a blank compose window. */
+function renderEmailDoc(state, docId, client, senderName){
+  var docs = emailLibrary(state, {includeArchived: true});
+  var doc = null;
+  for(var i = 0; i < docs.length; i++){ if(docs[i].id === docId){ doc = docs[i]; break; } }
+  if(!doc) return null;
+  return {
+    id: doc.id,
+    title: doc.title,
+    whenToSend: doc.whenToSend,
+    subject: renderTemplate(doc.subject || '', client, senderName),
+    text: renderTemplate(doc.body || '', client, senderName)
+  };
+}
+
+/* The whole library as one plain-text document.
+
+   Copy a business wrote should never be trapped in someone else's web app.
+   This is the answer to "what if I stop paying for this" and to the much more
+   common "I want to send these to the new hire" — and writing it costs almost
+   nothing, which is the whole argument for having it.
+
+   Plain text rather than JSON or CSV: a person opens this, and the placeholders
+   have to stay visible and legible for it to be worth anything. Unrendered on
+   purpose — this is the template set, not one contact's mail. */
+function exportEmailLibrary(state, opts){
+  var docs = emailLibrary(state, opts);
+  var who = (opts && opts.businessName) || '';
+  var lines = [];
+  lines.push(who ? (who + ' — email library') : 'Email library');
+  lines.push('Exported ' + (new Date()).toISOString().slice(0, 10) + ' from GhostBuster');
+  lines.push(docs.length === 1 ? '1 email' : (docs.length + ' emails'));
+  lines.push('');
+  lines.push('Placeholders are left as written: {name} {date} {time} {weekday} {link} {sender}');
+  lines.push('');
+  docs.forEach(function(d, i){
+    lines.push('════════════════════════════════════════════════════');
+    lines.push((i + 1) + '. ' + d.title);
+    lines.push('════════════════════════════════════════════════════');
+    lines.push('WHEN TO SEND:  ' + (d.whenToSend || '(not noted)'));
+    lines.push('SUBJECT:       ' + (d.subject || '(none)'));
+    lines.push('');
+    lines.push(d.body || '(empty)');
+    lines.push('');
+  });
+  if(!docs.length) lines.push('(The library is empty — nothing to export yet.)');
+  return lines.join('\n');
+}
+
+// One entry on its own, for handing a single email to someone.
+function exportEmailDoc(doc){
+  if(!doc) return '';
+  return [
+    doc.title || 'Untitled email',
+    'When to send: ' + (doc.whenToSend || '(not noted)'),
+    'Subject: ' + (doc.subject || '(none)'),
+    '',
+    doc.body || ''
+  ].join('\n');
+}
+
+/* A filename someone can find again in their Downloads folder.
+
+   "export.txt" is where a file goes to be lost. Dated and named after the
+   business, and stripped of anything a filesystem will argue about. */
+function exportFilename(base, when){
+  var d = when ? new Date(when) : new Date();
+  var stamp = isNaN(d.getTime()) ? 'undated' : d.toISOString().slice(0, 10);
+  var safe = String(base || 'ghostbuster')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'ghostbuster';
+  return safe + '-' + stamp + '.txt';
+}
+
 function buildDefaultState(){
   var variants = buildDefaultVariants();
   var variantStats = {};
@@ -3471,6 +3675,10 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultVariants: buildDefaultVariants, buildDefaultEmailVariants: buildDefaultEmailVariants,
   emailVariantsFor: emailVariantsFor, getEmailDraft: getEmailDraft,
   getAuthoredEmailDraft: getAuthoredEmailDraft, stageTiming: stageTiming, emailEditableStages: emailEditableStages,
+  touchLabel: touchLabel,
+  sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
+  renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,
+  exportFilename: exportFilename,
   buildDefaultState: buildDefaultState,
   sanitizeClient: sanitizeClient, sanitizeSnoozedUntil: sanitizeSnoozedUntil, migrateState: migrateState,
   tzDateKey: tzDateKey, keyToUTCms: keyToUTCms, keyPlusDays: keyPlusDays, mondayOfWeekKey: mondayOfWeekKey,

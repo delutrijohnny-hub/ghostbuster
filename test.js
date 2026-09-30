@@ -1534,6 +1534,43 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+/* The same guard, for stages the UI hard-codes.
+
+   The check above derives stages from logic.js. It would not have caught the
+   email library, which logs its sends with a literal 'email' written in
+   app.js — a stage no sequence and no variant set mentions. That literal was
+   one deploy away from reproducing the 'revival' outage exactly: a rejected
+   insert fails the whole batched save, and the user's only symptom is that
+   nothing saves any more.
+
+   So: read the literals out of the hosted source and hold them to the same
+   constraint. Crude, and it is meant to be — it needs to notice a string
+   somebody typed, which is precisely what a derived list cannot do. */
+{
+  const migrations = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+    .filter(f => f.endsWith('.sql')).sort();
+  let allowed = null;
+  migrations.forEach(f => {
+    const sql = fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8');
+    const matches = [...sql.matchAll(/check\s*\(stage in \(([^)]+)\)\)/g)];
+    matches.forEach(m => {
+      allowed = new Set(m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')));
+    });
+  });
+
+  const appjs = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  // markSentOnChannel(cid, '<stage>', ...) and markSent(STATE, cid, '<stage>', ...)
+  const literals = new Set();
+  for (const m of appjs.matchAll(/markSent(?:OnChannel)?\(\s*(?:STATE\s*,\s*)?[A-Za-z0-9_.]+\s*,\s*'([a-z]+)'/g)) {
+    literals.add(m[1]);
+  }
+  assert.ok(literals.size, 'expected to find at least one hard-coded stage in app.js — has the call shape changed?');
+  const bad = [...literals].filter(st => !allowed.has(st));
+  assert.deepStrictEqual(bad, [],
+    'app.js logs a message with stage(s) the database will reject, which fails the entire save: ' + bad.join(', '));
+  console.log('  ok  - every stage hard-coded in the app is accepted too (' + [...literals].sort().join(', ') + ')');
+}
+
 console.log('\n--- sending through the salesperson’s own Gmail ---');
 
 test('the link carries the recipient, subject and body', () => {
@@ -1612,6 +1649,154 @@ test('the examples came from the business, not from invention', () => {
     'the day-of email should use their own reminder phrasing');
   assert.ok(/not just for views/i.test(e.welcome[0].text),
     'the welcome should carry their own positioning line');
+});
+
+console.log('\n--- the email library ---');
+
+test('an entry keeps its timing note in the writer’s own words', () => {
+  // The whole point of the change: "after they ask what it costs" is a real
+  // answer and is not one of five stages.
+  const d = GB.sanitizeEmailDoc({
+    title: 'Pricing breakdown', whenToSend: 'after they ask what it costs',
+    subject: 'The numbers', body: 'Long body.'
+  });
+  assert.strictEqual(d.whenToSend, 'after they ask what it costs');
+});
+
+test('a long email survives intact — this is the column that exists for it', () => {
+  const long = 'Paragraph.\n\n'.repeat(400);
+  const d = GB.sanitizeEmailDoc({title: 'Case study', body: long});
+  assert.strictEqual(d.body, long, 'an email must not be truncated anywhere in the round trip');
+});
+
+test('an entirely empty entry is a discarded draft, not data', () => {
+  assert.strictEqual(GB.sanitizeEmailDoc({title: '', subject: '', body: '   '}), null);
+  assert.strictEqual(GB.sanitizeEmailDoc(null), null);
+});
+
+test('an untitled entry is kept, because a body is the part worth saving', () => {
+  const d = GB.sanitizeEmailDoc({body: 'I wrote this and forgot to name it.'});
+  assert.ok(d);
+  assert.strictEqual(d.title, 'Untitled email');
+});
+
+test('the library comes back in the order the business put it in', () => {
+  const state = {emailLibrary: [
+    {id:'c', title:'Third', body:'x', sortOrder:30},
+    {id:'a', title:'First', body:'x', sortOrder:10},
+    {id:'b', title:'Second', body:'x', sortOrder:20},
+  ]};
+  assert.deepStrictEqual(GB.emailLibrary(state).map(d => d.title), ['First','Second','Third']);
+});
+
+test('two never-reordered entries still come back in a stable order', () => {
+  // All-zero sortOrder is the normal state of a freshly imported library, and
+  // a list that reshuffles itself between renders looks broken.
+  const state = {emailLibrary: [
+    {id:'b', title:'Beta', body:'x'}, {id:'a', title:'Alpha', body:'x'},
+  ]};
+  assert.deepStrictEqual(GB.emailLibrary(state).map(d => d.title), ['Alpha','Beta']);
+});
+
+test('archived entries are hidden but not lost', () => {
+  const state = {emailLibrary: [
+    {id:'a', title:'Live', body:'x'}, {id:'b', title:'Old', body:'x', archived:true},
+  ]};
+  assert.deepStrictEqual(GB.emailLibrary(state).map(d => d.title), ['Live']);
+  assert.strictEqual(GB.emailLibrary(state, {includeArchived:true}).length, 2);
+});
+
+test('moving email off the cadence does not look like email being deleted', () => {
+  // The single worst outcome of this change would be a business opening the
+  // app to find the emails they wrote gone.
+  const seeded = GB.seedEmailLibrary({
+    dayof: [{id:'own-dayof', subject:'Today at {time}', text:'Here is the link: {link}'}],
+    welcome: [{id:'own-welcome', subject:'Confirmed', text:'You are booked.'}],
+  });
+  assert.strictEqual(seeded.length, 2);
+  const titles = seeded.map(d => d.title);
+  assert.ok(titles.includes('Day of the call email'), 'got: ' + titles.join(', '));
+  assert.ok(titles.includes('Welcome email'));
+  // And the timing note survives, because an email written for one moment
+  // must not lose the only record of which moment.
+  const dayof = seeded.find(d => d.title === 'Day of the call email');
+  assert.ok(dayof.whenToSend, 'the stage timing should become the note');
+});
+
+test('the import carries only what the business wrote, never the built-ins', () => {
+  // Seeding software's own starting points into the library would fill it with
+  // words nobody chose and bury the two emails they cared about.
+  const seeded = GB.seedEmailLibrary({
+    welcome: [
+      {id:'ew1', builtin:true, subject:'Built in', text:'Software wrote this.'},
+      {id:'own-welcome', subject:'Mine', text:'I wrote this.'},
+    ],
+  });
+  assert.strictEqual(seeded.length, 1);
+  assert.strictEqual(seeded[0].subject, 'Mine');
+});
+
+test('importing an account with no written emails imports nothing', () => {
+  assert.deepStrictEqual(GB.seedEmailLibrary({welcome:[{id:'ew1',builtin:true,text:'x'}]}), []);
+  assert.deepStrictEqual(GB.seedEmailLibrary({}), []);
+  assert.deepStrictEqual(GB.seedEmailLibrary(null), []);
+});
+
+test('a custom stage key is titled readably rather than printed raw', () => {
+  // stageLabel answers for pipeline stages and returns the key for anything
+  // else, which is how a library ends up titled "midcheckin email".
+  assert.strictEqual(GB.touchLabel('midcheckin'), 'Mid-point check-in');
+  assert.strictEqual(GB.touchLabel('second_visit'), 'Second visit');
+  assert.strictEqual(GB.touchLabel(''), 'Untitled');
+});
+
+test('an entry fills in for a contact, with the same placeholders as everything else', () => {
+  const state = {emailLibrary: [{
+    id:'d1', title:'Day of', body:'Hi {name},\n\nLink: {link}\n\n{sender}',
+    subject:'Today at {time}',
+  }]};
+  const client = {name:'Dana', meetLink:'https://meet.google.com/a-b-c',
+    callDateTime:'2026-10-02T15:00:00Z', timezone:'America/New_York'};
+  const r = GB.renderEmailDoc(state, 'd1', client, 'Johnny');
+  assert.ok(r.text.includes('Hi Dana,'));
+  assert.ok(r.text.includes('meet.google.com/a-b-c'));
+  assert.ok(r.text.includes('Johnny'));
+  assert.ok(!r.subject.includes('{time}'), 'the subject must be rendered too');
+});
+
+test('a deleted entry renders as nothing, not as a blank email', () => {
+  // So the caller can say "that email is gone" instead of opening an empty
+  // compose window addressed to a real client.
+  assert.strictEqual(GB.renderEmailDoc({emailLibrary: []}, 'gone', {name:'Dana'}, 'J'), null);
+});
+
+test('the export is readable, and keeps the placeholders visible', () => {
+  const state = {emailLibrary: [
+    {id:'a', title:'Pricing breakdown', whenToSend:'after they ask what it costs',
+     subject:'The numbers', body:'Hi {name},\n\nHere is the breakdown.'},
+    {id:'b', title:'Post-call recap', whenToSend:'same day as the call',
+     subject:'Recap', body:'Good talking today.', sortOrder:10},
+  ]};
+  const out = GB.exportEmailLibrary(state, {businessName:'MarketMakerMGMT'});
+  assert.ok(out.includes('MarketMakerMGMT'));
+  assert.ok(out.includes('2 emails'));
+  assert.ok(out.includes('Pricing breakdown'));
+  assert.ok(out.includes('after they ask what it costs'), 'the timing note is the most useful line in the file');
+  assert.ok(out.includes('{name}'), 'a rendered export would be one contact\'s mail, not the template set');
+  assert.ok(out.indexOf('Pricing breakdown') < out.indexOf('Post-call recap'), 'export follows the library order');
+});
+
+test('exporting an empty library says so rather than handing over a blank file', () => {
+  const out = GB.exportEmailLibrary({emailLibrary: []});
+  assert.ok(/empty/i.test(out));
+});
+
+test('a downloaded file has a name findable in a Downloads folder', () => {
+  const n = GB.exportFilename('MarketMakerMGMT emails', '2026-09-30T12:00:00Z');
+  assert.strictEqual(n, 'marketmakermgmt-emails-2026-09-30.txt');
+  // Nothing a filesystem will argue about.
+  assert.ok(!/[^a-z0-9.-]/.test(GB.exportFilename('Pricing: 50% / “final”')));
+  assert.ok(GB.exportFilename('').startsWith('ghostbuster-'));
 });
 
 console.log('\n--- your emails, GhostBuster’s timing ---');
@@ -3252,6 +3437,79 @@ test('every GhostBuster Today row shape renders without throwing', () => {
     'the ranked queue must render for every row shape');
 });
 
+test('the email library renders, empty and full', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext('STATE = buildDefaultState(); STATE.emailLibrary = [];', ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+    'an account with no emails must still get a page telling it what to do');
+
+  vm.runInContext(`
+    STATE.emailLibrary = [
+      {id:'a', title:'Pricing breakdown', whenToSend:'after they ask what it costs',
+       subject:'The numbers', body:'Hi {name},\\n\\n' + 'Detail. '.repeat(300), sortOrder:0},
+      {id:'b', title:'Untitled email', whenToSend:'', subject:'', body:'', sortOrder:10}
+    ];
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+    'a long email and a blank one are both ordinary rows');
+
+  // The expanded state is a different render path — 18-row textarea, the
+  // whole edit form — and it is the one a person actually spends time in.
+  vm.runInContext("LIB_OPEN = 'a';", ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+    'the open entry must render');
+});
+
+test('the picker renders for a contact, and when the library is empty', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.senderName = 'Johnny';
+    STATE.myCalendars = ['john@marketmakermgmt.com'];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', email:'dana@example.com',
+      phone:'2135550100', callDateTime:new Date(Date.now()+86400000).toISOString(),
+      timezone:'America/New_York', status:'Booked'});
+    STATE.emailLibrary = [];
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext("openEmailPicker(STATE.clients['c1'])", ctx),
+    'with nothing in the library the picker must explain, not throw');
+
+  vm.runInContext(`
+    STATE.emailLibrary = [{id:'a', title:'Day of', whenToSend:'the morning of the call',
+      subject:'Today at {time}', body:'Hi {name}, link: {link}', sortOrder:0}];
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext("openEmailPicker(STATE.clients['c1'])", ctx));
+
+  // The part that matters: the row is a real Gmail link, filled in, pinned to
+  // the business account.
+  const html = vm.runInContext("el('modal-root').innerHTML", ctx);
+  assert.ok(html.includes('mail.google.com'), 'each row must be a real compose link');
+  assert.ok(html.includes('authuser=john%40marketmakermgmt.com'),
+    'a client email must not be able to leave from a personal Gmail');
+  assert.ok(html.includes('Dana'), 'the email should already be filled in for this contact');
+  assert.ok(html.includes('the morning of the call'),
+    'the timing note is what someone reads to pick');
+});
+
+test('a contact with no email is never offered one', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.emailLibrary = [{id:'a', title:'Day of', subject:'s', body:'b', sortOrder:0}];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'NoMail', phone:'2135550100',
+      callDateTime:new Date(Date.now()+86400000).toISOString(),
+      timezone:'America/New_York', status:'Booked'});
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
+  // Asserted at the seam that decides it, rather than by grepping rendered
+  // markup — the DOM stub does not serialize, so a markup assertion here would
+  // pass whatever the code did.
+  assert.strictEqual(vm.runInContext("canEmail(STATE.clients['c1'])", ctx), false);
+  assert.strictEqual(vm.runInContext("canEmail({email:'d@e.com', emailStatus:'ok'})", ctx), true);
+  assert.strictEqual(vm.runInContext("canEmail({email:'d@e.com', emailStatus:'bounced'})", ctx), false,
+    'a bounced address is worse than no address: it costs sending reputation');
+});
+
 test('the whole hosted render pass does not throw', () => {
   const ctx = makeHostedCtx();
   vm.runInContext(`
@@ -3464,6 +3722,77 @@ test('reviewing one message writes only that message, and deletes nothing', asyn
   assert.deepStrictEqual(deletes, [], 'reviewing must never delete — the old code deleted the whole log here');
   assert.strictEqual(msgWrites.length, 1, 'exactly one message write expected, got ' + msgWrites.length);
   assert.strictEqual(msgWrites[0].payload.length, 1, 'only the reviewed message should be written');
+});
+
+test('an email in the library is written with the columns the table actually has', async () => {
+  // A wrong column name here is not a cosmetic bug: the whole save is one
+  // batch, so one rejected write means nothing saves and the user's only
+  // symptom is "changes are not being saved". That has now happened twice.
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.emailLibrary = [{id:'11111111-1111-1111-1111-111111111111',
+      title:'Pricing breakdown', whenToSend:'after they ask what it costs',
+      subject:'The numbers', body:'Hi {name},', sortOrder:0, archived:false}];
+  `);
+  await d.run('saveState(st)');
+  const writes = d.calls.filter(c => c.table === 'email_library');
+  assert.strictEqual(writes.length, 1, 'expected exactly one email_library write');
+  const row = writes[0].payload[0];
+
+  // Read the real column list out of the migration rather than restating it,
+  // so this test tracks the schema instead of a copy of it.
+  const sql = fs.readFileSync(path.join(__dirname,'supabase','migrations',
+    '20260930030000_email_library.sql'), 'utf8');
+  const table = sql.slice(sql.indexOf('create table'), sql.indexOf(');'));
+  const cols = new Set([...table.matchAll(/^\s{2}([a-z_]+)\s/gm)].map(m => m[1]));
+  assert.ok(cols.has('when_to_send'), 'sanity: the column parse found nothing');
+
+  const unknown = Object.keys(row).filter(k => !cols.has(k));
+  assert.deepStrictEqual(unknown, [],
+    'saveState writes column(s) email_library does not have, which fails the whole save: ' + unknown.join(', '));
+  assert.strictEqual(row.when_to_send, 'after they ask what it costs',
+    'the timing note must survive to the database — it is the most useful field');
+  assert.strictEqual(row.body, 'Hi {name},', 'stored unrendered: this is a template, not one contact\'s mail');
+});
+
+test('editing one email writes only that email, and an unchanged library writes nothing', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.emailLibrary = [
+      {id:'11111111-1111-1111-1111-111111111111', title:'One', whenToSend:'', subject:'s', body:'b', sortOrder:0, archived:false},
+      {id:'22222222-2222-2222-2222-222222222222', title:'Two', whenToSend:'', subject:'s', body:'b', sortOrder:10, archived:false}
+    ];
+  `);
+  await d.run('saveState(st)');
+  const before = d.calls.length;
+  await d.run('saveState(st)');
+  assert.strictEqual(d.calls.length, before,
+    'a no-op save must write nothing — updated_at stamped onto the snapshot row would make every save rewrite every email');
+
+  d.calls.length = 0;
+  d.run("st.emailLibrary[1].body = 'edited';");
+  await d.run('saveState(st)');
+  const writes = d.calls.filter(c => c.table === 'email_library');
+  assert.strictEqual(writes.length, 1);
+  assert.strictEqual(writes[0].payload.length, 1, 'only the edited email should be written');
+  assert.strictEqual(writes[0].payload[0].id, '22222222-2222-2222-2222-222222222222');
+});
+
+test('deleting an email deletes by explicit id, and never before a baseline exists', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.emailLibrary = [{id:'11111111-1111-1111-1111-111111111111', title:'One', whenToSend:'', subject:'s', body:'b', sortOrder:0, archived:false}];
+  `);
+  // No baseline loaded yet: a save must not read an empty-looking diff as
+  // "the user deleted their library".
+  d.run('st.emailLibrary = [];');
+  await d.run('saveState(st)');
+  assert.deepStrictEqual(
+    d.calls.filter(c => c.table === 'email_library' && c.op === 'delete'), [],
+    'with no baseline, a save must NEVER delete an email someone wrote');
 });
 
 test('deleting a client deletes by explicit id, never by a negated filter', async () => {

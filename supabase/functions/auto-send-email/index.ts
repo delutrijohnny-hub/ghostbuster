@@ -189,6 +189,25 @@ Deno.serve(async (req) => {
     return json({ error: 'Email is not configured.', code: 'no_provider' }, 503);
   }
 
+  // Email is a library now, not a cadence.
+  //
+  // The editor that produced these stage-keyed emails is gone: they were
+  // written for five fixed touches, and email turned out to be documents sent
+  // when the conversation calls for them. What is left is a trap — rows still
+  // in `variants` that nothing can edit any more, which this function would
+  // happily mail the day a provider key is configured. Software sending copy
+  // its owner can no longer even see is not a thing to leave armed.
+  //
+  // Left in place rather than deleted: the scheduled job still calls it, a dry
+  // run still reports what the old cadence WOULD have done, and if automatic
+  // sending comes back it will be driven by the library.
+  if (!dryRun) {
+    return json({
+      error: 'Automatic email sending is off. Email is a library you send from by hand — see the Emails tab.',
+      code: 'library_not_cadence',
+    }, 409);
+  }
+
   const filter = payload.userId ? `&user_id=eq.${payload.userId}` : '';
   const sRes = await db(`/app_settings?email_enabled=eq.true&auto_send_email=eq.true${filter}&select=*`);
   const accounts = await sRes.json();

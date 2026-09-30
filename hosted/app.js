@@ -141,7 +141,7 @@ function renderAll(){
   renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
-  renderEmailEditor();
+  renderEmailLibrary();
   renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
@@ -352,12 +352,13 @@ function buildTouchCard(client, stage, now){
      usable address — unlike the provider route it does not depend on
      email_enabled, which is why email is usable today. */
   if(canEmail(client)){
-    var gDraft = getEmailDraft(STATE, client, stage, STATE.senderName);
-    if(gDraft){
-      actions.appendChild(h('a',{class:'btn btn-sm', target:'_blank', rel:'noopener',
-        href: gmailComposeUrl(client.email, gDraft.subject, gDraft.text, businessEmailAccount(STATE)),
-        'data-action':'sent-by-email','data-cid':client.id,'data-stage':stage,
-        title:'Opens Gmail with this written and ready'},['✉ Email']));
+    // A picker rather than a direct link now that email is a library: there is
+    // a real choice to make, and the timing note on each entry is what makes
+    // it. Only offered when there is something to pick.
+    if(emailLibrary(STATE).length){
+      actions.appendChild(h('button',{class:'btn btn-sm',
+        'data-action':'pick-email','data-cid':client.id,
+        title:'Pick one of your emails, filled in for ' + client.name},['✉ Email']));
     }
   }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
@@ -655,13 +656,8 @@ function renderGhostToday(){
     // suggestion, not a restriction.
     if(digits && rec.action !== 'call') acts.appendChild(h('a',{href: telHref(c.phone)},['Call']));
     if(smsTo && rec.action !== 'text' && rec.action !== 'reply') acts.appendChild(h('a',{href: smsTo},['Text']));
-    if(canEmail(c)){
-      var gd = getEmailDraft(STATE, c, rec.stage || 'welcome', STATE.senderName);
-      if(gd){
-        acts.appendChild(h('a',{target:'_blank', rel:'noopener',
-          href: gmailComposeUrl(c.email, gd.subject, gd.text, businessEmailAccount(STATE)),
-          'data-action':'sent-by-email','data-cid':c.id,'data-stage': rec.stage || 'welcome'},['Email']));
-      }
+    if(canEmail(c) && emailLibrary(STATE).length){
+      acts.appendChild(h('a',{href:'#','data-action':'pick-email','data-cid':c.id},['Email']));
     }
     acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
 
@@ -989,68 +985,209 @@ function renderDeadTab(){
    credited appointments showing "67%" looks authoritative and is noise — and
    noise printed as a percentage is how someone ends up rewriting a template
    that was fine. Thin rows show their raw counts and say so. */
-/* The email editor: your words, GhostBuster's timing.
+/* The email library.
 
-   Each stage says in plain English when it goes out, because "midcheckin"
-   tells you nothing about whether you are writing a first hello or a last
-   nudge — and a template written for the wrong moment reads worse than none.
+   Email used to be the five touches in a different font: one subject and one
+   body per stage, fired when that touch came due. Wrong about how email is
+   actually used. A text is a nudge timed to a call; an email is a document —
+   the pricing breakdown, the case study, the post-call recap — and it goes out
+   when the conversation asks for it.
 
-   Built-in text is shown as a starting point and marked as such. Until a stage
-   is saved, the unattended sender skips it entirely: software should not mail
-   its own words to someone's customers while they are not watching. */
-function renderEmailEditor(){
-  var box = el('email-editor');
+   So this is a library, not a cadence. Flat, hand-ordered, each entry labelled
+   with when to send it, each as long as it needs to be, any of them reachable
+   for any contact. Nothing here sends itself.
+
+   Downloadable, because copy a business wrote should not be trapped in
+   someone else's web app. */
+function renderEmailLibrary(){
+  var box = el('email-library');
   if(!box) return;
   box.innerHTML = '';
 
-  var authoredCount = 0;
-  var stages = emailEditableStages();
-  stages.forEach(function(stage){
-    var own = ((STATE.emailVariants || {})[stage] || []).filter(function(v){ return !v.builtin; });
-    if(own.length && (own[0].text || '').trim()) authoredCount++;
-  });
+  var docs = emailLibrary(STATE);
 
-  var head = h('div',{class:'ee-head'},[
-    h('h3',{},['Your emails']),
-    h('span',{class:'hint'},[
-      authoredCount
-        ? authoredCount + ' of ' + stages.length + ' written. Automatic sending only uses the ones you have written yourself.'
-        : 'Nothing written yet. Automatic sending stays off for a touch until you write its email.'
+  var head = h('div',{class:'lib-head'},[
+    h('div',{},[
+      h('h3',{},['Your emails']),
+      h('span',{class:'hint'},[
+        docs.length
+          ? docs.length + (docs.length === 1 ? ' email' : ' emails') +
+            ' — pick one for any ' + termLower('contact') + ', any time. Nothing here sends by itself.'
+          : 'Nowhere to keep a long email yet. Add the ones you already send — the pricing breakdown, the recap, the case study — and label when each one goes out.'
+      ])
+    ]),
+    h('div',{class:'lib-head-actions'},[
+      h('button',{class:'btn btn-sm btn-green','data-action':'email-doc-new'},['+ Add an email']),
+      h('button',{class:'btn btn-sm btn-ghost','data-action':'email-lib-download',
+        title:'Download all of them as a text file'},['Download all'])
     ])
   ]);
   box.appendChild(head);
 
-  stages.forEach(function(stage){
-    var own = ((STATE.emailVariants || {})[stage] || []).filter(function(v){ return !v.builtin; })[0];
-    var builtin = (buildDefaultEmailVariants()[stage] || [])[0];
-    var subject = own ? own.subject : '';
-    var body = own ? own.text : '';
-    var written = !!(own && (own.text || '').trim());
+  if(!docs.length){
+    // The old stage-keyed emails are the obvious first contents, and a person
+    // who wrote them should not have to retype them.
+    var hadOld = Object.keys(STATE.emailVariants || {}).some(function(st){
+      return (STATE.emailVariants[st] || []).some(function(v){ return !v.builtin && (v.text || '').trim(); });
+    });
+    if(hadOld){
+      box.appendChild(h('div',{class:'lib-empty'},[
+        h('p',{},['The emails you wrote against the old five touches are still saved. Bring them in and you can edit them here.']),
+        h('button',{class:'btn btn-sm','data-action':'email-lib-import'},['Import my old emails'])
+      ]));
+    }
+    return;
+  }
 
-    var block = h('div',{class:'ee-stage' + (written ? ' written' : '')},[]);
-    block.appendChild(h('div',{class:'ee-stage-head'},[
-      h('strong',{},[stage]),
-      h('span',{class:'ee-when'},['sent ' + stageTiming(stage)]),
-      h('span',{class:'ee-status'},[written ? '✓ written' : 'not written'])
-    ]));
-    block.appendChild(h('input',{type:'text',class:'ee-subject',
-      'data-action':'set-email-tpl','data-stage':stage,'data-field':'subject',
-      value: subject, placeholder: builtin ? 'e.g. ' + builtin.subject : 'Subject line'}));
-    block.appendChild(h('textarea',{class:'ee-body',rows:'5',
-      'data-action':'set-email-tpl','data-stage':stage,'data-field':'text',
-      placeholder: builtin ? builtin.text : 'Write the email for this touch…'},[body]));
-    var foot = h('div',{class:'ee-foot'},[
-      h('span',{class:'ee-tokens'},['{name} {sender} {date} {time} {weekday} {link}']),
-      h('button',{class:'btn btn-sm btn-ghost','data-action':'use-email-example','data-stage':stage},
-        ['Start from the example'])
+  docs.forEach(function(d, i){
+    var open = LIB_OPEN === d.id;
+    var card = h('div',{class:'lib-doc' + (open ? ' open' : '')},[]);
+
+    var titleRow = h('div',{class:'lib-doc-head','data-action':'email-doc-toggle','data-id':d.id},[
+      h('div',{class:'lib-doc-title'},[
+        h('strong',{},[d.title]),
+        h('span',{class:'lib-when'},[d.whenToSend ? 'Send ' + d.whenToSend : 'No timing noted'])
+      ]),
+      h('div',{class:'lib-doc-meta'},[
+        h('span',{class:'lib-len'},[wordCount(d.body) + ' words']),
+        h('span',{class:'lib-caret'},[open ? '▾' : '▸'])
+      ])
     ]);
-    block.appendChild(foot);
-    box.appendChild(block);
-  });
+    card.appendChild(titleRow);
 
-  box.appendChild(h('div',{class:'ee-save'},[
-    h('button',{class:'btn btn-sm btn-green','data-action':'save-email-tpls'},['Save emails'])
-  ]));
+    if(open){
+      var body = h('div',{class:'lib-doc-body'},[]);
+
+      body.appendChild(h('label',{class:'lib-label'},['What is this email?']));
+      body.appendChild(h('input',{type:'text',class:'lib-input',
+        'data-action':'set-email-doc','data-id':d.id,'data-field':'title',
+        value: d.title, placeholder:'e.g. Pricing breakdown'}));
+
+      body.appendChild(h('label',{class:'lib-label'},['When should it go out?']));
+      body.appendChild(h('input',{type:'text',class:'lib-input',
+        'data-action':'set-email-doc','data-id':d.id,'data-field':'whenToSend',
+        value: d.whenToSend,
+        placeholder:'e.g. after they ask what it costs'}));
+      body.appendChild(h('div',{class:'lib-hint'},[
+        'In your own words. This is what you read when you are picking which email to send, so write it the way you would say it.'
+      ]));
+
+      body.appendChild(h('label',{class:'lib-label'},['Subject line']));
+      body.appendChild(h('input',{type:'text',class:'lib-input',
+        'data-action':'set-email-doc','data-id':d.id,'data-field':'subject',
+        value: d.subject, placeholder:'Subject'}));
+
+      body.appendChild(h('label',{class:'lib-label'},['The email']));
+      body.appendChild(h('textarea',{class:'lib-body',rows:'18',
+        'data-action':'set-email-doc','data-id':d.id,'data-field':'body',
+        placeholder:'Paste or write the whole thing. There is no length limit here — this is the place for the long ones.'},
+        [d.body]));
+
+      body.appendChild(h('div',{class:'lib-foot'},[
+        h('span',{class:'lib-tokens'},[
+          'Fills in automatically: {name} {sender} {date} {time} {weekday} {link}'
+        ]),
+        h('div',{class:'lib-foot-actions'},[
+          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-download','data-id':d.id},['Download']),
+          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'up'},['↑']),
+          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'down'},['↓']),
+          h('button',{class:'btn btn-sm btn-ghost danger','data-action':'email-doc-delete','data-id':d.id},['Delete']),
+          h('button',{class:'btn btn-sm btn-green','data-action':'email-doc-save','data-id':d.id},['Save'])
+        ])
+      ]));
+      card.appendChild(body);
+    }
+    box.appendChild(card);
+  });
+}
+
+// Length is the one thing that tells you at a glance which of these is the
+// long one, without opening it.
+function wordCount(text){
+  var t = String(text || '').trim();
+  return t ? t.split(/\s+/).length : 0;
+}
+
+/* Which email, for this contact.
+
+   The old button had no choice to make: one email per stage, so the stage
+   picked it. A library means picking, and picking is why each entry carries a
+   plain-English "when to send" note — that line is what this list is for.
+
+   Every row is a real link to Gmail with the email already filled in for this
+   contact, from the business account. Same one-click-then-read-then-send flow
+   as the texts, which is the part that already works. */
+function openEmailPicker(client){
+  var docs = emailLibrary(STATE);
+  var from = businessEmailAccount(STATE);
+
+  var rows = docs.map(function(d){
+    var r = renderEmailDoc(STATE, d.id, client, STATE.senderName);
+    if(!r) return '';
+    return '<a class="pick-row" target="_blank" rel="noopener"' +
+      ' href="' + escapeHtml(gmailComposeUrl(client.email, r.subject, r.text, from)) + '"' +
+      ' data-action="sent-by-email" data-cid="' + escapeHtml(client.id) + '"' +
+      ' data-doc="' + escapeHtml(d.id) + '">' +
+      '<div class="pick-main">' +
+        '<strong>' + escapeHtml(d.title) + '</strong>' +
+        '<span class="pick-when">' + escapeHtml(d.whenToSend ? 'Send ' + d.whenToSend : 'No timing noted') + '</span>' +
+        '<span class="pick-subj">' + escapeHtml(r.subject || '(no subject)') + '</span>' +
+      '</div>' +
+      '<span class="pick-go">Open in Gmail →</span>' +
+    '</a>';
+  }).join('');
+
+  var head = '<div class="modal-head"><h2>Email ' + escapeHtml(client.name) + '</h2>' +
+    '<button class="btn-ghost btn" data-action="close-modal">✕</button></div>';
+
+  if(!docs.length){
+    openModalHtml(head +
+      '<p class="hint">There are no emails in your library yet. The Emails tab is where they live — ' +
+      'add the ones you already send and they will show up here for every ' + escapeHtml(termLower('contact')) + '.</p>' +
+      '<div class="modal-foot"><button class="btn btn-green" data-action="tab" data-tab="emails">Go to Emails</button></div>');
+    return;
+  }
+
+  openModalHtml(head +
+    '<p class="hint">Opens in Gmail, filled in for ' + escapeHtml(client.name) + '. Read it, then hit send.' +
+    (from ? '' : ' <strong>No business account is set</strong>, so Gmail will use whichever you last signed into.') +
+    '</p>' +
+    '<div class="pick-list">' + rows + '</div>', true);
+}
+
+// The live object in STATE, not the sanitized copy emailLibrary() returns —
+// edits have to land on the array that gets saved.
+function findEmailDoc(id){
+  var list = STATE.emailLibrary || [];
+  for(var i = 0; i < list.length; i++){ if(list[i].id === id) return list[i]; }
+  return null;
+}
+
+// Which library entry is expanded. Only one at a time: these are long, and a
+// page of simultaneously-open 18-row textareas is unreadable.
+var LIB_OPEN = null;
+
+/* Hand the browser a text file.
+
+   A Blob and a synthetic click, because the alternative is a server round
+   trip for content that is already sitting in memory. Revoked immediately —
+   the object URL pins the whole blob in memory until it is. */
+function downloadText(filename, text){
+  try{
+    var blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 0);
+    return true;
+  }catch(e){
+    console.error('GhostBuster: download failed', e);
+    showToast('Could not start the download.');
+    return false;
+  }
 }
 
 
@@ -2341,16 +2478,20 @@ document.addEventListener('click', function(ev){
       // The link opens Gmail by itself; this records it. Optimistic, like the
       // sms: path — GhostBuster cannot see whether Send was actually pressed,
       // so it is logged and undoable rather than confirmed beforehand.
-      var eStage = target.getAttribute('data-stage');
       var ec = STATE.clients[cid];
-      if(ec && eStage && eStage !== 'custom'){
-        var edraft = getEmailDraft(STATE, ec, eStage, STATE.senderName);
-        if(edraft){
-          lastSnapshot = snapshot();
-          markSentOnChannel(cid, eStage, edraft.subject + '\n\n' + edraft.text, 'email');
-          renderAll();
-          showToast('Logged as emailed to ' + ec.name + '.', lastSnapshot);
-        }
+      if(!ec) break;
+      var docId = target.getAttribute('data-doc');
+      var edraft = docId ? renderEmailDoc(STATE, docId, ec, STATE.senderName) : null;
+      // A library email is not a cadence touch, so there is no stage to
+      // advance. It is logged against 'email' so it still counts as contact —
+      // which is what stops an automated text going out on top of it — and so
+      // the timeline shows what was actually sent.
+      if(edraft){
+        lastSnapshot = snapshot();
+        markSentOnChannel(cid, 'email', edraft.subject + '\n\n' + edraft.text, 'email');
+        renderAll();
+        closeModal();
+        showToast('Logged as emailed to ' + ec.name + '.', lastSnapshot);
       }
       break;
     }
@@ -2383,22 +2524,93 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
-    case 'use-email-example': {
-      var exStage = target.getAttribute('data-stage');
-      var ex = (buildDefaultEmailVariants()[exStage] || [])[0];
-      if(!ex) break;
-      if(!STATE.emailVariants) STATE.emailVariants = {};
-      var exList = STATE.emailVariants[exStage] = (STATE.emailVariants[exStage] || [])
-        .filter(function(v){ return v.builtin; });
-      exList.push({id:'own-' + exStage, subject: ex.subject, text: ex.text, builtin:false, channel:'email'});
-      renderEmailEditor();
+    case 'pick-email': {
+      var pc = STATE.clients[target.getAttribute('data-cid')];
+      if(pc) openEmailPicker(pc);
       break;
     }
-    case 'save-email-tpls':
-      saveState(STATE);
-      renderEmailEditor();
-      showToast('Emails saved. Automatic sending will use them from the next run.');
+    case 'email-doc-new': {
+      if(!STATE.emailLibrary) STATE.emailLibrary = [];
+      var maxOrder = 0;
+      STATE.emailLibrary.forEach(function(x){ if(x.sortOrder > maxOrder) maxOrder = x.sortOrder; });
+      var fresh = {
+        id: uuid(), title: 'Untitled email', whenToSend: '', subject: '', body: '',
+        sortOrder: maxOrder + 10, archived: false, updatedAt: new Date().toISOString()
+      };
+      STATE.emailLibrary.push(fresh);
+      LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
+      renderEmailLibrary();
       break;
+    }
+    case 'email-doc-toggle': {
+      var tid = target.getAttribute('data-id');
+      LIB_OPEN = (LIB_OPEN === tid) ? null : tid;
+      renderEmailLibrary();
+      break;
+    }
+    case 'email-doc-move': {
+      // Reordering by swapping sortOrder with the neighbour, so only two rows
+      // change and the diff stays small.
+      var mid = target.getAttribute('data-id');
+      var dir = target.getAttribute('data-dir');
+      var list = emailLibrary(STATE);
+      var idx = -1;
+      list.forEach(function(x, i){ if(x.id === mid) idx = i; });
+      var swapWith = dir === 'up' ? idx - 1 : idx + 1;
+      if(idx === -1 || swapWith < 0 || swapWith >= list.length) break;
+      var a = findEmailDoc(list[idx].id), b = findEmailDoc(list[swapWith].id);
+      if(!a || !b) break;
+      var tmpOrder = a.sortOrder; a.sortOrder = b.sortOrder; b.sortOrder = tmpOrder;
+      saveState(STATE);
+      renderEmailLibrary();
+      break;
+    }
+    case 'email-doc-save': {
+      var sdoc = findEmailDoc(target.getAttribute('data-id'));
+      if(sdoc) sdoc.updatedAt = new Date().toISOString();
+      saveState(STATE);
+      LIB_OPEN = null;
+      renderEmailLibrary();
+      showToast('Saved.');
+      break;
+    }
+    case 'email-doc-delete': {
+      var ddoc = findEmailDoc(target.getAttribute('data-id'));
+      if(!ddoc) break;
+      // Someone wrote this by hand and there is no undo for a library entry,
+      // so it asks — and names the email, because "are you sure?" on the wrong
+      // one is how the good email gets deleted.
+      if(!confirm('Delete "' + ddoc.title + '"? This cannot be undone.\n\nDownload it first if you might want it back.')) break;
+      STATE.emailLibrary = (STATE.emailLibrary || []).filter(function(x){ return x.id !== ddoc.id; });
+      LIB_OPEN = null;
+      saveState(STATE);
+      renderEmailLibrary();
+      showToast('Deleted.');
+      break;
+    }
+    case 'email-doc-download': {
+      var dl = findEmailDoc(target.getAttribute('data-id'));
+      if(!dl) break;
+      downloadText(exportFilename(dl.title), exportEmailDoc(dl));
+      break;
+    }
+    case 'email-lib-download': {
+      var all = exportEmailLibrary(STATE, {businessName: STATE.senderName || ''});
+      var okDl = downloadText(exportFilename((STATE.senderName || 'ghostbuster') + ' emails'), all);
+      if(okDl) showToast('Downloaded. Every email, with its timing note and placeholders intact.');
+      break;
+    }
+    case 'email-lib-import': {
+      // The old stage-keyed emails, carried across rather than retyped. Only
+      // ever adds: the originals stay in `variants` untouched.
+      var imported = seedEmailLibrary(STATE.emailVariants);
+      if(!imported.length){ showToast('Nothing to import.'); break; }
+      STATE.emailLibrary = (STATE.emailLibrary || []).concat(imported);
+      saveState(STATE);
+      renderEmailLibrary();
+      showToast('Brought in ' + imported.length + (imported.length === 1 ? ' email.' : ' emails.'));
+      break;
+    }
     case 'set-cal-mode': {
       var cf = STATE.calendarFilter || {};
       STATE.calendarFilter = {
@@ -2754,6 +2966,11 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'set-email-doc'){
+    var doc = findEmailDoc(t.getAttribute('data-id'));
+    if(doc) doc[t.getAttribute('data-field')] = t.value;
+    return;   // no re-render: it would steal focus mid-sentence
   }
   if(sa === 'set-email-tpl'){
     var est = t.getAttribute('data-stage');

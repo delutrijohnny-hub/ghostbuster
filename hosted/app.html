@@ -558,24 +558,49 @@ td.score-cell{width:1%;white-space:nowrap;}
 .cal-mode input{margin-top:2px;}
 .cal-mode strong{display:block;font-size:13px;}
 .cal-mode em{display:block;font-style:normal;font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.45;}
-/* email editor — one block per touch, each saying when it sends */
-.ee-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:22px 0 12px;}
-.ee-head h3{margin:0;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;}
-.ee-head .hint{font-size:11.5px;color:var(--ink-faint);}
-.ee-stage{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
-  padding:13px 14px;margin-bottom:11px;box-shadow:var(--shadow);}
-.ee-stage.written{border-left:3px solid var(--green);}
-.ee-stage-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:9px;}
-.ee-stage-head strong{font-size:13.5px;}
-.ee-when{flex:1;font-size:11.5px;color:var(--ink-soft);min-width:160px;}
-.ee-status{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-faint);}
-.ee-stage.written .ee-status{color:var(--green);}
-.ee-subject,.ee-body{width:100%;font-family:inherit;padding:8px 11px;border:1px solid var(--border);
-  border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);font-size:13.5px;margin-bottom:7px;}
-.ee-body{line-height:1.55;resize:vertical;}
-.ee-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-.ee-tokens{flex:1;font-size:11px;color:var(--ink-faint);font-family:ui-monospace,Menlo,monospace;min-width:180px;}
-.ee-save{position:sticky;bottom:0;padding:10px 0;background:linear-gradient(transparent,var(--bg) 40%);text-align:right;}
+/* the email library — documents, not touches: a collapsed index you scan,
+   one open at a time because these are long */
+.lib-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;margin:6px 0 14px;}
+.lib-head h3{margin:0 0 3px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;}
+.lib-head .hint{font-size:11.5px;color:var(--ink-faint);max-width:60ch;display:block;line-height:1.5;}
+.lib-head-actions{display:flex;gap:7px;flex-shrink:0;}
+.lib-empty{background:var(--card);border:1px dashed var(--border);border-radius:var(--radius);
+  padding:18px;text-align:center;}
+.lib-empty p{margin:0 0 11px;font-size:13px;color:var(--ink-soft);line-height:1.55;}
+.lib-doc{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  margin-bottom:9px;box-shadow:var(--shadow);overflow:hidden;}
+.lib-doc.open{border-color:var(--green);}
+.lib-doc-head{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;}
+.lib-doc-head:hover{background:var(--bg);}
+.lib-doc-title{flex:1;min-width:0;}
+.lib-doc-title strong{display:block;font-size:13.5px;margin-bottom:2px;}
+.lib-when{display:block;font-size:11.5px;color:var(--ink-soft);}
+.lib-doc-meta{display:flex;align-items:center;gap:11px;flex-shrink:0;}
+.lib-len{font-size:11px;color:var(--ink-faint);font-variant-numeric:tabular-nums;}
+.lib-caret{font-size:11px;color:var(--ink-faint);width:9px;}
+.lib-doc-body{padding:2px 14px 14px;border-top:1px solid var(--border);}
+.lib-label{display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--ink-faint);margin:13px 0 5px;}
+.lib-input,.lib-body{width:100%;font-family:inherit;padding:8px 11px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);font-size:13.5px;}
+.lib-body{line-height:1.6;resize:vertical;min-height:220px;}
+.lib-hint{font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.5;}
+.lib-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px;}
+.lib-tokens{flex:1;font-size:11px;color:var(--ink-faint);font-family:ui-monospace,Menlo,monospace;min-width:180px;}
+.lib-foot-actions{display:flex;gap:6px;flex-wrap:wrap;}
+.btn.danger{color:var(--red,#c0392b);}
+/* picking which email to send to one contact */
+.pick-list{display:flex;flex-direction:column;gap:7px;margin-top:4px;}
+.pick-row{display:flex;align-items:center;gap:12px;padding:11px 13px;text-decoration:none;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);color:var(--ink);}
+.pick-row:hover{border-color:var(--green);background:var(--bg);}
+.pick-main{flex:1;min-width:0;}
+.pick-main strong{display:block;font-size:13.5px;margin-bottom:2px;}
+.pick-when{display:block;font-size:11.5px;color:var(--ink-soft);}
+.pick-subj{display:block;font-size:11.5px;color:var(--ink-faint);margin-top:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pick-go{font-size:11.5px;font-weight:700;color:var(--green);flex-shrink:0;}
 #em-body{width:100%;font-family:inherit;font-size:13.5px;line-height:1.55;padding:9px 11px;
   border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);color:var(--ink);resize:vertical;}
 #em-subject{width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);
@@ -820,6 +845,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
   <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
   <button class="tab-btn" data-action="tab" data-tab="variants">Messages</button>
+  <button class="tab-btn" data-action="tab" data-tab="emails">Emails</button>
   <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
   <button class="tab-btn" data-action="tab" data-tab="closed">Closed <span id="closed-count"></span></button>
@@ -890,9 +916,12 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       <label style="font-weight:700;font-size:12px;">Exploration rate (ε): <span id="epsilon-val">0.20</span></label>
       <input type="range" id="epsilon-slider" min="0" max="1" step="0.05" value="0.2">
     </div>
-    <div id="email-editor"></div>
     <div id="variant-performance"></div>
     <div id="variant-stage-blocks"></div>
+  </div>
+
+  <div class="tab-panel" id="tab-emails">
+    <div id="email-library"></div>
   </div>
 
   <div class="tab-panel" id="tab-weekly">

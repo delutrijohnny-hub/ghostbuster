@@ -56,6 +56,11 @@ async function loadState(){
   // is. Not the login address: these accounts sign in personally and organize
   // from a work address. A failure here leaves the list empty, which
   // isOthersLead reads as "cannot tell", so nothing is misfiled.
+  // The email library. Its own table rather than more stage-keyed variants:
+  // these are documents, hand-ordered, and not tied to a touch.
+  var libRes = await sb.from('email_library').select('*').eq('user_id', uid).order('sort_order');
+  if(libRes.error) throw libRes.error;
+
   var calRes = await sb.from('google_oauth_tokens').select('calendar_id').eq('user_id', uid);
   var myCalendars = (!calRes.error && calRes.data)
     ? calRes.data.map(function(r){ return r.calendar_id; }).filter(Boolean) : [];
@@ -64,6 +69,14 @@ async function loadState(){
     clients: {},
     variants: {},
     emailVariants: {},
+    emailLibrary: (libRes.data || []).map(function(r){
+      return {
+        id: r.id, title: r.title, whenToSend: r.when_to_send || '',
+        subject: r.subject || '', body: r.body || '',
+        sortOrder: Number.isFinite(r.sort_order) ? r.sort_order : 0,
+        archived: !!r.archived, updatedAt: r.updated_at
+      };
+    }),
     variantStats: {},
     todos: (todosRes.data || []).map(function(t){
       return {id: t.id, text: t.text, done: !!t.done, createdAt: t.created_at, doneAt: t.done_at};
@@ -177,6 +190,34 @@ async function loadState(){
     if(missingRows.length){
       var backfillRes = await sb.from('variants').insert(missingRows);
       if(backfillRes.error) console.error('GhostBuster: variant backfill failed', backfillRes.error);
+    }
+  }
+
+  /* Moving email off the cadence must not look like email being deleted.
+
+     An account with emails written against stages but an empty library gets
+     them carried across, once. The `variants` rows are left in place: if this
+     insert fails, or a later release changes its mind, the originals are still
+     there. Seeded straight into the database rather than only into memory, so
+     it happens whether or not the user goes on to save anything. */
+  if(!(libRes.data || []).length){
+    var seeded = seedEmailLibrary(state.emailVariants);
+    if(seeded.length){
+      var seedRows = seeded.map(function(d, i){
+        return {user_id: uid, title: d.title, when_to_send: d.whenToSend,
+                subject: d.subject, body: d.body, sort_order: i * 10};
+      });
+      var libSeedRes = await sb.from('email_library').insert(seedRows).select('*');
+      if(libSeedRes.error){
+        console.error('GhostBuster: email library seed failed', libSeedRes.error);
+      } else {
+        state.emailLibrary = (libSeedRes.data || []).map(function(r){
+          return {id: r.id, title: r.title, whenToSend: r.when_to_send || '',
+                  subject: r.subject || '', body: r.body || '',
+                  sortOrder: Number.isFinite(r.sort_order) ? r.sort_order : 0,
+                  archived: !!r.archived, updatedAt: r.updated_at};
+        });
+      }
     }
   }
 
@@ -315,6 +356,11 @@ function rowEmailVariant(v, stage, uid){
   return {user_id: uid, stage: stage, variant_key: v.id, text: v.text,
           subject: v.subject || '', builtin: !!v.builtin, needs_channel: false, channel: 'email'};
 }
+function rowEmailDoc(d, uid){
+  return {id: d.id, user_id: uid, title: d.title, when_to_send: d.whenToSend || '',
+          subject: d.subject || '', body: d.body || '',
+          sort_order: d.sortOrder, archived: !!d.archived};
+}
 function rowStat(s, stage, vk, uid){
   return {user_id: uid, stage: stage, variant_key: vk, sends: s.sends, responses: s.responses};
 }
@@ -331,7 +377,7 @@ function same(a, b){ return JSON.stringify(a) === JSON.stringify(b); }
 // snapshot, diff() threw on it, and the try/catch turned a total persistence
 // failure into a console message nobody was reading.
 function buildSyncSnapshot(state, uid){
-  var snap = {clients:{}, messages:{}, todos:{}, variants:{}, stats:{}, settings:null};
+  var snap = {clients:{}, messages:{}, todos:{}, variants:{}, stats:{}, emailDocs:{}, settings:null};
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
     snap.clients[cid] = rowClient(c, uid);
@@ -348,6 +394,12 @@ function buildSyncSnapshot(state, uid){
     (state.emailVariants[stage] || []).forEach(function(v){
       snap.variants['email|' + stage + '|' + v.id] = rowEmailVariant(v, stage, uid);
     });
+  });
+  (state.emailLibrary || []).forEach(function(d){
+    // A library entry with no id has never been saved; give it one here so the
+    // diff can address it and an edit does not insert a second copy each save.
+    if(!d.id) d.id = uuid();
+    snap.emailDocs[d.id] = rowEmailDoc(d, uid);
   });
   Object.keys(state.variantStats).forEach(function(stage){
     Object.keys(state.variantStats[stage] || {}).forEach(function(vk){
@@ -450,6 +502,23 @@ async function saveState(state){
     var st = diff(prev && prev.stats, next.stats);
     var upStats = st.added.concat(st.changed);
     if(upStats.length) writes.push(sb.from('variant_stats').upsert(upStats, {onConflict: 'user_id,stage,variant_key'}));
+
+    var ed = diff(prev && prev.emailDocs, next.emailDocs);
+    var upDocs = ed.added.concat(ed.changed);
+    if(upDocs.length){
+      // Same copy-before-stamping rule as clients: updated_at on the snapshot
+      // row itself would poison the baseline and make every later save think
+      // every email had changed.
+      var stampedDocs = upDocs.map(function(r){
+        var out = {}; Object.keys(r).forEach(function(k){ out[k] = r[k]; });
+        out.updated_at = new Date().toISOString();
+        return out;
+      });
+      writes.push(sb.from('email_library').upsert(stampedDocs));
+    }
+    // Deleting an email someone wrote is worth being careful about: explicit
+    // ids only, and never before a baseline exists.
+    if(prev && ed.removedKeys.length) writes.push(sb.from('email_library').delete().in('id', ed.removedKeys));
 
     if(!prev || !same(prev.settings, next.settings)){
       var s = {};
