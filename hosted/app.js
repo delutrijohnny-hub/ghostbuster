@@ -135,6 +135,7 @@ function renderAll(){
   renderStats();
   renderTodos();
   renderOnDeck();
+  renderUnlogged();
   renderCallsBoard();
   renderGhostToday();
   renderRecentSends();
@@ -232,7 +233,11 @@ function renderStats(){
   var prevNow = UI.statsRange==='today' ? new Date(now.getTime()-86400000) : (UI.statsRange==='week' ? new Date(now.getTime()-7*86400000) : null);
   var prev = prevNow ? computeStats(STATE, UI.statsRange, prevNow) : null;
   var cards = [
-    ['Show-up rate', s.showUpRate, prev ? prev.showUpRate : null, {}],
+    // The caveat travels with the number. A show rate computed over 86 calls
+    // while 24 sit unanswered looks like a fact about all 110, and silently
+    // excluding them is correct maths presented misleadingly.
+    ['Show-up rate', s.showUpRate, prev ? prev.showUpRate : null,
+      {note: s.unloggedCalls ? s.unloggedCalls + ' unlogged' : null}],
     ['Close rate', s.closeRate, prev ? prev.closeRate : null, {}],
     ['Text response rate', s.responseRate, prev ? prev.responseRate : null, {}],
     ['Reschedule rate', s.rescheduleRate, prev ? prev.rescheduleRate : null, {lowerIsBetter:true}],
@@ -247,10 +252,15 @@ function renderStats(){
     valueRow.appendChild(document.createTextNode(displayVal));
     var trend = trendHtml(val, prevVal, opts);
     if(trend) valueRow.insertAdjacentHTML('beforeend', trend);
-    box.appendChild(h('div',{class:'stat-card'},[
+    var card = h('div',{class:'stat-card'},[
       h('div',{class:'label'},[label]),
       valueRow
-    ]));
+    ]);
+    if(opts.note){
+      card.appendChild(h('div',{class:'stat-note','data-action':'end-of-day',
+        title:'Calls with no outcome recorded are left out of this rate — click to log them'},[opts.note]));
+    }
+    box.appendChild(card);
   });
 }
 
@@ -504,6 +514,49 @@ function renderCallsBoard(){
    Ranked by Ghost Score, and every row carries its reasons, because the whole
    value of a priority list is that the person working it believes the order.
    An unexplained ranking gets ignored, and an ignored list is worth nothing. */
+/* Unlogged calls, asked on the screen you already open.
+
+   The question existed before — in End of day, behind a button. That is why
+   the backlog reached 44: answering required deciding to go and look. Here it
+   sits above the day's work, with the same one-click answers, and disappears
+   the moment it is empty.
+
+   Capped at six visible rows. A wall of forty reads as a chore to be scrolled
+   past; six reads as something you can finish, and the rest are one click away
+   in End of day. */
+function renderUnlogged(){
+  var box = el('unlogged-calls');
+  if(!box) return;
+  box.innerHTML = '';
+  var items = getUnloggedCalls(STATE, new Date());
+  if(!items.length) return;
+
+  var head = h('div',{class:'ul-head'},[
+    h('strong',{},[items.length + ' past ' +
+      (items.length === 1 ? termLower('appointment') : termLower('appointmentPlural')) + ' with no outcome']),
+    h('span',{class:'ul-why'},['These are left out of your show rate until you answer.'])
+  ]);
+  var body = h('div',{class:'ul-body'},[]);
+  items.slice(0, 6).forEach(function(it){
+    var c = it.client;
+    body.appendChild(h('div',{class:'ul-row'},[
+      h('span',{class:'ul-name','data-action':'open-client','data-cid':c.id},[c.name]),
+      h('span',{class:'ul-when'},[it.daysAgo === 0 ? 'today' : it.daysAgo + 'd ago']),
+      h('span',{class:'ul-acts'},[
+        h('button',{class:'eod-btn ok','data-action':'eod-outcome','data-cid':c.id,'data-status':'Showed'},['Showed']),
+        h('button',{class:'eod-btn bad','data-action':'eod-outcome','data-cid':c.id,'data-status':'No-show'},['No-show']),
+        h('button',{class:'eod-btn','data-action':'eod-outcome','data-cid':c.id,'data-status':'Rescheduled'},['Rescheduled'])
+      ])
+    ]));
+  });
+  if(items.length > 6){
+    body.appendChild(h('div',{class:'ul-more','data-action':'end-of-day'},
+      ['+ ' + (items.length - 6) + ' more — clear them in End of day']));
+  }
+  box.appendChild(h('div',{class:'ul'},[head, body]));
+}
+
+
 function renderGhostToday(){
   var box = el('ghost-today');
   if(!box) return;
@@ -2359,7 +2412,9 @@ document.addEventListener('click', function(ev){
       setOutcome(STATE, cid, target.getAttribute('data-status'));
       // Re-render in place rather than closing: the point is to clear a list,
       // and a modal that shuts after every click turns 44 items into 44 trips.
-      renderEndOfDay();
+      // Only while the modal is actually open — these same buttons now appear
+      // on the Today tab, where popping End of day open would be a jump scare.
+      if(el('modal-root') && el('modal-root').innerHTML) renderEndOfDay();
       renderAll();
       break;
     case 'eod-close':

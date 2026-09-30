@@ -2356,8 +2356,20 @@ function computeStats(state, range, now){
   var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
   var inCallWindow = clients.filter(function(c){ return c.callDateTime && inRange(c.callDateTime, range, now); });
   var completed = inCallWindow.filter(function(c){ return isWon(c.status); }).length;
-  var noshow = inCallWindow.filter(function(c){ return c.status==='No-show'; }).length;
+  // Asks the role, not the literal name: a custom pipeline's "Missed Estimate"
+  // is a no-show and has to count as one, or that business sees a show rate
+  // computed over half its calls.
+  var noshow = inCallWindow.filter(function(c){ return isMissed(c.status); }).length;
   var showUpRate = (completed+noshow) > 0 ? completed/(completed+noshow) : null;
+  // Calls that have happened but whose outcome nobody recorded. They are
+  // correctly excluded from the rate above — unknown is not the same as a
+  // no-show — but excluding them silently lets a number describe 86 calls
+  // while looking like it describes 110. Reported so the UI can say how much
+  // of the picture is missing.
+  var unlogged = inCallWindow.filter(function(c){
+    var d = safeDate(c.callDateTime);
+    return d && d.getTime() < now.getTime() && !isWon(c.status) && !isMissed(c.status);
+  }).length;
   var closed = inCallWindow.filter(function(c){ return c.closeOutcome==='Closed'; }).length;
   var notClosed = inCallWindow.filter(function(c){ return c.closeOutcome==='Not closed'; }).length;
   var closeRate = (closed+notClosed) > 0 ? closed/(closed+notClosed) : null;
@@ -2366,7 +2378,7 @@ function computeStats(state, range, now){
   var sends=0, responses=0;
   clients.forEach(function(c){ c.messageLog.forEach(function(m){ if(inRange(m.sentAt, range, now)){ sends++; if(m.responded) responses++; } }); });
   var responseRate = sends > 0 ? responses/sends : null;
-  return {showUpRate:showUpRate, closeRate:closeRate, rescheduleRate:rescheduleRate, callsTracked:inCallWindow.length, responseRate:responseRate};
+  return {showUpRate:showUpRate, closeRate:closeRate, rescheduleRate:rescheduleRate, callsTracked:inCallWindow.length, responseRate:responseRate, unloggedCalls:unlogged};
 }
 
 function pct(v){ return v===null || v===undefined || isNaN(v) ? '—' : Math.round(v*100) + '%'; }
@@ -2928,6 +2940,37 @@ function weekRangeLabel(anchor){
    10) END OF DAY, DIGEST, PRINT SHEET
    ============================================================ */
 
+/* Past calls nobody has recorded an outcome for.
+
+   This is the backlog that quietly distorts everything: it makes the show
+   rate describe fewer calls than it appears to, leaves contacts in a limbo
+   state the cadence has to special-case, and was the reason welcome texts
+   were being queued for dates that had already gone.
+
+   It only ever grew because the question was asked somewhere you had to
+   choose to go. Exposed here so it can be asked on the screen you already
+   open. */
+function getUnloggedCalls(state, now){
+  now = now || new Date();
+  var out = [];
+  Object.keys(state.clients).forEach(function(cid){
+    var c = state.clients[cid];
+    if(c.ignored) return;
+    var d = safeDate(c.callDateTime);
+    if(!d || d.getTime() >= now.getTime()) return;
+    // An outcome means won or missed. Stalled and lost are answers too — they
+    // say the appointment is not happening — so they are not owed one.
+    var role = stageRole(c.status);
+    if(role !== 'open') return;
+    out.push({client: c, daysAgo: Math.floor((now.getTime() - d.getTime()) / 86400000)});
+  });
+  // Oldest first: the ones most likely to be forgotten, and the ones doing the
+  // most damage to the numbers.
+  out.sort(function(a, b){ return b.daysAgo - a.daysAgo; });
+  return out;
+}
+
+
 function computeEndOfDayItems(state){
   var now = new Date();
   var items = [];
@@ -3065,6 +3108,7 @@ var __LOGIC_EXPORTS__ = {
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
+  getUnloggedCalls: getUnloggedCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
   getRecentSends: getRecentSends,
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,

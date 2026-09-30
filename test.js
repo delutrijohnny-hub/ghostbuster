@@ -1500,6 +1500,69 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- unlogged outcomes are visible, not silent ---');
+
+test('an unlogged call is unknown, never counted as a no-show', () => {
+  const st = GB.buildDefaultState();
+  st.clients['showed'] = freshClient({id:'showed', phone:'2135550001', status:'Completed', callDateTime: isoDaysAgo(3)});
+  st.clients['missed'] = freshClient({id:'missed', phone:'2135550002', status:'No-show', callDateTime: isoDaysAgo(3)});
+  st.clients['unknown'] = freshClient({id:'unknown', phone:'2135550003', status:'Booked', callDateTime: isoDaysAgo(3)});
+  const s = GB.computeStats(st, 'all', new Date());
+  assert.strictEqual(s.showUpRate, 0.5, 'the rate is over the two that were answered');
+  assert.strictEqual(s.unloggedCalls, 1, 'and the third is reported, not swallowed');
+});
+
+test('the show rate asks the role, so a custom pipeline is not miscounted', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const st = GB.buildDefaultState();
+    st.clients['a'] = freshClient({id:'a', phone:'2135550001', status:'Estimate Completed', callDateTime: isoDaysAgo(2)});
+    st.clients['b'] = freshClient({id:'b', phone:'2135550002', status:'Missed Estimate', callDateTime: isoDaysAgo(2)});
+    const s = GB.computeStats(st, 'all', new Date());
+    assert.strictEqual(s.showUpRate, 0.5,
+      'a "Missed Estimate" is a no-show; matching the literal string would have shown 100%');
+  });
+});
+
+test('getUnloggedCalls finds exactly the calls owed an answer', () => {
+  const st = GB.buildDefaultState();
+  st.clients['past-open']  = freshClient({id:'past-open', phone:'2135550001', status:'Booked', callDateTime: isoDaysAgo(5)});
+  st.clients['past-done']  = freshClient({id:'past-done', phone:'2135550002', status:'Completed', callDateTime: isoDaysAgo(5)});
+  st.clients['past-missed']= freshClient({id:'past-missed', phone:'2135550003', status:'No-show', callDateTime: isoDaysAgo(5)});
+  st.clients['future']     = freshClient({id:'future', phone:'2135550004', status:'Booked', callDateTime: isoDaysFromNow(3)});
+  st.clients['no-date']    = freshClient({id:'no-date', phone:'2135550005', status:'Booked', callDateTime: null});
+  st.clients['archived']   = freshClient({id:'archived', phone:'2135550006', status:'Booked', callDateTime: isoDaysAgo(5), ignored:true});
+  const ids = GB.getUnloggedCalls(st, new Date()).map(x => x.client.id);
+  assert.deepStrictEqual(ids, ['past-open'],
+    'only a past appointment still sitting on an open stage is owed an outcome');
+});
+
+test('a stalled or lost contact is not owed an outcome', () => {
+  // "Rescheduled" and "Ghosted" are answers: they say the appointment is not
+  // happening. Asking again would be nagging about a question already settled.
+  const st = GB.buildDefaultState();
+  st.clients['r'] = freshClient({id:'r', phone:'2135550001', status:'Rescheduled', callDateTime: isoDaysAgo(4)});
+  st.clients['g'] = freshClient({id:'g', phone:'2135550002', status:'Ghosted', callDateTime: isoDaysAgo(4)});
+  assert.strictEqual(GB.getUnloggedCalls(st, new Date()).length, 0);
+});
+
+test('the oldest come first, because those do the most damage', () => {
+  const st = GB.buildDefaultState();
+  st.clients['recent'] = freshClient({id:'recent', phone:'2135550001', status:'Booked', callDateTime: isoDaysAgo(2)});
+  st.clients['ancient'] = freshClient({id:'ancient', phone:'2135550002', status:'Booked', callDateTime: isoDaysAgo(40)});
+  const out = GB.getUnloggedCalls(st, new Date());
+  assert.strictEqual(out[0].client.id, 'ancient');
+  assert.strictEqual(out[0].daysAgo, 40);
+});
+
+test('answering one removes it from the list', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'2135550001', status:'Booked', callDateTime: isoDaysAgo(6)});
+  st.clients['a'] = c;
+  assert.strictEqual(GB.getUnloggedCalls(st, new Date()).length, 1);
+  GB.setOutcome(st, 'a', 'Showed');
+  assert.strictEqual(GB.getUnloggedCalls(st, new Date()).length, 0);
+});
+
 console.log('\n--- the run-up stops at the appointment ---');
 
 test('a welcome is never queued for a call that already happened', () => {
