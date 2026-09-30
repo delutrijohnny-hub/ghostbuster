@@ -3074,11 +3074,55 @@ test('all mode takes everything that is not excluded', () => {
   assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Lunch with Sam'}), f), false);
 });
 
-test('an unset filter falls back to the legacy rule rather than syncing nothing', () => {
-  // Getting this wrong means a silently empty app, which is the failure this
-  // whole change exists to fix.
-  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Strategy session'}), undefined), true);
-  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Strategy session'}), {}), true);
+test('an unconfigured account gets the sensible default, NOT the first customer\'s titles', () => {
+  /* This test previously asserted the opposite, with a comment claiming it
+     prevented "a silently empty app" — while locking in the exact bug that
+     caused three of them.
+
+     An account with no calendar_filter fell back to MarketMaker's event
+     titles, so everyone who signed up had their calendar filtered for the
+     phrase "strategy session". niklaus, ronin and ethan each connected a
+     calendar, imported nothing, and were diagnosed from scratch.
+
+     Unconfigured means the sensible default. A booking is an event with a
+     guest from outside your own domain, whatever anyone calls it. */
+  const booking = ev({summary:'Roof inspection - John Smith',
+                      attendees:[{email:'john@gmail.com'}]});
+  assert.strictEqual(GB.matchesCalendarFilter(booking, undefined), true,
+    'a plumber\'s booking must import on an unconfigured account');
+  assert.strictEqual(GB.matchesCalendarFilter(booking, {}), true);
+  assert.strictEqual(GB.matchesCalendarFilter(booking, {mode: null}), true);
+
+  // And an internal meeting still must not become a contact.
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Standup', attendees:[{email:'colleague@acme.com'}]}), undefined), false);
+
+  // The legacy rule is still reachable — explicitly, by the accounts that
+  // were backfilled with it, and by the .ics import path.
+  assert.strictEqual(GB.isStrategySessionEvent(ev({summary:'Strategy Session (Dana)'})), true);
+});
+
+test('a new account is seeded with a filter it can see, not left null', () => {
+  // Relying on a fallback is what caused this. The row should say what it
+  // means, so the setting is visible and changeable in Settings.
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const seed = data.slice(data.indexOf("from('app_settings').insert("));
+  const stmt = seed.slice(0, seed.indexOf('}'));
+  assert.ok(/calendar_filter/.test(stmt),
+    'the first-load settings seed must set calendar_filter explicitly');
+  assert.ok(/attendees/.test(stmt), 'and it must be outside-guest mode: ' + stmt);
+});
+
+test('the database defaults the filter too, so no row can be born null', () => {
+  const migrations = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+    .filter(f => f.endsWith('.sql')).sort()
+    .map(f => fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8'))
+    .join('\n');
+  assert.ok(/alter column calendar_filter set default/i.test(migrations),
+    'calendar_filter needs a column default — a migration that only backfills leaves every later signup null');
+  // And the accounts already stranded have to be repaired, not just future ones.
+  assert.ok(/set calendar_filter[\s\S]{0,300}where calendar_filter is null/i.test(migrations),
+    'the repair half is missing: anyone already null stays broken');
 });
 
 test('the Edge Function and logic.js apply the same rule', () => {
@@ -3088,7 +3132,12 @@ test('the Edge Function and logic.js apply the same rule', () => {
   const ts = fs.readFileSync(path.join(__dirname, 'supabase', 'functions', '_shared', 'parse.ts'), 'utf8');
   ['matchesCalendarFilter', "mode === 'all'", "mode === 'attendees'", 'exclude', 'matchDescription']
     .forEach(token => assert.ok(ts.includes(token), 'parse.ts is missing ' + token));
-  assert.ok(/LEGACY_FILTER/.test(ts), 'parse.ts must keep the legacy fallback too');
+  assert.ok(/LEGACY_FILTER/.test(ts), 'parse.ts must keep the legacy rule for the accounts that chose it');
+  // The two copies must agree on what UNCONFIGURED means, which is the thing
+  // that was wrong: one company's titles instead of a general default.
+  assert.ok(/DEFAULT_FILTER/.test(ts), 'parse.ts must have a general default');
+  assert.ok(/:\s*DEFAULT_FILTER/.test(ts),
+    'parse.ts must FALL BACK to the general default, not to LEGACY_FILTER');
 });
 
 console.log('\n--- industry templates ---');

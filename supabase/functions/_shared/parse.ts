@@ -104,8 +104,28 @@ export type CalendarFilter = {
   exclude?: string[];
 };
 
-// MarketMaker's original rule, kept as the fallback so an account with no
-// filter configured behaves exactly as it always did.
+/* What an account with no configuration gets.
+
+   This is the single most expensive line in the codebase's history so far.
+   It used to be LEGACY_FILTER — MarketMaker's own event titles — so every
+   person who signed up had their calendar filtered for the phrase "strategy
+   session" and imported nothing at all. Three people hit it in a row
+   (niklaus, ronin, ethan), each looked like a separate mystery, and each one
+   was diagnosed from scratch while they sat in front of an empty app.
+
+   An unconfigured account must mean "use the sensible default", never "use
+   the first customer's settings". Outside-guest detection needs no setup to
+   be right: an internal standup has no guest from outside your own domain, a
+   booked appointment does. */
+export const DEFAULT_FILTER: CalendarFilter = {
+  mode: 'attendees',
+  exclude: [],
+};
+
+// MarketMaker's original rule. Still exported because accounts that predate
+// the filter were explicitly backfilled with it, and isStrategySessionEvent
+// below is the .ics import path that genuinely means this rule — but it is no
+// longer what "unconfigured" falls back to.
 export const LEGACY_FILTER: CalendarFilter = {
   mode: 'keywords',
   include: ['strategy session'],
@@ -126,7 +146,7 @@ function domainOf(email?: string): string {
    booking tool names events predictably, which is a thing you have to know
    about yourself before you can configure it. */
 export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): boolean {
-  const f = filter && filter.mode ? filter : LEGACY_FILTER;
+  const f = filter && filter.mode ? filter : DEFAULT_FILTER;
   const title = (ev.summary || '').toLowerCase();
   const desc = (ev.description || '').toLowerCase();
 

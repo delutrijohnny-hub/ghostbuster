@@ -2432,6 +2432,25 @@ function parseICS(text){
    booked appointment does. Title matching only works for a business whose
    booking tool names events predictably, which is something you have to know
    about yourself before you can configure it. */
+/* What an account with no configuration gets.
+
+   The most expensive line in this codebase's history. It used to be
+   LEGACY_CALENDAR_FILTER — MarketMaker's own event titles — so every person
+   who signed up had their calendar filtered for the phrase "strategy session"
+   and imported nothing. Three people hit it one after another, each looked
+   like a separate mystery, and the app reported "Synced: 0 new, 0 updated"
+   every time.
+
+   Unconfigured must mean "the sensible default", never "the first customer's
+   settings". */
+var DEFAULT_CALENDAR_FILTER = {
+  mode: 'attendees',
+  exclude: []
+};
+
+// MarketMaker's original rule. Accounts predating the filter were explicitly
+// backfilled with it and keep it; isStrategySessionEvent means it on purpose.
+// It is no longer what "unconfigured" falls back to.
 var LEGACY_CALENDAR_FILTER = {
   mode: 'keywords',
   include: ['strategy session'],
@@ -2445,7 +2464,7 @@ function emailDomain(email){
 }
 
 function matchesCalendarFilter(ev, filter){
-  var f = (filter && filter.mode) ? filter : LEGACY_CALENDAR_FILTER;
+  var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
   var title = (ev.summary || '').toLowerCase();
   var desc = (ev.description || '').toLowerCase();
   var i;
@@ -3711,7 +3730,8 @@ var __LOGIC_EXPORTS__ = {
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
-  matchesCalendarFilter: matchesCalendarFilter, LEGACY_CALENDAR_FILTER: LEGACY_CALENDAR_FILTER,
+  matchesCalendarFilter: matchesCalendarFilter,
+  DEFAULT_CALENDAR_FILTER: DEFAULT_CALENDAR_FILTER, LEGACY_CALENDAR_FILTER: LEGACY_CALENDAR_FILTER,
   parseICSDate: parseICSDate, extractAttendeeEmails: extractAttendeeEmails, clientFromICSEvent: clientFromICSEvent,
   MONTHS: MONTHS, parseHeuristicDate: parseHeuristicDate, parseBulkBlock: parseBulkBlock, parseBulkPaste: parseBulkPaste,
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,

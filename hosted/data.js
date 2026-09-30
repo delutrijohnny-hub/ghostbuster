@@ -281,7 +281,15 @@ async function loadState(){
   });
 
   if(!settingsRes.data){
-    var settingsSeedRes = await sb.from('app_settings').insert({user_id: uid, epsilon: 0.2});
+    // A new account is seeded with an explicit calendar filter. The column
+    // has a default now and parse.ts falls back to the same thing, but this is
+    // the layer a person can actually SEE and change in Settings — and an
+    // account whose filter was invisible because it was null is precisely how
+    // three people ended up with empty apps.
+    var settingsSeedRes = await sb.from('app_settings').insert({
+      user_id: uid, epsilon: 0.2,
+      calendar_filter: {mode: 'attendees', exclude: []}
+    });
     if(settingsSeedRes.error) throw settingsSeedRes.error;
   }
 
