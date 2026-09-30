@@ -141,6 +141,7 @@ function renderAll(){
   renderRecentSends();
   renderClientsTab();
   renderVariantsTab();
+  renderEmailEditor();
   renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
@@ -976,6 +977,71 @@ function renderDeadTab(){
    credited appointments showing "67%" looks authoritative and is noise — and
    noise printed as a percentage is how someone ends up rewriting a template
    that was fine. Thin rows show their raw counts and say so. */
+/* The email editor: your words, GhostBuster's timing.
+
+   Each stage says in plain English when it goes out, because "midcheckin"
+   tells you nothing about whether you are writing a first hello or a last
+   nudge — and a template written for the wrong moment reads worse than none.
+
+   Built-in text is shown as a starting point and marked as such. Until a stage
+   is saved, the unattended sender skips it entirely: software should not mail
+   its own words to someone's customers while they are not watching. */
+function renderEmailEditor(){
+  var box = el('email-editor');
+  if(!box) return;
+  box.innerHTML = '';
+
+  var authoredCount = 0;
+  var stages = emailEditableStages();
+  stages.forEach(function(stage){
+    var own = ((STATE.emailVariants || {})[stage] || []).filter(function(v){ return !v.builtin; });
+    if(own.length && (own[0].text || '').trim()) authoredCount++;
+  });
+
+  var head = h('div',{class:'ee-head'},[
+    h('h3',{},['Your emails']),
+    h('span',{class:'hint'},[
+      authoredCount
+        ? authoredCount + ' of ' + stages.length + ' written. Automatic sending only uses the ones you have written yourself.'
+        : 'Nothing written yet. Automatic sending stays off for a touch until you write its email.'
+    ])
+  ]);
+  box.appendChild(head);
+
+  stages.forEach(function(stage){
+    var own = ((STATE.emailVariants || {})[stage] || []).filter(function(v){ return !v.builtin; })[0];
+    var builtin = (buildDefaultEmailVariants()[stage] || [])[0];
+    var subject = own ? own.subject : '';
+    var body = own ? own.text : '';
+    var written = !!(own && (own.text || '').trim());
+
+    var block = h('div',{class:'ee-stage' + (written ? ' written' : '')},[]);
+    block.appendChild(h('div',{class:'ee-stage-head'},[
+      h('strong',{},[stage]),
+      h('span',{class:'ee-when'},['sent ' + stageTiming(stage)]),
+      h('span',{class:'ee-status'},[written ? '✓ written' : 'not written'])
+    ]));
+    block.appendChild(h('input',{type:'text',class:'ee-subject',
+      'data-action':'set-email-tpl','data-stage':stage,'data-field':'subject',
+      value: subject, placeholder: builtin ? 'e.g. ' + builtin.subject : 'Subject line'}));
+    block.appendChild(h('textarea',{class:'ee-body',rows:'5',
+      'data-action':'set-email-tpl','data-stage':stage,'data-field':'text',
+      placeholder: builtin ? builtin.text : 'Write the email for this touch…'},[body]));
+    var foot = h('div',{class:'ee-foot'},[
+      h('span',{class:'ee-tokens'},['{name} {sender} {date} {time} {weekday} {link}']),
+      h('button',{class:'btn btn-sm btn-ghost','data-action':'use-email-example','data-stage':stage},
+        ['Start from the example'])
+    ]);
+    block.appendChild(foot);
+    box.appendChild(block);
+  });
+
+  box.appendChild(h('div',{class:'ee-save'},[
+    h('button',{class:'btn btn-sm btn-green','data-action':'save-email-tpls'},['Save emails'])
+  ]));
+}
+
+
 function renderVariantPerformance(){
   var box = el('variant-performance');
   if(!box) return;
@@ -2282,6 +2348,22 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
+    case 'use-email-example': {
+      var exStage = target.getAttribute('data-stage');
+      var ex = (buildDefaultEmailVariants()[exStage] || [])[0];
+      if(!ex) break;
+      if(!STATE.emailVariants) STATE.emailVariants = {};
+      var exList = STATE.emailVariants[exStage] = (STATE.emailVariants[exStage] || [])
+        .filter(function(v){ return v.builtin; });
+      exList.push({id:'own-' + exStage, subject: ex.subject, text: ex.text, builtin:false, channel:'email'});
+      renderEmailEditor();
+      break;
+    }
+    case 'save-email-tpls':
+      saveState(STATE);
+      renderEmailEditor();
+      showToast('Emails saved. Automatic sending will use them from the next run.');
+      break;
     case 'set-cal-mode': {
       var cf = STATE.calendarFilter || {};
       STATE.calendarFilter = {
@@ -2637,6 +2719,22 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'set-email-tpl'){
+    var est = t.getAttribute('data-stage');
+    var fld = t.getAttribute('data-field');
+    if(!STATE.emailVariants) STATE.emailVariants = {};
+    var list = STATE.emailVariants[est] = (STATE.emailVariants[est] || []);
+    var ownIdx = -1;
+    list.forEach(function(v, i){ if(!v.builtin && ownIdx === -1) ownIdx = i; });
+    if(ownIdx === -1){
+      // A stage's own template is created the moment someone types in it, and
+      // given a stable key so edits land on the same row rather than piling up.
+      list.push({id: 'own-' + est, subject: '', text: '', builtin: false, channel: 'email'});
+      ownIdx = list.length - 1;
+    }
+    list[ownIdx][fld] = t.value;
+    return;   // no re-render: it would steal focus mid-sentence
   }
   if(sa === 'set-cal-words'){
     var cfw = STATE.calendarFilter || {mode:'keywords'};

@@ -63,6 +63,7 @@ async function loadState(){
   var state = {
     clients: {},
     variants: {},
+    emailVariants: {},
     variantStats: {},
     todos: (todosRes.data || []).map(function(t){
       return {id: t.id, text: t.text, done: !!t.done, createdAt: t.created_at, doneAt: t.done_at};
@@ -136,13 +137,25 @@ async function loadState(){
     var seedRows = [];
     Object.keys(defaults).forEach(function(stage){
       defaults[stage].forEach(function(v){
-        seedRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel});
+        seedRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel, channel: 'sms'});
       });
     });
     var seedRes = await sb.from('variants').insert(seedRows);
     if(seedRes.error) throw seedRes.error;
   } else {
+    // Split by channel. Without this an email template lands in the SMS
+    // rotation and pickVariant can hand a subject-line-and-paragraphs email to
+    // someone expecting a text — a latent bug that only bites the moment
+    // somebody writes their first email.
     (variantsRes.data || []).forEach(function(row){
+      if((row.channel || 'sms') === 'email'){
+        if(!state.emailVariants[row.stage]) state.emailVariants[row.stage] = [];
+        state.emailVariants[row.stage].push({
+          id: row.variant_key, subject: row.subject || '', text: row.text,
+          builtin: !!row.builtin, channel: 'email'
+        });
+        return;
+      }
       if(!state.variants[row.stage]) state.variants[row.stage] = [];
       state.variants[row.stage].push({id: row.variant_key, text: row.text, builtin: !!row.builtin, needsChannel: !!row.needs_channel});
     });
@@ -158,7 +171,7 @@ async function loadState(){
       if(state.variants[stage] && state.variants[stage].length) return;
       state.variants[stage] = defaultsByStage[stage];
       defaultsByStage[stage].forEach(function(v){
-        missingRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel});
+        missingRows.push({user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel, channel: 'sms'});
       });
     });
     if(missingRows.length){
@@ -295,7 +308,12 @@ function rowTodo(t, uid){
   return {id: t.id, user_id: uid, text: t.text, done: !!t.done, created_at: t.createdAt, done_at: t.doneAt};
 }
 function rowVariant(v, stage, uid){
-  return {user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin, needs_channel: !!v.needsChannel};
+  return {user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin,
+          needs_channel: !!v.needsChannel, channel: 'sms'};
+}
+function rowEmailVariant(v, stage, uid){
+  return {user_id: uid, stage: stage, variant_key: v.id, text: v.text,
+          subject: v.subject || '', builtin: !!v.builtin, needs_channel: false, channel: 'email'};
 }
 function rowStat(s, stage, vk, uid){
   return {user_id: uid, stage: stage, variant_key: vk, sends: s.sends, responses: s.responses};
@@ -324,7 +342,12 @@ function buildSyncSnapshot(state, uid){
   });
   (state.todos || []).forEach(function(t){ snap.todos[t.id] = rowTodo(t, uid); });
   Object.keys(state.variants).forEach(function(stage){
-    (state.variants[stage] || []).forEach(function(v){ snap.variants[stage + '|' + v.id] = rowVariant(v, stage, uid); });
+    (state.variants[stage] || []).forEach(function(v){ snap.variants['sms|' + stage + '|' + v.id] = rowVariant(v, stage, uid); });
+  });
+  Object.keys(state.emailVariants || {}).forEach(function(stage){
+    (state.emailVariants[stage] || []).forEach(function(v){
+      snap.variants['email|' + stage + '|' + v.id] = rowEmailVariant(v, stage, uid);
+    });
   });
   Object.keys(state.variantStats).forEach(function(stage){
     Object.keys(state.variantStats[stage] || {}).forEach(function(vk){
@@ -422,7 +445,7 @@ async function saveState(state){
 
     var v = diff(prev && prev.variants, next.variants);
     var upVars = v.added.concat(v.changed);
-    if(upVars.length) writes.push(sb.from('variants').upsert(upVars, {onConflict: 'user_id,stage,variant_key'}));
+    if(upVars.length) writes.push(sb.from('variants').upsert(upVars, {onConflict: 'user_id,stage,channel,variant_key'}));
 
     var st = diff(prev && prev.stats, next.stats);
     var upStats = st.added.concat(st.changed);

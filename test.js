@@ -1534,6 +1534,68 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+console.log('\n--- your emails, GhostBuster’s timing ---');
+
+test('the unattended sender will not mail a built-in template', () => {
+  // A business should never discover that software has been sending its own
+  // words to its customers.
+  const c = freshClient({callDateTime: isoDaysFromNow(2)});
+  assert.strictEqual(GB.getAuthoredEmailDraft({emailVariants:{}}, c, 'welcome', 'Johnny'), null);
+  const builtinOnly = {emailVariants:{welcome:[{id:'ew1', subject:'s', text:'t', builtin:true}]}};
+  assert.strictEqual(GB.getAuthoredEmailDraft(builtinOnly, c, 'welcome', 'Johnny'), null,
+    'shipping a default is not the same as a business choosing to send it');
+});
+
+test('an email written by hand is used', () => {
+  const c = freshClient({callDateTime: isoDaysFromNow(2)});
+  const written = {emailVariants:{welcome:[
+    {id:'own-welcome', subject:'Confirmed for {date}', text:'Hi {name}, see you {date}.', builtin:false}]}};
+  const d = GB.getAuthoredEmailDraft(written, c, 'welcome', 'Johnny');
+  assert.ok(d);
+  assert.ok(!d.subject.includes('{') && !d.text.includes('{'), 'placeholders must render');
+  assert.ok(d.text.startsWith('Hi Jane'), 'got: ' + d.text);
+});
+
+test('an empty template does not count as written', () => {
+  const c = freshClient({});
+  const blank = {emailVariants:{welcome:[{id:'own-welcome', subject:'x', text:'   ', builtin:false}]}};
+  assert.strictEqual(GB.getAuthoredEmailDraft(blank, c, 'welcome', 'Johnny'), null,
+    'a half-started draft must not go out automatically');
+});
+
+test('manual sending still offers the examples', () => {
+  // A person reads the draft before it goes, so a starting point is helpful
+  // there and dangerous unattended.
+  const c = freshClient({callDateTime: isoDaysFromNow(1), meetLink:'https://meet.google.com/a-b-c'});
+  assert.ok(GB.getEmailDraft(GB.buildDefaultState(), c, 'dayof', 'Johnny'));
+});
+
+test('every editable stage says when it sends, in words', () => {
+  GB.emailEditableStages().forEach(stage => {
+    const t = GB.stageTiming(stage);
+    assert.ok(t && t !== 'custom trigger',
+      stage + ' has no plain-English timing, so nobody can write the right email for it');
+    assert.ok(!/trigger|repeat_while_role|anchor/.test(t), stage + ' leaks jargon: ' + t);
+  });
+});
+
+test('the timing follows the cadence rather than being written down twice', () => {
+  const before = GB.stageTiming('monday');
+  withSequence(GB.buildDefaultSequence().filter(s => s.key !== 'monday'), () => {
+    assert.notStrictEqual(GB.stageTiming('monday'), before,
+      'a label that keeps describing a removed touch is worse than no label');
+  });
+});
+
+test('the editor covers every touch the cadence can send', () => {
+  const stages = GB.emailEditableStages();
+  GB.buildDefaultSequence().forEach(step => {
+    assert.ok(stages.includes(step.stage), 'no way to write an email for ' + step.stage);
+  });
+  ['rebooked','followup'].forEach(st =>
+    assert.ok(stages.includes(st), st + ' fires in place of welcome and needs its own email'));
+});
+
 console.log('\n--- a bounced address is a stop, not a retry ---');
 
 test('a healthy address can be emailed', () => {

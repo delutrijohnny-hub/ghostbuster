@@ -93,6 +93,18 @@ async function planForUser(settings: any, now: Date) {
   GB.setPipeline(settings.pipeline || null);
   GB.setSequence(settings.sequence || null);
 
+  // The org's own email templates, keyed by stage.
+  const vRes = await db(`/variants?user_id=eq.${userId}&channel=eq.email&select=stage,variant_key,subject,text,builtin`);
+  const vRows = await vRes.json();
+  const emailVariants: Record<string, any[]> = {};
+  if (Array.isArray(vRows)) {
+    for (const r of vRows) {
+      (emailVariants[r.stage] = emailVariants[r.stage] || []).push({
+        id: r.variant_key, subject: r.subject, text: r.text, builtin: !!r.builtin,
+      });
+    }
+  }
+
   const planned: any[] = [];
   const skipped: Record<string, number> = {};
   const skip = (why: string) => { skipped[why] = (skipped[why] || 0) + 1; };
@@ -140,8 +152,12 @@ async function planForUser(settings: any, now: Date) {
     const hour = hourIn(client.timezone, now);
     if (hour < SEND_FROM_HOUR || hour >= SEND_TO_HOUR) { skip('outside their working hours'); continue; }
 
-    const draft = GB.getEmailDraft({ emailVariants: null }, client, stage, settings.sender_name || 'there');
-    if (!draft) { skip('no email version of that touch'); continue; }
+    // Only an email the business wrote itself. Falling back to a built-in
+    // would mean software mailing its own words to someone's customers while
+    // nobody is watching, which is not a thing to do on a person's behalf.
+    const draft = GB.getAuthoredEmailDraft(
+      { emailVariants: emailVariants }, client, stage, settings.sender_name || 'there');
+    if (!draft) { skip('no email written for that touch yet'); continue; }
 
     planned.push({
       clientId: client.id, name: client.name, to: client.email,

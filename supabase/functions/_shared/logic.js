@@ -464,10 +464,57 @@ function buildDefaultVariants(){
    when an account has not customised that stage, and returns null only when
    the stage has no email form at all — the caller then knows to offer a blank
    composer rather than silently sending nothing. */
+/* When does this stage's email actually go out, in plain words.
+
+   The editor is useless without it. "midcheckin" tells you nothing about
+   whether you are writing a first hello or a last nudge, and a template
+   written for the wrong moment reads worse than no template at all. Derived
+   from the live sequence, so a business that moves a touch sees the label move
+   with it rather than a description that quietly stops being true. */
+function stageTiming(stage){
+  var steps = getSequence();
+  for(var i = 0; i < steps.length; i++){
+    if(steps[i].stage === stage) return describeTrigger(steps[i].trigger);
+  }
+  // welcome wears three faces depending on who the contact is.
+  if(stage === 'rebooked') return 'as soon as a past contact books again';
+  if(stage === 'followup') return 'as soon as someone who already had a call books another';
+  return 'when this touch comes due';
+}
+
+// Ordered the way the cadence runs, so the editor reads as a sequence rather
+// than an alphabetical list of jargon.
+function emailEditableStages(){
+  var out = [];
+  getSequence().forEach(function(step){ if(out.indexOf(step.stage) === -1) out.push(step.stage); });
+  ['rebooked','followup'].forEach(function(st){ if(out.indexOf(st) === -1) out.push(st); });
+  return out;
+}
+
+
 function emailVariantsFor(state, stage){
   var custom = state && state.emailVariants && state.emailVariants[stage];
   if(custom && custom.length) return custom;
   return buildDefaultEmailVariants()[stage] || null;
+}
+
+/* An email the business wrote itself, or nothing.
+
+   Used by the unattended sender. The built-in templates are a starting point
+   for the editor, not something to mail on somebody's behalf while they are
+   not watching — a business should never discover that software has been
+   sending its own words to its customers. Manual sending still offers the
+   defaults, because there a person reads the draft before it goes.  */
+function getAuthoredEmailDraft(state, client, stage, senderName){
+  var list = (state && state.emailVariants && state.emailVariants[stage]) || [];
+  var authored = list.filter(function(v){ return !v.builtin && (v.text || '').trim(); });
+  if(!authored.length) return null;
+  var v = authored[0];
+  return {
+    variantId: v.id,
+    subject: renderTemplate(v.subject || '', client, senderName),
+    text: renderTemplate(v.text || '', client, senderName)
+  };
 }
 
 function getEmailDraft(state, client, stage, senderName){
@@ -3351,6 +3398,7 @@ var __LOGIC_EXPORTS__ = {
   uid: uid, nowISO: nowISO, safeDate: safeDate, escapeHtml: escapeHtml, clamp: clamp,
   buildDefaultVariants: buildDefaultVariants, buildDefaultEmailVariants: buildDefaultEmailVariants,
   emailVariantsFor: emailVariantsFor, getEmailDraft: getEmailDraft,
+  getAuthoredEmailDraft: getAuthoredEmailDraft, stageTiming: stageTiming, emailEditableStages: emailEditableStages,
   buildDefaultState: buildDefaultState,
   sanitizeClient: sanitizeClient, sanitizeSnoozedUntil: sanitizeSnoozedUntil, migrateState: migrateState,
   tzDateKey: tzDateKey, keyToUTCms: keyToUTCms, keyPlusDays: keyPlusDays, mondayOfWeekKey: mondayOfWeekKey,
