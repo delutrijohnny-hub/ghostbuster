@@ -1826,6 +1826,65 @@ test('a fully worked run-up reports complete', () => {
   assert.strictEqual(p.nextStage, null);
 });
 
+console.log('\n--- industry templates ---');
+
+test('every template is a valid, workable configuration', () => {
+  GB.buildIndustryTemplates().forEach(t => {
+    assert.ok(t.key && t.label && t.blurb, 'template missing basics: ' + JSON.stringify(t));
+    if(!t.pipeline) return;   // 'custom' deliberately keeps the defaults
+    const roles = t.pipeline.map(p => p.role);
+    // Without these three a business is silently broken: nothing gets chased,
+    // nothing ever completes, and no-shows never trigger a rescue.
+    ['open','won','missed'].forEach(r =>
+      assert.ok(roles.indexOf(r) !== -1, t.key + ' has no ' + r + ' stage'));
+    t.pipeline.forEach(st => {
+      assert.ok(st.key && st.label, t.key + ' has a nameless stage');
+      assert.ok(['open','won','missed','stalled','lost'].indexOf(st.role) !== -1,
+        t.key + ' has an unknown role: ' + st.role);
+    });
+  });
+});
+
+test('templates have distinct keys and every one is retrievable', () => {
+  const keys = GB.buildIndustryTemplates().map(t => t.key);
+  assert.strictEqual(new Set(keys).size, keys.length, 'duplicate template keys');
+  keys.forEach(k => assert.ok(GB.industryTemplate(k), 'could not fetch ' + k));
+  assert.strictEqual(GB.industryTemplate('nope'), null);
+});
+
+test('a template drives the real engine, not a parallel one', () => {
+  const hvac = GB.industryTemplate('hvac');
+  GB.setPipeline(hvac.pipeline);
+  try {
+    assert.strictEqual(GB.stopsCadence('Estimate Completed'), true);
+    assert.strictEqual(GB.isMissed('Missed Estimate'), true);
+    assert.strictEqual(GB.isStalledStage('Awaiting Decision'), true);
+    // and the agency's own stage names stop being special
+    assert.strictEqual(GB.isWon('Completed'), false);
+  } finally { GB.setPipeline(null); }
+});
+
+test('every template can run a full cadence without knowing its stage names', () => {
+  GB.buildIndustryTemplates().forEach(t => {
+    if(!t.pipeline) return;
+    GB.setPipeline(t.pipeline);
+    try {
+      const openStage = t.pipeline.find(p => p.role === 'open').key;
+      const c = freshClient({status: openStage, bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(4)});
+      assert.ok(GB.computeDue(c, new Date()).length > 0, t.key + ': a new booking should have a touch due');
+      const missedStage = t.pipeline.find(p => p.role === 'missed').key;
+      const m = freshClient({status: missedStage, callDateTime: isoDaysAgo(2)});
+      assert.ok(GB.computeDue(m, new Date()).includes('noshow'), t.key + ': a miss should trigger rescue');
+    } finally { GB.setPipeline(null); }
+  });
+});
+
+test('the custom template leaves the defaults alone', () => {
+  const custom = GB.industryTemplate('custom');
+  assert.strictEqual(custom.pipeline, null);
+  assert.strictEqual(custom.terminology, null);
+});
+
 console.log('\n--- hot / good / nurture / dead grouping ---');
 
 test('every band lands in exactly one group', () => {

@@ -98,6 +98,10 @@ function applyTerminology(){
 function renderAll(){
   if(!STATE) return;
   applyTerminology();
+  // Shown once, on an account that has nothing in it yet. Deliberately after
+  // the first render so the wizard opens over a real app rather than a blank
+  // page — seeing what it will look like is part of the pitch.
+  if(!ONBOARDING && needsOnboarding()) setTimeout(startOnboarding, 0);
   renderHealthAlerts();
   renderProgressBar();
   renderStats();
@@ -1445,6 +1449,117 @@ function renderTimeline(client, events){
    "Closed Won" never stopped the follow-up cadence. */
 var SETTINGS_DRAFT = null;
 
+/* ---- onboarding ----
+   A company that signs up today lands in an empty app with no instruction.
+   Every setting it needs already exists; nobody tells them to open it. This is
+   the difference between software someone can buy and software someone has to
+   be walked through.
+
+   Three steps, because that is how many decisions actually matter before the
+   app is useful: what kind of business, what they call people, and where their
+   appointments come from. Everything else has a defensible default and can be
+   changed later in settings.
+
+   Shown when an account has no clients and has never configured anything —
+   never for an established account, and never again once dismissed. */
+var ONBOARDING = null;
+
+function needsOnboarding(){
+  if(!STATE) return false;
+  if(localStorage.getItem('gb_onboarded') === '1') return false;
+  var hasClients = Object.keys(STATE.clients).length > 0;
+  var hasConfig = !!(STATE.pipeline || STATE.terminology);
+  return !hasClients && !hasConfig;
+}
+
+function startOnboarding(){
+  ONBOARDING = {step: 1, industry: null, terminology: null, connected: false};
+  renderOnboarding();
+}
+
+function finishOnboarding(skipped){
+  try{ localStorage.setItem('gb_onboarded', '1'); }catch(e){}
+  ONBOARDING = null;
+  closeModal();
+  renderAll();
+  if(!skipped) showToast('You’re set up. Connect a calendar any time from the Menu.');
+}
+
+function renderOnboarding(){
+  var o = ONBOARDING;
+  if(!o) return;
+  var dots = [1,2,3].map(function(n){
+    return '<span class="ob-dot' + (n === o.step ? ' active' : (n < o.step ? ' done' : '')) + '"></span>';
+  }).join('');
+
+  var bodyHtml = '';
+  if(o.step === 1){
+    bodyHtml =
+      '<h3>What kind of business is this?</h3>' +
+      '<p class="ob-sub">This sets up your stages and vocabulary. You can change any of it later.</p>' +
+      '<div class="ob-grid">' +
+      buildIndustryTemplates().map(function(t){
+        return '<button class="ob-card' + (o.industry === t.key ? ' selected' : '') + '" data-action="ob-industry" data-key="' + t.key + '">' +
+          '<strong>' + escapeHtml(t.label) + '</strong>' +
+          '<span>' + escapeHtml(t.blurb) + '</span></button>';
+      }).join('') + '</div>';
+  } else if(o.step === 2){
+    var terms = o.terminology || buildDefaultTerminology();
+    bodyHtml =
+      '<h3>What do you call the people you follow up with?</h3>' +
+      '<p class="ob-sub">These words appear throughout the app.</p>' +
+      '<div class="term-grid">' +
+      [['contact','One of them'],['contactPlural','More than one'],
+       ['appointment','One appointment'],['appointmentPlural','More than one appointment']
+      ].map(function(f){
+        return '<div><label>' + f[1] + '</label><input type="text" data-action="ob-term" data-key="' + f[0] + '" value="' + escapeHtml(terms[f[0]]) + '"></div>';
+      }).join('') + '</div>';
+  } else {
+    bodyHtml =
+      '<h3>Where do your appointments come from?</h3>' +
+      '<p class="ob-sub">GhostBuster reads your calendar and starts the follow-up sequence automatically. ' +
+      'Without it you can still add people by hand.</p>' +
+      '<div class="ob-connect">' +
+      '<button class="btn btn-primary" data-action="connect-calendar" data-priority="0" data-label="Work">Connect Google Calendar</button>' +
+      '<span class="ob-or">or</span>' +
+      '<button class="btn" data-action="ob-skip-calendar">I’ll do this later</button>' +
+      '</div>';
+  }
+
+  var backBtn = o.step > 1 ? '<button class="btn btn-sm btn-ghost" data-action="ob-back">Back</button>' : '';
+  var nextLabel = o.step === 3 ? 'Finish' : 'Continue';
+  var nextDisabled = (o.step === 1 && !o.industry) ? ' disabled' : '';
+
+  openModalHtml(
+    '<div class="ob">' +
+      '<div class="ob-head"><span class="ob-dots">' + dots + '</span>' +
+        '<button class="btn-ghost btn btn-sm" data-action="ob-skip">Skip setup</button></div>' +
+      '<div class="ob-body">' + bodyHtml + '</div>' +
+      '<div class="ob-foot">' + backBtn +
+        '<span class="spacer"></span>' +
+        '<button class="btn btn-primary" data-action="ob-next"' + nextDisabled + '>' + nextLabel + '</button>' +
+      '</div>' +
+    '</div>', true);
+}
+
+function applyOnboarding(){
+  var o = ONBOARDING;
+  var tpl = o.industry ? industryTemplate(o.industry) : null;
+  // A template writes into the same settings an admin edits later, so this is
+  // a starting point rather than a mode the account is locked into.
+  if(tpl && tpl.pipeline){
+    STATE.pipeline = tpl.pipeline;
+    setPipeline(tpl.pipeline);
+  }
+  var terms = o.terminology || (tpl && tpl.terminology) || null;
+  if(terms){
+    STATE.terminology = terms;
+    setTerminology(terms);
+  }
+  saveState(STATE);
+}
+
+
 function openSettingsModal(){
   // Edited against a draft, not live state: a half-finished pipeline (a stage
   // mid-rename, a blank row) would otherwise be what computeDue sees on the
@@ -1818,6 +1933,36 @@ document.addEventListener('click', function(ev){
       UI.outcomeOpen = null;
       renderGhostToday();
       break;
+    case 'ob-industry': {
+      ONBOARDING.industry = target.getAttribute('data-key');
+      var t = industryTemplate(ONBOARDING.industry);
+      // Pre-fill step 2 from the template so the words are already right and
+      // the step becomes a confirmation rather than a blank form.
+      ONBOARDING.terminology = t && t.terminology
+        ? Object.assign(buildDefaultTerminology(), t.terminology)
+        : buildDefaultTerminology();
+      renderOnboarding();
+      break;
+    }
+    case 'ob-next':
+      if(ONBOARDING.step === 1 && !ONBOARDING.industry) break;
+      if(ONBOARDING.step === 3){ applyOnboarding(); finishOnboarding(false); break; }
+      ONBOARDING.step++;
+      renderOnboarding();
+      break;
+    case 'ob-back':
+      ONBOARDING.step--;
+      renderOnboarding();
+      break;
+    case 'ob-skip-calendar':
+      applyOnboarding();
+      finishOnboarding(false);
+      break;
+    case 'ob-skip':
+      // Skipping is a real choice, not a trap: nothing is applied and the
+      // wizard never reappears.
+      finishOnboarding(true);
+      break;
     case 'open-settings':
       openSettingsModal();
       break;
@@ -2082,6 +2227,10 @@ document.addEventListener('input', function(ev){
     var si = parseInt(t.getAttribute('data-idx'), 10);
     if(SETTINGS_DRAFT.pipeline[si]) SETTINGS_DRAFT.pipeline[si].label = t.value;
     return;
+  }
+  if(ONBOARDING && sa === 'ob-term'){
+    ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
+    return;   // no re-render: rebuilding the modal would steal focus mid-word
   }
   if(SETTINGS_DRAFT && sa === 'set-term'){
     SETTINGS_DRAFT.terminology[t.getAttribute('data-key')] = t.value;

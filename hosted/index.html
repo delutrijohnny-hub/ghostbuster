@@ -461,6 +461,28 @@ th.sortable:hover{color:var(--ink);}
 th.sortable.active{color:var(--ink);}
 th.sortable.active::after{content:' ▾';}
 td.score-cell{width:1%;white-space:nowrap;}
+/* onboarding — three decisions, then out of the way */
+.ob-head{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
+.ob-dots{display:flex;gap:6px;flex:1;}
+.ob-dot{width:22px;height:4px;border-radius:99px;background:var(--border);}
+.ob-dot.active{background:var(--green);}
+.ob-dot.done{background:var(--green);opacity:.45;}
+.ob-body h3{margin:0 0 4px;font-size:19px;letter-spacing:-.2px;}
+.ob-sub{margin:0 0 16px;font-size:13px;color:var(--ink-soft);line-height:1.55;}
+.ob-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:9px;}
+.ob-card{text-align:left;padding:12px 13px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--card);cursor:pointer;display:flex;flex-direction:column;gap:3px;font-family:inherit;
+  transition:border-color .12s ease,background .12s ease;}
+.ob-card:hover{border-color:var(--ink-faint);}
+.ob-card.selected{border-color:var(--green);background:var(--green-soft);}
+.ob-card strong{font-size:13.5px;color:var(--ink);}
+.ob-card span{font-size:11.5px;color:var(--ink-soft);line-height:1.45;}
+.ob-connect{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 0;}
+.ob-or{font-size:12px;color:var(--ink-faint);}
+.ob-foot{display:flex;align-items:center;gap:10px;margin-top:22px;padding-top:16px;border-top:1px solid var(--border);}
+.ob-foot .spacer{flex:1;}
+.ob-foot button[disabled]{opacity:.4;cursor:not-allowed;}
+@media (max-width:560px){ .ob-grid{grid-template-columns:1fr;} }
 /* How far through the five-touch run-up. Quiet by design: it is context for
    the message, not a competing call to action. */
 td.touch-cell{width:1%;white-space:nowrap;color:var(--ink-faint);font-size:11.5px;font-variant-numeric:tabular-nums;}

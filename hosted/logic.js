@@ -56,6 +56,103 @@ function buildDefaultPipeline(){
 // set once at load, alongside the existing module-level caches. Anything that
 // hasn't called setPipeline() gets the defaults, so logic.js stays usable
 // standalone — which the tests and the Edge Functions both rely on.
+/* ---- industry templates ----
+   What a new company picks once, so GhostBuster arrives configured instead of
+   arriving empty. Each template is just the settings that already exist —
+   terminology, pipeline, cadence — bundled into a sensible starting point.
+
+   Deliberately NOT separate hard-coded versions of the app. A template writes
+   values into the same app_settings columns an admin can edit afterwards, so
+   picking "HVAC" and then renaming a stage is an ordinary edit rather than
+   fighting a preset.
+
+   Stage roles do the work: every template's pipeline maps onto open / won /
+   missed / stalled / lost, which is why the same cadence engine drives all of
+   them without knowing a single stage name. */
+function buildIndustryTemplates(){
+  function pipe(stages){
+    return stages.map(function(st){ return {key: st[0], label: st[0], role: st[1]}; });
+  }
+  return [
+    {
+      key:'agency', label:'Marketing / creative agency',
+      blurb:'Discovery calls booked from outreach or inbound.',
+      terminology:{contact:'Client', contactPlural:'Clients', appointment:'Call', appointmentPlural:'Calls', graveyard:'Graveyard'},
+      pipeline: pipe([['Booked','open'],['Confirmed','open'],['Reminded','open'],
+                      ['Completed','won'],['No-show','missed'],['Rescheduled','stalled'],['Ghosted','lost']])
+    },
+    {
+      key:'real_estate', label:'Real estate team',
+      blurb:'Showings and listing appointments.',
+      terminology:{contact:'Lead', contactPlural:'Leads', appointment:'Showing', appointmentPlural:'Showings', graveyard:'Cold leads'},
+      pipeline: pipe([['New Lead','open'],['Contacted','open'],['Showing Scheduled','open'],
+                      ['Showing Completed','won'],['No-show','missed'],['Thinking It Over','stalled'],['Lost','lost']])
+    },
+    {
+      key:'hvac', label:'HVAC / plumbing / electrical',
+      blurb:'Estimates and service calls.',
+      terminology:{contact:'Customer', contactPlural:'Customers', appointment:'Estimate', appointmentPlural:'Estimates', graveyard:'Cold storage'},
+      pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Estimate Scheduled','open'],
+                      ['Estimate Completed','won'],['Missed Estimate','missed'],['Awaiting Decision','stalled'],['Lost','lost']])
+    },
+    {
+      key:'roofing', label:'Roofing / exterior',
+      blurb:'Inspections and quotes, often weather-driven.',
+      terminology:{contact:'Homeowner', contactPlural:'Homeowners', appointment:'Inspection', appointmentPlural:'Inspections', graveyard:'Cold storage'},
+      pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Inspection Scheduled','open'],
+                      ['Inspection Completed','won'],['Missed Inspection','missed'],['Quote Pending','stalled'],['Lost','lost']])
+    },
+    {
+      key:'moving', label:'Moving / logistics',
+      blurb:'Walkthroughs and move quotes with hard dates.',
+      terminology:{contact:'Customer', contactPlural:'Customers', appointment:'Walkthrough', appointmentPlural:'Walkthroughs', graveyard:'Cold storage'},
+      pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Walkthrough Booked','open'],
+                      ['Walkthrough Done','won'],['No-show','missed'],['Quote Pending','stalled'],['Lost','lost']])
+    },
+    {
+      key:'recruiting', label:'Recruiting / staffing',
+      blurb:'Candidate screens and interviews.',
+      terminology:{contact:'Candidate', contactPlural:'Candidates', appointment:'Interview', appointmentPlural:'Interviews', graveyard:'Archive'},
+      pipeline: pipe([['Sourced','open'],['Contacted','open'],['Screen Scheduled','open'],
+                      ['Screen Completed','won'],['No-show','missed'],['Awaiting Decision','stalled'],['Passed','lost']])
+    },
+    {
+      key:'saas', label:'SaaS / software sales',
+      blurb:'Demos and trials.',
+      terminology:{contact:'Prospect', contactPlural:'Prospects', appointment:'Demo', appointmentPlural:'Demos', graveyard:'Closed lost'},
+      pipeline: pipe([['New Lead','open'],['Contacted','open'],['Demo Scheduled','open'],
+                      ['Demo Completed','won'],['No-show','missed'],['Evaluating','stalled'],['Closed Lost','lost']])
+    },
+    {
+      key:'fitness', label:'Gym / fitness studio',
+      blurb:'Intro sessions and tours.',
+      terminology:{contact:'Member', contactPlural:'Members', appointment:'Session', appointmentPlural:'Sessions', graveyard:'Lapsed'},
+      pipeline: pipe([['New Lead','open'],['Contacted','open'],['Intro Booked','open'],
+                      ['Intro Attended','won'],['No-show','missed'],['Deciding','stalled'],['Not Joining','lost']])
+    },
+    {
+      key:'b2b', label:'General B2B sales',
+      blurb:'Discovery calls and proposals.',
+      terminology:{contact:'Opportunity', contactPlural:'Opportunities', appointment:'Meeting', appointmentPlural:'Meetings', graveyard:'Closed lost'},
+      pipeline: pipe([['New Lead','open'],['Contacted','open'],['Meeting Scheduled','open'],
+                      ['Meeting Held','won'],['No-show','missed'],['Proposal Pending','stalled'],['Closed Lost','lost']])
+    },
+    {
+      key:'custom', label:'Something else',
+      blurb:'Start from the basics and rename everything yourself.',
+      terminology: null,   // null means "keep the defaults and let them edit"
+      pipeline: null
+    }
+  ];
+}
+
+function industryTemplate(key){
+  var all = buildIndustryTemplates();
+  for(var i = 0; i < all.length; i++){ if(all[i].key === key) return all[i]; }
+  return null;
+}
+
+
 /* ---- terminology ----
    The same problem as stages, one layer up: "Client" is agency vocabulary. A
    recruiter has Candidates, an HVAC shop has Customers, a real estate team has
@@ -2741,6 +2838,7 @@ function buildClientsCsv(state){
 var __LOGIC_EXPORTS__ = {
   STORAGE_KEY: STORAGE_KEY, VALID_STATUSES: VALID_STATUSES, STOP_1TO4: STOP_1TO4,
   buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
+  buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
   getTerminology: getTerminology, term: term, termLower: termLower,
   stageRole: stageRole, stageLabel: stageLabel, isWon: isWon, isMissed: isMissed,
