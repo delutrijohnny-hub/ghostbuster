@@ -550,6 +550,42 @@ td.score-cell{width:1%;white-space:nowrap;}
 .cal-health .spacer{flex:1;}
 .cal-health .btn{background:#fff;border-color:#fff;color:#111;font-weight:800;}
 .cal-health.hidden{display:none;}
+/* Phone layout for the library, the picker and the calendar notice.
+
+   Reasoned from the widths rather than eyeballed, because a local file cannot
+   be screenshotted from here. At 375px the panel gives about 323px of content
+   width. The five footer buttons come to roughly 257px so they fit, but the
+   token hint carries min-width:180px and forces a wrap — and the 220px
+   textarea pushes Save most of a screen below the text being edited, which is
+   the one control someone reaches for on a phone.
+
+   Also: .btn-sm is a 28px tap target, and here it sits next to a destructive
+   Delete. Full-width stacked controls on a phone are both easier to hit and
+   harder to hit by accident. */
+@media (max-width:560px){
+  .lib-head{flex-direction:column;gap:10px;}
+  .lib-head-actions{width:100%;}
+  .lib-head-actions .btn{flex:1;padding-top:9px;padding-bottom:9px;text-align:center;}
+  .lib-doc-head{padding:11px 12px;}
+  .lib-doc-body{padding:2px 12px 12px;}
+  /* Shorter box, so the controls below it stay within reach of the text. */
+  .lib-body{min-height:150px;}
+  .lib-foot{flex-direction:column;align-items:stretch;gap:9px;}
+  .lib-tokens{min-width:0;order:2;}
+  .lib-foot-actions{order:1;width:100%;}
+  /* Save first and full width; it is what someone came here to press. The
+     reorder buttons stay small and side by side, and Delete keeps its own
+     row so it is never adjacent to Save. */
+  .lib-foot-actions .btn{padding-top:9px;padding-bottom:9px;}
+  .lib-foot-actions .btn-green{flex:1 1 100%;order:1;text-align:center;}
+  .lib-foot-actions .btn-ghost{order:2;flex:1;text-align:center;}
+  .lib-foot-actions .danger{order:3;flex:1 1 100%;text-align:center;}
+  .pick-row{flex-direction:column;align-items:stretch;gap:7px;}
+  .pick-go{text-align:right;}
+  .cal-health{padding:10px 14px;}
+  .cal-health .spacer{display:none;}
+  .cal-health .btn{width:100%;padding-top:9px;padding-bottom:9px;text-align:center;}
+}
 @media (max-width:560px){
   .focus-who h2{font-size:20px;}
   .focus-acts{flex-direction:column;align-items:stretch;}
