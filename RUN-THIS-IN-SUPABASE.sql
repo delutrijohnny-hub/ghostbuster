@@ -1,58 +1,28 @@
 -- ============================================================
--- GhostBuster — run this once in the Supabase SQL editor.
--- All three pending migrations, in order. Safe to run as one
--- block, and safe to run twice.
+-- GhostBuster — paste the WHOLE of this into the Supabase SQL
+-- editor and press Run. Safe to run twice.
+--
+-- Written defensively: it checks for each thing it depends on
+-- and adapts instead of failing, and prints a NOTICE saying
+-- what it did. A migration that has to be pasted by hand
+-- should not assume anything about the database it lands in.
 -- ============================================================
 
--- Email as a library, not a cadence.
---
--- Email was built as the five touches wearing a different hat: a variant keyed
--- by stage, fired when that touch came due. That was wrong about how email is
--- actually used here. A text is a nudge — three seconds on a lock screen, one
--- of five, timed to a call. An email is a DOCUMENT: the pricing breakdown, the
--- case study, the onboarding walkthrough, the "here's everything we discussed"
--- recap. It holds ten times the information and it goes out when the
--- conversation calls for it, not when a clock says touch three is due.
---
--- Forcing those into five stage slots meant the long ones had nowhere to live
--- and the good ones could only be reached by whichever contact happened to be
--- at the matching stage.
---
--- So: a flat, ordered library of emails the business wrote, each labelled with
--- when to send it, each holding as much as it needs. Reachable for any contact
--- at any time, and exportable so the copy is not trapped in one web app.
---
--- Nothing is deleted. The existing stage-keyed rows in `variants` where
--- channel='email' stay exactly as they are; the app seeds the library from
--- them on first load so no email anyone wrote is lost, and the old rows remain
--- as a fallback until that seeding is confirmed everywhere.
-
+-- ------------------------------------------------------------
+-- 1. The email library.
+-- ------------------------------------------------------------
 create table if not exists public.email_library (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  org_id uuid references public.organizations(id) on delete cascade,
-
-  -- What this email IS, in the salesperson's own words: "Pricing breakdown",
-  -- "Post-call recap". This is what they scan when picking one.
+  -- No inline foreign key: organizations may not exist on every database.
+  -- The reference is added below only if it does.
+  org_id uuid,
   title text not null,
-
-  -- When to send it, as free text rather than a stage key. The whole point of
-  -- the change: "after they ask what it costs" is a real answer and is not one
-  -- of five stages. Kept because an unlabelled template is a template sent at
-  -- the wrong moment.
   when_to_send text,
-
   subject text,
-  -- No length constraint, deliberately. This is the column that exists so an
-  -- email can hold what a text cannot.
   body text,
-
-  -- Hand-ordered. The library reads as the order the business sells in, which
-  -- alphabetical would destroy.
   sort_order integer not null default 0,
-
   archived boolean not null default false,
-
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -60,84 +30,102 @@ create table if not exists public.email_library (
 create index if not exists email_library_user_idx on public.email_library (user_id);
 create index if not exists email_library_org_idx on public.email_library (org_id);
 
--- Same org stamping and boundary as every other table.
-drop trigger if exists email_library_set_org on public.email_library;
-create trigger email_library_set_org before insert on public.email_library
-  for each row execute function public.set_org_id_from_user();
+-- Link org_id to organizations, if that table is there.
+do $$
+begin
+  if to_regclass('public.organizations') is null then
+    raise notice 'organizations table not found - email_library.org_id left unlinked';
+  elsif not exists (
+    select 1 from pg_constraint where conname = 'email_library_org_id_fkey'
+  ) then
+    alter table public.email_library
+      add constraint email_library_org_id_fkey
+      foreign key (org_id) references public.organizations(id) on delete cascade;
+    raise notice 'linked email_library.org_id to organizations';
+  end if;
+end $$;
+
+-- Stamp org_id on insert, if the shared function exists.
+do $$
+begin
+  if exists (select 1 from pg_proc where proname = 'set_org_id_from_user') then
+    drop trigger if exists email_library_set_org on public.email_library;
+    create trigger email_library_set_org before insert on public.email_library
+      for each row execute function public.set_org_id_from_user();
+    raise notice 'org stamping trigger installed';
+  else
+    raise notice 'set_org_id_from_user() not found - skipping org trigger';
+  end if;
+end $$;
 
 alter table public.email_library enable row level security;
 
-drop policy if exists "email_library_org_all" on public.email_library;
-create policy "email_library_org_all" on public.email_library for all
-  using (org_id in (select public.user_org_ids()))
-  with check (org_id in (select public.user_org_ids()));
+-- The org boundary if this database has one, otherwise per-user. Either way
+-- nobody can read anybody else's emails.
+do $$
+begin
+  drop policy if exists "email_library_org_all" on public.email_library;
+  drop policy if exists "email_library_user_all" on public.email_library;
 
+  if exists (select 1 from pg_proc where proname = 'user_org_ids') then
+    create policy "email_library_org_all" on public.email_library for all
+      using (org_id in (select public.user_org_ids()))
+      with check (org_id in (select public.user_org_ids()));
+    raise notice 'org-scoped policy installed';
+  else
+    create policy "email_library_user_all" on public.email_library for all
+      using (user_id = auth.uid())
+      with check (user_id = auth.uid());
+    raise notice 'user_org_ids() not found - installed per-user policy instead';
+  end if;
+end $$;
 
--- 'email' as a logged stage.
---
--- A library email is not a cadence touch. It has no trigger and no position in
--- the five, so there is no stage to advance — but it still has to be LOGGED,
--- for two reasons that both matter: the timeline should show what was actually
--- sent, and "has this person been contacted today" is what stops an automated
--- text landing on top of an email sent by hand ten minutes earlier.
---
--- So it logs against stage 'email'. Which the CHECK constraint rejected, and a
--- rejected insert fails the whole batched save — the same failure mode as
--- 'revival', where every save in the app died silently and the only symptom
--- the user saw was "changes are not being saved".
---
--- Third time this list has needed extending, which is the argument for making
--- it one shared enum rather than three literals in three tables. Left as three
--- for now because changing it is a separate migration with its own risk, and
--- doing both at once is how the risky half gets shipped unnoticed.
-alter table public.variants drop constraint if exists variants_stage_check;
-alter table public.variants add constraint variants_stage_check
-  check (stage in ('welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow','revival','rebooked','followup','email'));
+-- ------------------------------------------------------------
+-- 2. Allow the 'email' stage, so logging a library send does
+--    not fail the whole save.
+-- ------------------------------------------------------------
+do $$
+declare
+  t text;
+  stages text := $list$'welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow','revival','rebooked','followup','email'$list$;
+begin
+  foreach t in array array['variants','variant_stats','message_log'] loop
+    if to_regclass('public.' || t) is not null then
+      execute format('alter table public.%I drop constraint if exists %I', t, t || '_stage_check');
+      execute format('alter table public.%I add constraint %I check (stage in (%s))', t, t || '_stage_check', stages);
+    end if;
+  end loop;
+  raise notice 'stage constraints now allow the email stage';
+end $$;
 
-alter table public.variant_stats drop constraint if exists variant_stats_stage_check;
-alter table public.variant_stats add constraint variant_stats_stage_check
-  check (stage in ('welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow','revival','rebooked','followup','email'));
+-- ------------------------------------------------------------
+-- 3. Every account gets a working calendar filter.
+-- ------------------------------------------------------------
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'app_settings'
+      and column_name = 'calendar_filter'
+  ) then
+    alter table public.app_settings
+      alter column calendar_filter set default
+        jsonb_build_object('mode', 'attendees', 'exclude', jsonb_build_array());
 
-alter table public.message_log drop constraint if exists message_log_stage_check;
-alter table public.message_log add constraint message_log_stage_check
-  check (stage in ('welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow','revival','rebooked','followup','email'));
+    update public.app_settings
+    set calendar_filter = jsonb_build_object('mode', 'attendees', 'exclude', jsonb_build_array())
+    where calendar_filter is null;
 
+    raise notice 'calendar filter default set, and null accounts repaired';
+  else
+    raise notice 'app_settings.calendar_filter column not found - skipped';
+  end if;
+end $$;
 
--- Every new account gets a working calendar filter.
---
--- The filter migration backfilled the accounts that existed at the time and
--- gave the column no default. So every account created afterwards had
--- calendar_filter NULL, and NULL fell back — in parse.ts — to MarketMaker's
--- own event titles: import nothing unless the event is called "strategy
--- session".
---
--- Three people hit this one after another. niklaus, ronin and ethan each
--- connected a calendar, synced, got nothing, and reported it as a separate
--- mystery. Each was diagnosed from scratch. The app told them nothing was
--- wrong: "Synced: 0 new, 0 updated".
---
--- Two halves, same as the org-provisioning fix: make it impossible going
--- forward, and repair anyone already stranded.
-
--- 1) A default on the column, so a new row is correct without anyone
---    remembering to set it. parse.ts also defaults to this now, but relying
---    on a fallback is what caused this — the row should say what it means.
-alter table public.app_settings
-  alter column calendar_filter set default jsonb_build_object(
-    'mode', 'attendees',
-    'exclude', jsonb_build_array()
-  );
-
--- 2) Repair every account still carrying NULL.
---
--- Deliberately NOT touching rows that already hold a filter: an account that
--- explicitly chose keyword matching (MarketMaker's own, backfilled earlier)
--- keeps it. This only fixes accounts that were never configured at all.
-update public.app_settings
-set calendar_filter = jsonb_build_object(
-  'mode', 'attendees',
-  'exclude', jsonb_build_array()
-)
-where calendar_filter is null;
-
-
+-- ------------------------------------------------------------
+-- Did it work? This should return one row.
+-- ------------------------------------------------------------
+select
+  to_regclass('public.email_library') as email_library_table,
+  (select count(*) from pg_policies where tablename = 'email_library') as policies,
+  (select count(*) from public.app_settings where calendar_filter is null) as accounts_still_unconfigured;
