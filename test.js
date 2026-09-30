@@ -3675,6 +3675,66 @@ function makeDataCtx(){
   return {ctx, calls, run: (src) => vm.runInContext(src, ctx)};
 }
 
+/* A loadState harness, with per-table control over what comes back.
+
+   makeDataCtx only ever exercises saveState. Nothing tested loadState, which
+   is how a hard `throw` on a brand-new table reached production: deploy the
+   code before its migration and loadState rejects on a relation that does not
+   exist, so NOBODY can open the app — not the new tab, the whole thing. */
+function makeLoadCtx(tableResults){
+  const results = tableResults || {};
+  function table(name){
+    const res = () => Promise.resolve(
+      Object.prototype.hasOwnProperty.call(results, name) ? results[name] : {data: [], error: null});
+    const chain = {
+      eq(){ return chain; }, order(){ return chain; }, not(){ return chain; },
+      maybeSingle(){ return res(); },
+      then(ok, bad){ return res().then(ok, bad); }
+    };
+    return {select(){ return chain; },
+            insert(){ return {select(){ return chain; }, then(ok,bad){ return res().then(ok,bad); }}; },
+            upsert(){ return chain; }, delete(){ return chain; }};
+  }
+  const sandbox = {
+    console, JSON, Date, Math, Promise, Object, Array, String, Number, isNaN, parseInt, parseFloat, Set,
+    crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2,10) },
+    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table } }
+  };
+  sandbox.window.window = sandbox.window;
+  const ctx = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','logic.js'),'utf8'), ctx, {filename:'hosted/logic.js'});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','data.js'),'utf8'), ctx, {filename:'hosted/data.js'});
+  return {ctx, run: (src) => vm.runInContext(src, ctx)};
+}
+
+test('a missing email_library degrades to an empty one — it never takes the app down', async () => {
+  // Exactly what a code deploy ahead of its migration looks like.
+  const d = makeLoadCtx({
+    email_library: {data: null, error: {message: 'relation "public.email_library" does not exist', code: '42P01'}}
+  });
+  const state = await d.run('loadState()');
+  assert.ok(state, 'loadState must still return a usable state');
+  assert.strictEqual(state.emailLibrary.length, 0, 'no library, rather than no app');
+  assert.ok(state.clients, 'the rest of the account must still load');
+  // And the user is told, rather than left with a silently empty tab.
+  const health = d.run('window.GB_SAVE_HEALTH');
+  assert.strictEqual(health.ok, false);
+  assert.ok(/migration/i.test(health.detail), 'the warning should name the actual cause: ' + health.detail);
+});
+
+test('a healthy load reports no problem and carries the library through', async () => {
+  const d = makeLoadCtx({
+    email_library: {data: [{id:'a', title:'Pricing breakdown', when_to_send:'after they ask what it costs',
+      subject:'The numbers', body:'Hi {name},', sort_order:0, archived:false, updated_at:'2026-09-30T00:00:00Z'}],
+      error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.emailLibrary.length, 1);
+  assert.strictEqual(state.emailLibrary[0].whenToSend, 'after they ask what it costs',
+    'the snake_case column must map to the camelCase field the UI reads');
+  assert.strictEqual(state.emailLibrary[0].title, 'Pricing breakdown');
+});
+
 test('hosted/data.js parses and defines the persistence seam', () => {
   const d = makeDataCtx();
   assert.strictEqual(d.run('typeof saveState'), 'function');

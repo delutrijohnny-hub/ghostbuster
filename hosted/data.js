@@ -58,8 +58,23 @@ async function loadState(){
   // isOthersLead reads as "cannot tell", so nothing is misfiled.
   // The email library. Its own table rather than more stage-keyed variants:
   // these are documents, hand-ordered, and not tied to a touch.
+  /* A missing library must never take the app down with it.
+
+     This was written as `if(libRes.error) throw` — the same shape as every
+     load above it, which is correct for tables that have existed for months
+     and catastrophic for one added this morning. Deploy the code before the
+     migration and loadState throws on a table that does not exist yet, so
+     nobody can open GhostBuster at all: not the Emails tab, the whole app.
+     Contacts, today's texts, everything, gone behind a blank screen because
+     an email library could not be read.
+
+     So it degrades. No library is a missing feature; no app is an outage. */
   var libRes = await sb.from('email_library').select('*').eq('user_id', uid).order('sort_order');
-  if(libRes.error) throw libRes.error;
+  if(libRes.error){
+    console.error('GhostBuster: email library unavailable', libRes.error);
+    reportSaveHealth(false, 'The email library could not be loaded. Everything else is working. If this persists, the email_library migration has not been run.');
+    libRes = {data: [], error: null};
+  }
 
   var calRes = await sb.from('google_oauth_tokens').select('calendar_id').eq('user_id', uid);
   var myCalendars = (!calRes.error && calRes.data)
