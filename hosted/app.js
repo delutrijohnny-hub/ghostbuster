@@ -1650,18 +1650,32 @@ function populatePrintSheet(state){
    ============================================================ */
 
 function buildAIPrompt(client, stage){
-  var sender = STATE.senderName || 'Johnny';
+  var sender = STATE.senderName || 'the sender';
   var samples = eligibleVariants(STATE, stage, client).map(function(v){ return renderTemplate(v.text, client, sender); });
   var callDate = safeDate(client.callDateTime);
   var tz = client.timezone || 'America/New_York';
   var lines = [
-    'You are drafting a single SMS text message for ' + sender + ', a real estate YouTube coach, to send to a client/lead named ' + firstName(client.name) + '.',
-    'Match ' + sender + '\'s real texting voice exactly, shown in these example messages he actually sends for this same stage ("' + stage + '"):',
+    /* No claim about what business this is.
+
+       This used to say "a real estate YouTube coach" — true of exactly one
+       account. Every other business's AI drafts were written as if they
+       coached realtors on YouTube, so a plumber asking for a follow-up text
+       got one pitching video strategy. Same mistake as the calendar filter:
+       the first customer's details hard-coded as everyone's.
+
+       The example messages already carry the business, the voice AND the
+       industry, far more accurately than a label could — they are the
+       business's own texts for this exact stage. Describing the industry on
+       top of them added nothing even for the account it was true of. */
+    'You are drafting a single SMS text message for ' + sender + ', to send to a ' +
+      termLower('contact') + ' named ' + firstName(client.name) + '.',
+    'Match ' + sender + '\'s real texting voice exactly, shown in these example messages they actually send for this same stage ("' + stage + '"):',
     samples.map(function(s){ return '- "' + s + '"'; }).join('\n'),
-    'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with his name unless the examples do.',
+    'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with their name unless the examples do.',
+    'Infer what this business does from the examples. Never invent a service, industry or claim that is not in them.',
   ];
   if(callDate) lines.push('Their call is on ' + fmtDate(callDate, tz) + ' at ' + fmtTime(callDate, tz) + '.');
-  if(client.notes) lines.push('Notes ' + sender + ' has on this client: ' + client.notes);
+  if(client.notes) lines.push('Notes ' + sender + ' has on this ' + termLower('contact') + ': ' + client.notes);
   if(client.recap) lines.push('Recap from a prior call with them: ' + client.recap);
   lines.push('Write ONE replacement text message personalized using those notes/recap where it naturally fits. Output ONLY the message text itself — no quotes, no preamble, no explanation.');
   return lines.join('\n\n');

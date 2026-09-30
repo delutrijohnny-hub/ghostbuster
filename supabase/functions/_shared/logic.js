@@ -391,25 +391,25 @@ function sameContact(a, b){
 function buildDefaultVariants(){
   return {
     welcome: [
-      {id:'w1', builtin:true, text:"Hey {name}, {sender} here. Got you locked in for {date} at {time}. Going to break down the exact video formats pulling local inbound clients right now. Go ahead and block the calendar."},
-      {id:'w2', builtin:true, text:"Hi {name}, {sender} with MarketMakerMGMT. We're set for {date} at {time}. We'll map out how to turn regular video uploads into predictable inbound business. Save the time on your end."},
+      {id:'w1', builtin:true, text:"Hey {name}, {sender} here. You're locked in for {date} at {time}. I'll come prepared with specifics for your situation rather than a general overview. Go ahead and block the time."},
+      {id:'w2', builtin:true, text:"Hi {name}, {sender} here. We're set for {date} at {time}. If there's something in particular you want covered, reply and I'll make sure we get to it."},
       {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}, {sender} here. Got {channel} open and locked you in for {date} at {time}. Want to focus on the biggest leverage points for local search and discovery. Talk soon."}
     ],
     monday: [
-      {id:'m1', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Going over channel architecture and what actually converts local viewers. Keep it on the calendar."},
-      {id:'m2', builtin:true, text:"Hey {name}, we're on for {weekday} at {time}. I'll have a couple of examples from your market pulled up to walk through. Anything specific you want me to look at before then?"}
+      {id:'m1', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Nothing needed from you beforehand — just keep it on the calendar."},
+      {id:'m2', builtin:true, text:"Hi {name}, hope the week's off to a good start. We're on for {weekday} at {time}. Say the word if the time stopped working and I'll move it."}
     ],
     midcheckin: [
-      {id:'c1', builtin:true, text:"Hey {name}, checking in ahead of our call on {date}. Going to focus on the main distribution mistakes keeping real estate videos under 100 views. Still good on your end?"},
-      {id:'c2', builtin:true, text:"Hi {name}, touching base before {date}. Ready to map out your content roadmap and posting rhythm. Let me know if anything shifted on your schedule."},
+      {id:'c1', builtin:true, text:"Hey {name}, checking in ahead of {date}. Still a good time on your end?"},
+      {id:'c2', builtin:true, text:"Hi {name}, touching base before {date}. Let me know if anything shifted on your schedule and we'll find another slot."},
       {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, reviewing our plan for {channel} before {date}. Want to zone in on your local video packaging and CTR. Still all set?"},
       {id:'c4', builtin:true, text:"Hey {name}, quick schedule check for {date}. Drop a 👍 if that time still works and I'll see you then."}
     ],
     dayof: [
-      {id:'d1', builtin:true, text:"Hey {name}, hopping on at {time} to dial in your channel roadmap. Here's the link: {link}"},
-      {id:'d2', builtin:true, text:"Hi {name}, ready for our call at {time}. Got the strategy framework queued up. Jump in here: {link}"},
-      {id:'d3', builtin:true, text:"Hey {name}, talk at {time}. Going to walk through the exact content hooks that drive local watch time. Room link is here: {link}"},
-      {id:'d4', builtin:true, text:"Hi {name}, see you at {time}. Ready to break down your channel growth structure. Join here: {link}"}
+      {id:'d1', builtin:true, text:"Hey {name}, hopping on at {time}. Here's the link: {link}"},
+      {id:'d2', builtin:true, text:"Hi {name}, ready for our call at {time}. Jump in here: {link}"},
+      {id:'d3', builtin:true, text:"Hey {name}, talk at {time}. Room link is here: {link}"},
+      {id:'d4', builtin:true, text:"Hi {name}, see you at {time}. Join here: {link}"}
     ],
     // Fires ~1 hour out, after "dayof" has already gone in the morning. The
     // no-show data says most misses aren't people changing their mind, they're
@@ -421,12 +421,12 @@ function buildDefaultVariants(){
       {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"}
     ],
     recovery: [
-      {id:'r1', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to map out that channel growth blueprint? Let me know if I should drop a couple new times."},
-      {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to get your YouTube content dialed in, send over a couple open windows and I'll get us set."}
+      {id:'r1', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to get this on the calendar? Let me know if I should drop a couple of new times."},
+      {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to move ahead, send over a couple of open windows and I'll get us set."}
     ],
     noshow: [
       {id:'n1', builtin:true, text:"Hey {name}, missed you on {date}. No stress, it happens. What does later this week look like on your end?"},
-      {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still want to walk you through what's driving local YouTube conversion right now. Shoot me a time that works better and we can reset."},
+      {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still happy to get you sorted — shoot me a time that works better and we can reset."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
     /* The slow lane. Sent roughly monthly, indefinitely, to anyone who never
@@ -435,7 +435,7 @@ function buildDefaultVariants(){
        quiet, and it makes leaving easy — a nurture text that is hard to say no
        to stops being nurture and becomes harassment. */
     revival: [
-      {id:'v1', builtin:true, text:"Hey {name}, {sender} here. Been a while. If getting your video content working is still on the list this year, happy to pick it back up. If not, no hard feelings and I'll leave you be."},
+      {id:'v1', builtin:true, text:"Hey {name}, {sender} here. Been a while. If this is still on the list, happy to pick it back up. If not, no hard feelings and I'll leave you be."},
       {id:'v2', builtin:true, text:"Hi {name}, checking in after a while. Things change, so figured I'd ask: is this still something you're thinking about? A yes or a no both work."},
       {id:'v3', builtin:true, text:"Hey {name}, circling back one more time. If the timing is better now I can send over a couple of slots. If it's not, just say and I'll stop bugging you."}
     ],
@@ -445,16 +445,16 @@ function buildDefaultVariants(){
     // someone coming back around, not a stranger, so the tone skips the
     // introduction but still reads as a first real connection.
     rebooked: [
-      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Ready to dive into the YouTube roadmap for your market."},
-      {id:'rb2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen, ready to get your channel dialed in."}
+      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Same plan as before — I'll come ready with specifics."},
+      {id:'rb2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen."}
     ],
     // Fires instead of "rebooked" when the prior contact's last known status
     // was Completed — they already had a real call with John, this is a
     // genuine second call, and the copy should read that way (not like
     // they're a stranger or a no-show finally showing up).
     followup: [
-      {id:'f1', builtin:true, text:"Hey {name}, good to pick this back up on {date} at {time}. We'll jump right into the next phase of your video production and channel rollout."},
-      {id:'f2', builtin:true, text:"Hi {name}, {sender} here. Glad we're back on the calendar for {date} at {time}. Let's pick up where we left off and map out the rest of your channel strategy."}
+      {id:'f1', builtin:true, text:"Hey {name}, good to pick this back up on {date} at {time}. I'll carry on from where we finished rather than starting over."},
+      {id:'f2', builtin:true, text:"Hi {name}, {sender} here. Glad we're back on the calendar for {date} at {time}. Let's pick up where we left off."}
     ]
   };
 }
@@ -1448,7 +1448,17 @@ function renderTemplate(template, client, senderName){
   var tz = client.timezone || 'America/New_York';
   var vals = {
     name: firstName(client.name),
-    sender: senderName || 'Johnny',
+    /* Never another real person's name.
+
+       This fell back to 'Johnny'. On any other account that means a text
+       going to a stranger's customer signed with the name of a person at a
+       different company — confidently, invisibly, and unfixably once sent.
+       An obvious placeholder is embarrassing for one message; the wrong real
+       name is a different category of wrong.
+
+       data.js derives this from the account's own email, so the fallback is a
+       last resort rather than a normal path. */
+    sender: senderName || 'your name',
     date: callDate ? fmtDate(callDate, tz) : '',
     // Zone spelled out, so "11:00 AM PDT" can't be read as 11am wherever the
     // reader happens to be.
@@ -2414,7 +2424,12 @@ function parseICS(text){
       summary: summary, description: description,
       location: location, conference: conference,
       dtstartRaw: dtstart.value, dtstartTzid: tzidMatch ? tzidMatch[1] : null,
-      uid: get('UID').value, created: get('CREATED').value, attendeeLines: attendeeLines
+      uid: get('UID').value, created: get('CREATED').value, attendeeLines: attendeeLines,
+      // ORGANIZER tells us whose domain is internal for THIS event, which is
+      // what picks the customer out of the attendee list. Without it the
+      // fallback had to name one company's domain in code.
+      // The value is a mailto: URI ("ORGANIZER;CN=Jo:mailto:jo@acme.com").
+      organizerEmail: (get('ORGANIZER').value.replace(/^mailto:/i, '').trim() || null)
     });
   });
   return events;
@@ -2540,13 +2555,25 @@ function clientFromICSEvent(ev){
   // The booking-form description always states the client's own email right
   // after their name ("Booked by\n{name}\n{email}\n{phone}") — that's a far
   // more reliable source than the calendar invite's attendee list, which can
-  // include internal teammates cc'd on the call using a personal (non-
-  // @marketmakermgmt.com) address that the exclusion filter can't catch.
+  // include internal teammates cc'd on the call using a personal address,
+  // which no domain rule can catch.
   // Only fall back to scraping attendees if the description doesn't have one.
   var descEmailMatch = (ev.description||'').match(EMAIL_RE);
   var email = descEmailMatch ? descEmailMatch[0].toLowerCase() : '';
   if(!email){
-    var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){ return !/@marketmakermgmt\.com$/i.test(e); });
+    /* Fall back to the attendee list, taking the guest from OUTSIDE the
+       organizer's domain.
+
+       This used to strip a hard-coded @marketmakermgmt.com, which fails both
+       ways for anyone else: another business's own teammates are never
+       stripped, so a colleague's address is saved as the customer's and the
+       follow-up goes to the colleague. Whose domain is internal is knowable
+       per event — the organizer's — and it is the same rule the calendar
+       filter uses to decide what counts as a booking. */
+    var organizerDomain = emailDomain(ev.organizerEmail || ev.organizer);
+    var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){
+      return !organizerDomain || emailDomain(e) !== organizerDomain;
+    });
     email = emails[0] || '';
   }
   var bookedDate = ev.created ? (parseICSDate(ev.created) || nowISO()) : nowISO();

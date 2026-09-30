@@ -1651,6 +1651,194 @@ test('the examples came from the business, not from invention', () => {
     'the welcome should carry their own positioning line');
 });
 
+/* Strip comments so a guard can look at code that actually runs.
+
+   A line-based filter is not good enough: a block comment's continuation
+   lines start with ordinary words, so an explanation OF a hard-coded value
+   reads as the value itself. Both guards below first failed on their own
+   comments describing the bug they prevent. */
+function codeOnly(src){
+  let out = '', i = 0, n = src.length;
+  while(i < n){
+    const two = src.slice(i, i + 2);
+    if(two === '/*'){
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? n : end + 2;
+      out += ' ';
+    } else if(two === '//'){
+      const end = src.indexOf('\n', i);
+      i = end === -1 ? n : end;
+      out += ' ';
+    } else {
+      out += src[i]; i++;
+    }
+  }
+  return out;
+}
+
+console.log('\n--- nothing about one customer is hard-coded as everyone’s ---');
+
+test('the contact email is the outside guest, not a colleague on the booking', () => {
+  /* This used to strip a literal @marketmakermgmt.com, which fails BOTH ways.
+     For any other business the strip never matches, so the first attendee
+     wins — and if that is a teammate cc'd on the call, the teammate's address
+     is saved as the customer's and every follow-up email goes to them. */
+  const ics = [
+    'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:evt1',
+    'SUMMARY:Roof inspection (John Smith)',
+    'DESCRIPTION:Booked by John Smith',
+    'DTSTART:20261005T150000Z',
+    'ORGANIZER;CN=Bob:mailto:bob@acmeplumbing.com',
+    'ATTENDEE;CN=Teammate:mailto:dave@acmeplumbing.com',
+    'ATTENDEE;CN=John Smith:mailto:john@gmail.com',
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+  const ev = GB.parseICS(ics)[0];
+  assert.strictEqual(ev.organizerEmail, 'bob@acmeplumbing.com',
+    'ORGANIZER has to be parsed, or there is no way to know whose domain is internal');
+  const c = GB.clientFromICSEvent(ev);
+  assert.strictEqual(c.email, 'john@gmail.com',
+    'the customer, not the colleague — a follow-up to the colleague is invisible until someone notices');
+});
+
+test('a MarketMaker booking still picks the client, not the teammate', () => {
+  // The behaviour that was correct before must stay correct: this is the
+  // account the hard-coded domain existed for.
+  const ics = [
+    'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:evt2',
+    'SUMMARY:Strategy Session (Dana Reed)',
+    'DESCRIPTION:Booked by Dana Reed',
+    'DTSTART:20261005T150000Z',
+    'ORGANIZER;CN=Johnny:mailto:john@marketmakermgmt.com',
+    'ATTENDEE;CN=Niklaus:mailto:niklaus.c@marketmakermgmt.com',
+    'ATTENDEE;CN=Dana:mailto:dana@example.com',
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+  const c = GB.clientFromICSEvent(GB.parseICS(ics)[0]);
+  assert.strictEqual(c.email, 'dana@example.com');
+});
+
+test('an event with no organizer still yields a contact rather than nothing', () => {
+  // Unknown internal domain must degrade to "take the first guest", not to
+  // "discard every address".
+  const ics = [
+    'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:evt3',
+    'SUMMARY:Estimate (Pat Lee)','DESCRIPTION:Booked by Pat Lee',
+    'DTSTART:20261005T150000Z',
+    'ATTENDEE;CN=Pat:mailto:pat@somewhere.com',
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+  const c = GB.clientFromICSEvent(GB.parseICS(ics)[0]);
+  assert.strictEqual(c.email, 'pat@somewhere.com');
+});
+
+test('no source file names one customer\'s domain in its logic', () => {
+  // The cheapest possible guard against this whole class of bug. A mention in
+  // a COMMENT is fine — explaining the history is useful; a mention in code
+  // that runs is one business's details deciding another's behaviour.
+  const files = ['logic.js', 'hosted/data.js', 'hosted/app.js',
+                 path.join('supabase','functions','_shared','parse.ts')];
+  files.forEach(rel => {
+    const code = codeOnly(fs.readFileSync(path.join(__dirname, rel), 'utf8'));
+    assert.ok(!/marketmakermgmt/i.test(code),
+      rel + ' names marketmakermgmt in code that runs — one business\'s details deciding another\'s behaviour');
+  });
+  // Sanity: the guard must be able to see a real occurrence.
+  assert.ok(/marketmakermgmt/i.test(codeOnly("var x = /@marketmakermgmt\\.com$/i;")),
+    'codeOnly stripped too much — the guard would pass on anything');
+});
+
+test('the starter texts a new account gets work for any business', () => {
+  /* 17 of the 28 default texts were written for one YouTube agency, and one
+     introduced the sender as "with MarketMakerMGMT". Every new account is
+     seeded with these and the bandit rotates them, so a plumber's customer
+     could receive a text naming a marketing agency they have never heard of,
+     offering to fix their channel.
+
+     Existing accounts are unaffected — variants are only seeded into an
+     account with no rows at all — so this changes what NEW businesses start
+     with, not anyone's own copy.
+
+     Three are exempt: they carry needsChannel, so they are only ever eligible
+     for a contact who actually has a YouTube channel on file. */
+  const v = GB.buildDefaultVariants();
+  const specific = /youtube|marketmaker|realtor|\bchannel\b|\bvideo\b|\bviews\b|watch time/i;
+  const offenders = [];
+  Object.keys(v).forEach(stage => v[stage].forEach(x => {
+    if (x.needsChannel) return;
+    if (specific.test(x.text)) offenders.push(stage + '/' + x.id);
+  }));
+  assert.deepStrictEqual(offenders, [],
+    'starter text(s) assume one industry: ' + offenders.join(', '));
+
+  // A gated variant is genuinely gated, or the exemption is a loophole.
+  Object.keys(v).forEach(stage => v[stage].forEach(x => {
+    if (specific.test(x.text)) {
+      assert.ok(x.needsChannel,
+        stage + '/' + x.id + ' is industry-specific but not gated');
+    }
+  }));
+});
+
+test('every starter text still renders into a real message', () => {
+  // Rewriting copy is exactly when a placeholder gets fat-fingered, and an
+  // unrendered {nmae} goes out to a customer looking like a mail merge.
+  const base = {id:'c', name:'Dana Reed', phone:'2135550100',
+    timezone:'America/New_York', meetLink:'https://meet.google.com/a-b-c',
+    callDateTime: new Date(Date.now() + 86400000).toISOString()};
+  const plain = GB.sanitizeClient(base);
+  // A gated variant is only ever offered for a contact that HAS a channel, so
+  // that is the contact to render it against.
+  const withChannel = GB.sanitizeClient(
+    Object.assign({}, base, {youtubeLink: 'https://youtube.com/@danareed'}));
+  const v = GB.buildDefaultVariants();
+  Object.keys(v).forEach(stage => v[stage].forEach(x => {
+    const out = GB.renderTemplate(x.text, x.needsChannel ? withChannel : plain, 'Bob');
+    assert.ok(!/\{[a-z]+\}/i.test(out),
+      stage + '/' + x.id + ' left an unfilled placeholder: ' + out);
+    assert.ok(out.length > 20, stage + '/' + x.id + ' rendered to almost nothing');
+    assert.ok(!/\s{2,}/.test(out.replace(/\n/g, ' ')),
+      stage + '/' + x.id + ' has a double space, usually a removed placeholder: ' + out);
+  }));
+});
+
+test('a channel-specific starter is never offered to a contact without one', () => {
+  // The gating is what makes the three exemptions above safe. Without it, w3
+  // renders as "Got  open and locked you in for..." — a double space and a
+  // sentence missing its subject, sent to a customer.
+  const plain = GB.sanitizeClient({id:'c', name:'Dana', phone:'2135550100'});
+  const eligible = GB.eligibleVariants(
+    {variants: GB.buildDefaultVariants()}, 'welcome', plain);
+  assert.ok(eligible.length, 'a contact with no channel must still have something to send');
+  assert.ok(!eligible.some(x => x.needsChannel),
+    'a channel-specific text was offered to a contact with no channel');
+  assert.ok(!eligible.some(x => /\{channel\}/.test(x.text)));
+});
+
+test('a text never falls back to signing someone else\'s real name', () => {
+  /* The fallback was 'Johnny'. On any other account that is a text going to
+     a stranger's customer signed by a person at a different company —
+     confidently, and unfixably once sent. */
+  const c = GB.sanitizeClient({id:'c', name:'Dana Reed', phone:'2135550100'});
+  const out = GB.renderTemplate('Hi {name}, {sender} here.', c, '');
+  assert.ok(!/Johnny/i.test(out), 'got: ' + out);
+  const named = GB.renderTemplate('Hi {name}, {sender} here.', c, 'Bob');
+  assert.strictEqual(named, 'Hi Dana, Bob here.');
+});
+
+test('the AI prompt makes no claim about what the business does', () => {
+  // It used to assert "a real estate YouTube coach" for every account, so a
+  // plumber asking for a follow-up got one pitching video strategy.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function buildAIPrompt'), app.indexOf('function callGemini'));
+  const code = codeOnly(fn);
+  assert.ok(!/real estate/i.test(code), 'the prompt still asserts an industry');
+  assert.ok(!/YouTube/i.test(code), 'the prompt still asserts a service');
+  assert.ok(!/'Johnny'/.test(code), 'the prompt still falls back to a real person');
+  assert.ok(/Never invent a service, industry or claim/.test(fn),
+    'the model should be told to infer the business from the examples, not guess');
+});
+
 console.log('\n--- what the calendar sync tells you ---');
 
 {

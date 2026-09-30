@@ -205,9 +205,23 @@ export function clientFromGCalEvent(ev: GCalEvent, filter?: CalendarFilter): Par
   }
 
   const phone = extractPhone(description) || extractPhone(summary);
+  /* The contact's email is the guest from OUTSIDE the organizer's domain.
+
+     This used to strip a hard-coded `@marketmakermgmt.com`, which is the same
+     mistake as the calendar filter and fails in both directions. For any
+     other business the strip never matches, so the first attendee wins and a
+     colleague's address gets saved as the customer's — then the follow-up
+     email goes to the colleague. And a MarketMaker teammate on someone
+     else's booking would be silently dropped.
+
+     Whose domain is "internal" is knowable per event: the organizer's. That
+     is the same rule attendees mode already uses to decide what counts as a
+     booking, so the two now agree. */
+  const organizerDomain = domainOf(ev.organizer?.email);
   const emails = (ev.attendees || [])
+    .filter((a) => !(a as { self?: boolean }).self && !(a as { resource?: boolean }).resource)
     .map((a) => (a.email || '').toLowerCase())
-    .filter((e) => e && !/@marketmakermgmt\.com$/i.test(e));
+    .filter((e) => e && (!organizerDomain || domainOf(e) !== organizerDomain));
 
   return {
     googleEventId: ev.id,
