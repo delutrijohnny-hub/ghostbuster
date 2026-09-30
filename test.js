@@ -220,14 +220,25 @@ test('text-today queue puts a new booking\'s welcome text above an overdue nosho
 });
 
 test('call today, already welcomed -> only dayof due', () => {
-  const now = new Date();
+  // Explicit hours rather than "now": the call has to be LATER today for the
+  // day-of text to make sense, and anchoring both ends removes the
+  // time-of-day flakiness this suite has been bitten by before.
+  const now = new Date(); now.setHours(8, 0, 0, 0);
+  const callAt = new Date(now); callAt.setHours(15, 0, 0, 0);
   const c = freshClient({
     bookedDate: isoDaysAgo(5),
-    callDateTime: now.toISOString(),
+    callDateTime: callAt.toISOString(),
     messageLog: [{ stage: 'welcome', variantId: 'w1', text: 'hi', sentAt: isoDaysAgo(4), responded: false, respondedAt: null }]
   });
-  const due = GB.computeDue(c, now);
-  assertDue(due, ['dayof']);
+  assertDue(GB.computeDue(c, now), ['dayof']);
+});
+
+test('a call that has already started gets no more run-up texts', () => {
+  const now = new Date(); now.setHours(18, 0, 0, 0);
+  const callAt = new Date(now); callAt.setHours(15, 0, 0, 0);   // three hours ago
+  const c = freshClient({ bookedDate: isoDaysAgo(5), callDateTime: callAt.toISOString() });
+  assertDue(GB.computeDue(c, now), [],
+    'a day-of text sent after the call is worse than no text at all');
 });
 
 test('Completed client shows nothing due', () => {
@@ -1488,6 +1499,78 @@ test('the analytics that read reply data still work after an outcome', () => {
   assert.deepStrictEqual(missing, [], 'app.js calls function(s) that are never defined: ' + missing.join(', '));
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
+
+console.log('\n--- the run-up stops at the appointment ---');
+
+test('a welcome is never queued for a call that already happened', () => {
+  // Reported from the live app: welcome texts sitting in the morning list for
+  // contacts whose call was weeks ago, promising to meet them on a date that
+  // had already passed.
+  const c = freshClient({
+    bookedDate: isoDaysAgo(30),
+    callDateTime: isoDaysAgo(21),
+    status: 'Booked'          // nobody ever logged an outcome
+  });
+  assertDue(GB.computeDue(c, new Date()), [],
+    'the run-up is over; this belongs in End of day as overdue and unlogged');
+});
+
+test('stopCadence alone does not cover it', () => {
+  // The old guard only fired once someone recorded an outcome, and the whole
+  // problem is the contacts nobody recorded one for.
+  const c = freshClient({bookedDate: isoDaysAgo(30), callDateTime: isoDaysAgo(21), status: 'Booked'});
+  assert.strictEqual(GB.stopsCadence(c.status), false, 'the status is still open');
+  assertDue(GB.computeDue(c, new Date()), [], 'and yet nothing should be queued');
+});
+
+test('every run-up touch stops, not just the welcome', () => {
+  const past = {bookedDate: isoDaysAgo(40), callDateTime: isoDaysAgo(10), status:'Booked'};
+  ['welcome','monday','midcheckin','dayof','hourbefore'].forEach(stage => {
+    const c = freshClient(Object.assign({}, past, {
+      messageLog: ['welcome','monday','midcheckin','dayof','hourbefore']
+        .filter(x => x !== stage)
+        .map(x => ({stage:x, variantId:'x', text:'x', sentAt: isoDaysAgo(20),
+                    responded:false, respondedAt:null, reviewed:true}))
+    }));
+    assert.ok(!GB.computeDue(c, new Date()).includes(stage),
+      stage + ' should not fire after the appointment');
+  });
+});
+
+test('the rescue sequences still run after the call — that is their whole point', () => {
+  const missed = freshClient({status:'No-show', callDateTime: isoDaysAgo(2), bookedDate: isoDaysAgo(20)});
+  assert.ok(GB.computeDue(missed, new Date()).includes('noshow'),
+    'a no-show rescue exists precisely because the appointment is over');
+  const stalled = freshClient({status:'Ghosted', stalledSince: isoDaysAgo(6), callDateTime: isoDaysAgo(9)});
+  assert.ok(GB.computeDue(stalled, new Date()).includes('recovery'));
+});
+
+test('a contact with no appointment yet still gets welcomed', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(1), callDateTime: null});
+  assert.ok(GB.computeDue(c, new Date()).includes('welcome'),
+    'no date is not the same as a date in the past');
+});
+
+test('a rescheduled call re-opens the run-up for the new date', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(40),
+    callDateTime: isoDaysFromNow(3),      // moved forward
+    reschedules: [isoDaysAgo(1)],
+    status: 'Booked'
+  });
+  assert.ok(GB.computeDue(c, new Date()).length > 0,
+    'the appointment is in the future again, so the run-up applies again');
+});
+
+test('a contact-anchored step is not blocked by a past appointment', () => {
+  // days_after_create is about how long someone has been in the system, not
+  // about a meeting.
+  withSequence([{key:'chase', stage:'recovery', trigger:{type:'days_after_create', days:3}}], () => {
+    const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: isoDaysAgo(5), status:'Booked'});
+    assert.ok(GB.computeDue(c, new Date()).includes('recovery'),
+      'a chase sequence should not be silenced by an old appointment');
+  });
+});
 
 console.log('\n--- a reschedule restarts the appointment touches ---');
 

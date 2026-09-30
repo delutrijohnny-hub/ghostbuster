@@ -870,6 +870,31 @@ function stepIsDue(step, client, now, ctx){
   // Everything below is a once-only touch on the way to an appointment, so it
   // stops as soon as the appointment is resolved and never repeats.
   if(ctx.stopCadence) return false;
+
+  /* The run-up is over once the appointment has happened.
+
+     Every other trigger bound itself to a future date as a side effect of how
+     it was written — weekday_of_appointment_week requires today < callKey,
+     day_of_appointment requires today === callKey — but 'on_create' returned
+     true unconditionally. So a contact whose call was weeks ago and whose
+     outcome was never logged kept a welcome text queued indefinitely,
+     promising to meet them on a date that had already passed. Johnny saw
+     exactly that.
+
+     stopCadence does not cover it: that only fires once someone records an
+     outcome, and the whole problem is contacts nobody has recorded one for.
+     They belong in End of day as overdue and unlogged, not in the morning
+     send list.
+
+     Contact-anchored triggers are deliberately exempt. days_after_create is
+     about how long someone has been in the system, not about a meeting, and a
+     contact with no appointment at all still needs welcoming. */
+  var RUNUP_TRIGGERS = {
+    on_create: true, weekday_of_appointment_week: true,
+    midpoint_booked_to_appointment: true, day_of_appointment: true,
+    minutes_before_appointment: true, days_before_appointment: true
+  };
+  if(RUNUP_TRIGGERS[t.type] && ctx.callDate && ctx.callDate.getTime() <= now.getTime()) return false;
   // 'on_create' is anchored to the contact, not the appointment: rescheduling
   // does not make someone a stranger who needs welcoming again.
   var alreadySent = (t.type === 'on_create')
