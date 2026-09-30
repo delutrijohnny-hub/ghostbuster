@@ -3780,10 +3780,23 @@ test('a missing email_library degrades to an empty one — it never takes the ap
   assert.ok(state, 'loadState must still return a usable state');
   assert.strictEqual(state.emailLibrary.length, 0, 'no library, rather than no app');
   assert.ok(state.clients, 'the rest of the account must still load');
-  // And the user is told, rather than left with a silently empty tab.
+  // And it must NOT raise the save-failure banner. That bar reads "Your
+  // changes aren't being saved. Anything you do now will be lost" — which was
+  // false here, and a user read it and reported their work was not saving.
+  // A failed read is not a failed write.
   const health = d.run('window.GB_SAVE_HEALTH');
-  assert.strictEqual(health.ok, false);
-  assert.ok(/migration/i.test(health.detail), 'the warning should name the actual cause: ' + health.detail);
+  assert.ok(!health || health.ok !== false,
+    'a failed library READ must never claim writes are failing: ' + JSON.stringify(health));
+  // The tab says so instead, where it is true.
+  assert.strictEqual(state.emailLibraryUnavailable, true);
+});
+
+test('a healthy load does not mark the library unavailable', () => {
+  // Otherwise every normal load would show the notice.
+  const d = makeLoadCtx({});
+  return d.run('loadState()').then(state => {
+    assert.ok(!state.emailLibraryUnavailable);
+  });
 });
 
 test('a healthy load reports no problem and carries the library through', async () => {
@@ -3846,6 +3859,26 @@ test('reviewing one message writes only that message, and deletes nothing', asyn
   assert.deepStrictEqual(deletes, [], 'reviewing must never delete — the old code deleted the whole log here');
   assert.strictEqual(msgWrites.length, 1, 'exactly one message write expected, got ' + msgWrites.length);
   assert.strictEqual(msgWrites[0].payload.length, 1, 'only the reviewed message should be written');
+});
+
+test('a missing email_library table does not stop anything else from saving', async () => {
+  // The reported symptom, and the one that has now bitten twice: one rejected
+  // write in a batched save, and the user is told nothing is being saved.
+  // With no library loaded there is nothing to write, so the save must be
+  // completely unaffected.
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.emailLibrary = [];
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'Ethan lead', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  const libWrites = d.calls.filter(c => c.table === 'email_library');
+  assert.strictEqual(libWrites.length, 0, 'an empty library must not write to a table that may not exist');
+  const clientWrites = d.calls.filter(c => c.table === 'clients');
+  assert.strictEqual(clientWrites.length, 1, 'the contact must still save');
+  const health = d.run('window.GB_SAVE_HEALTH');
+  assert.strictEqual(health.ok, true, 'the save must report healthy: ' + JSON.stringify(health));
 });
 
 test('an email in the library is written with the columns the table actually has', async () => {

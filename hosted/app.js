@@ -1024,6 +1024,17 @@ function renderEmailLibrary(){
   ]);
   box.appendChild(head);
 
+  // The library could not be read at all — a different thing from an empty
+  // one, and worth saying plainly so nobody concludes their emails are gone.
+  if(STATE.emailLibraryUnavailable){
+    box.appendChild(h('div',{class:'lib-empty'},[
+      h('p',{},['Your emails could not be loaded just now. Nothing has been lost, and the rest of GhostBuster is working normally — everything you do is still being saved.']),
+      h('p',{},['If this does not clear up, the email library setup has not finished on the server yet.']),
+      h('button',{class:'btn btn-sm','data-action':'reload-app'},['Try again'])
+    ]));
+    return;
+  }
+
   if(!docs.length){
     // The old stage-keyed emails are the obvious first contents, and a person
     // who wrote them should not have to retype them.
@@ -2524,6 +2535,9 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
+    case 'reload-app':
+      window.location.reload();
+      break;
     case 'pick-email': {
       var pc = STATE.clients[target.getAttribute('data-cid')];
       if(pc) openEmailPicker(pc);

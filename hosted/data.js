@@ -70,9 +70,17 @@ async function loadState(){
 
      So it degrades. No library is a missing feature; no app is an outage. */
   var libRes = await sb.from('email_library').select('*').eq('user_id', uid).order('sort_order');
+  var libraryUnavailable = false;
   if(libRes.error){
     console.error('GhostBuster: email library unavailable', libRes.error);
-    reportSaveHealth(false, 'The email library could not be loaded. Everything else is working. If this persists, the email_library migration has not been run.');
+    // NOT reportSaveHealth. That channel renders a red bar reading "Your
+    // changes aren't being saved. Anything you do now will be lost" — which
+    // was a lie here, and a frightening one: saves were fine, one read had
+    // failed. A user read that bar and reported their work was not saving.
+    //
+    // A degraded feature belongs inside that feature, where it is true and
+    // where someone can act on it.
+    libraryUnavailable = true;
     libRes = {data: [], error: null};
   }
 
@@ -84,6 +92,9 @@ async function loadState(){
     clients: {},
     variants: {},
     emailVariants: {},
+    // Read by the Emails tab so it can explain itself, rather than showing an
+    // empty library and letting someone conclude their emails were deleted.
+    emailLibraryUnavailable: libraryUnavailable,
     emailLibrary: (libRes.data || []).map(function(r){
       return {
         id: r.id, title: r.title, whenToSend: r.when_to_send || '',
