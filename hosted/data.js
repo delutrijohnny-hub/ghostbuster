@@ -237,6 +237,24 @@ var SYNCED = null;
 var SAVE_SEQ = 0;
 var SAVE_LANDED = 0;
 
+/* Persistence health, reported outward.
+
+   The snapshot-shadowing bug survived a week because saveState's try/catch
+   turned total failure into console.error — visible only to someone with dev
+   tools open, which no salesperson ever has. A save that fails is not a
+   logging concern, it is the user's work disappearing, and they are the one
+   who needs to know.
+
+   Reported through a window property rather than a shared function name,
+   because two files declaring the same top-level name is exactly what caused
+   the original bug. */
+function reportSaveHealth(ok, detail){
+  try{
+    window.GB_SAVE_HEALTH = {ok: ok, detail: detail || null, at: Date.now()};
+    if(typeof window.GB_ON_SAVE_HEALTH === 'function') window.GB_ON_SAVE_HEALTH(window.GB_SAVE_HEALTH);
+  }catch(e){ /* reporting must never be the thing that breaks a save */ }
+}
+
 function rowClient(c, uid){
   return {
     id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
@@ -410,7 +428,7 @@ async function saveState(state){
       })));
     }
 
-    if(!writes.length) return;
+    if(!writes.length){ reportSaveHealth(true); return; }
 
     var results = await Promise.all(writes);
     var failed = results.filter(function(r){ return r && r.error; });
@@ -418,6 +436,7 @@ async function saveState(state){
       // Leave SYNCED where it is so the same diff is retried on the next save
       // rather than being silently forgotten.
       console.error('GhostBuster: saveState partial failure', failed.map(function(r){ return r.error; }));
+      reportSaveHealth(false, (failed[0].error && failed[0].error.message) || 'a write was rejected');
       return;
     }
 
@@ -425,7 +444,9 @@ async function saveState(state){
       state.pendingEvents = (state.pendingEvents || []).slice(pending.length);
     }
     if(ticket > SAVE_LANDED){ SAVE_LANDED = ticket; SYNCED = next; }
+    reportSaveHealth(true);
   }catch(e){
     console.error('GhostBuster: saveState failed', e);
+    reportSaveHealth(false, (e && e.message) || 'unexpected error while saving');
   }
 }

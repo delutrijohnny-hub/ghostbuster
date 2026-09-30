@@ -2345,6 +2345,53 @@ test('the hosted render pass survives an empty account', () => {
   assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
 });
 
+console.log('\n--- failing saves are visible ---');
+
+test('a rejected write reports unhealthy, a successful one reports healthy', async () => {
+  const d = makeDataCtx();
+  // Swap in a database that rejects everything.
+  d.ctx.window.GB_SUPABASE.from = () => ({
+    upsert: () => Promise.resolve({error: {message: 'permission denied'}}),
+    insert: () => Promise.resolve({error: {message: 'permission denied'}}),
+    delete: () => ({in: () => Promise.resolve({error: {message: 'permission denied'}})}),
+    select: () => ({eq: () => ({order: () => ({limit: async () => ({data: [], error: null})})})})
+  });
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  const bad = d.ctx.window.GB_SAVE_HEALTH;
+  assert.ok(bad && bad.ok === false, 'a rejected write must report unhealthy, not fail silently');
+  assert.ok(/permission denied/.test(bad.detail || ''), 'and must carry the real reason');
+});
+
+test('the failure is surfaced through a window property, not a shared name', () => {
+  // The bug this exists to catch was itself caused by two files declaring the
+  // same top-level function name. Using one here would be an unusually direct
+  // way to reintroduce it.
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(data.includes('window.GB_ON_SAVE_HEALTH'), 'data.js must report through the window hook');
+  assert.ok(app.includes('window.GB_ON_SAVE_HEALTH ='), 'app.js must install it as a property');
+  assert.ok(!/^function GB_ON_SAVE_HEALTH/m.test(app), 'must not be a top-level declaration');
+});
+
+test('the warning is persistent, not a toast', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const block = app.slice(app.indexOf('window.GB_ON_SAVE_HEALTH ='), app.indexOf('function renderAll()'));
+  assert.ok(!/showToast/.test(block),
+    'a toast disappears, and what this announces is that work is disappearing');
+  assert.ok(/classList\.remove\('hidden'\)/.test(block), 'it must actually show the banner');
+});
+
+test('a save that had nothing to write still reports healthy', () => {
+  // Otherwise the banner would linger after the first no-op save and train
+  // everyone to ignore it.
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/if\(!writes\.length\)\{ reportSaveHealth\(true\); return; \}/.test(data));
+});
+
 console.log('\n--- end of day is actionable ---');
 
 function renderEodHtml(seed){

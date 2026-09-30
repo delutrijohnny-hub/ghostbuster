@@ -95,6 +95,34 @@ function applyTerminology(){
   }
 }
 
+/* A visible, persistent warning when work is not reaching the database.
+
+   Deliberately not a toast: a toast disappears, and the thing it would be
+   announcing is that everything done since is being lost. This stays until
+   a save succeeds, and it names the last thing that failed so the problem is
+   reportable rather than just alarming.
+
+   Installed as a window property rather than a shared function name — the bug
+   this exists to surface was itself caused by two files declaring the same
+   top-level name. */
+window.GB_ON_SAVE_HEALTH = function(health){
+  var bar = el('save-health');
+  if(!bar) return;
+  if(health.ok){
+    bar.classList.add('hidden');
+    bar.textContent = '';
+    return;
+  }
+  bar.classList.remove('hidden');
+  bar.innerHTML = '';
+  bar.appendChild(h('strong',{},['Your changes aren’t being saved.']));
+  bar.appendChild(document.createTextNode(
+    ' Anything you do now will be lost when you close this tab' +
+    (health.detail ? ' (' + health.detail + ')' : '') + '. '));
+  bar.appendChild(h('button',{class:'btn btn-sm','data-action':'retry-save'},['Try again']));
+};
+
+
 function renderAll(){
   if(!STATE) return;
   applyTerminology();
@@ -2234,6 +2262,11 @@ document.addEventListener('click', function(ev){
       showToast('Imported ' + res2.added + ' new, updated ' + res2.updated + ', ' + res2.rescheduled + ' rescheduled.');
       break;
     }
+    case 'retry-save':
+      // Forces the same pending diff at the database again; SYNCED was left
+      // untouched by the failure, so nothing has been forgotten.
+      saveState(STATE);
+      break;
     case 'focus-start':
       startFocusMode();
       break;
