@@ -2304,6 +2304,60 @@ test('the hosted render pass survives an empty account', () => {
   assert.doesNotThrow(() => vm.runInContext('renderAll()', ctx));
 });
 
+console.log('\n--- end of day is actionable ---');
+
+function renderEodHtml(seed){
+  const ctx = makeHostedCtx();
+  vm.runInContext('openModalHtml = function(html){ __LAST = html; };', ctx);
+  vm.runInContext('STATE = buildDefaultState();' + seed + 'renderEndOfDay();', ctx);
+  return vm.runInContext('__LAST', ctx) || '';
+}
+
+test('a past call with no outcome can be resolved from the list itself', () => {
+  // The whole reason 24 calls sat unlogged: the list named them and then made
+  // you go find each contact.
+  const html = renderEodHtml(`
+    STATE.clients['a'] = sanitizeClient({id:'a', name:'Karen Villegas', phone:'2135550100',
+      bookedDate: new Date(Date.now()-30*86400000).toISOString(),
+      callDateTime: new Date(Date.now()-6*86400000).toISOString(),
+      timezone:'America/Chicago', status:'Booked'});
+  `);
+  assert.ok(html.includes('Karen Villegas'), 'the contact should be listed');
+  ['Showed','No-show','Rescheduled'].forEach(o =>
+    assert.ok(html.includes('data-status="' + o + '"'), 'missing a one-click ' + o + ' action'));
+});
+
+test('a completed call with no result offers closed / not closed', () => {
+  const html = renderEodHtml(`
+    STATE.clients['b'] = sanitizeClient({id:'b', name:'Dana Reed', phone:'2135550101',
+      bookedDate: new Date(Date.now()-30*86400000).toISOString(),
+      callDateTime: new Date(Date.now()-3*86400000).toISOString(),
+      timezone:'America/Chicago', status:'Completed'});
+  `);
+  assert.ok(html.includes('data-close="Closed"') && html.includes('data-close="Not closed"'));
+});
+
+test('an empty day says so instead of rendering empty sections', () => {
+  const html = renderEodHtml('');
+  assert.ok(/Busted/i.test(html), 'a cleared day should be celebrated, not blank');
+  assert.ok(!html.includes('eod-row'), 'no rows should render for an empty day');
+});
+
+test('acting on a row does not close the list', () => {
+  // A modal that shuts after every click turns 44 items into 44 trips.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const block = app.slice(app.indexOf("case 'eod-outcome':"), app.indexOf("case 'end-of-day':"));
+  assert.ok(block.includes('renderEndOfDay()'), 'each action must re-render the list in place');
+  assert.ok(!block.includes('closeModal()'), 'no action here should close the modal');
+});
+
+test('outcomes recorded here go through the same seam as everywhere else', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const block = app.slice(app.indexOf("case 'eod-outcome':"), app.indexOf("case 'end-of-day':"));
+  assert.ok(block.includes('setOutcome(STATE'), 'must use setOutcome, not a parallel write');
+  assert.ok(block.includes('lastSnapshot'), 'must stay undoable like other outcome changes');
+});
+
 console.log('\n--- incremental persistence (hosted/data.js) ---');
 
 // hosted/data.js is browser+Supabase code, so it gets its own vm context with a

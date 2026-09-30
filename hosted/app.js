@@ -2226,6 +2226,28 @@ document.addEventListener('click', function(ev){
       showToast('Imported ' + res2.added + ' new, updated ' + res2.updated + ', ' + res2.rescheduled + ' rescheduled.');
       break;
     }
+    case 'eod-outcome':
+      lastSnapshot = snapshot();
+      setOutcome(STATE, cid, target.getAttribute('data-status'));
+      // Re-render in place rather than closing: the point is to clear a list,
+      // and a modal that shuts after every click turns 44 items into 44 trips.
+      renderEndOfDay();
+      renderAll();
+      break;
+    case 'eod-close':
+      STATE.clients[cid].closeOutcome = target.getAttribute('data-close');
+      saveState(STATE);
+      renderEndOfDay();
+      renderAll();
+      break;
+    case 'eod-todo':
+      STATE.todos.forEach(function(t){
+        if(t.id === target.getAttribute('data-id')){ t.done = true; t.doneAt = nowISO(); }
+      });
+      saveState(STATE);
+      renderEndOfDay();
+      renderAll();
+      break;
     case 'end-of-day':
       openEndOfDayModal();
       break;
@@ -2460,23 +2482,89 @@ function downloadFile(content, filename, mimeType){
 }
 
 
+/* End of day — the place a day gets closed out.
+
+   It used to be a read-only list: "Overdue, unlogged — Karen Villegas" and
+   nothing else. It named 44 outcomes nobody had recorded and then made someone
+   go find each contact individually, which is why 24 past calls were still
+   sitting open and 20 completed ones had no close on file. A list that reports
+   work without letting you do it just moves the work somewhere less convenient.
+
+   Every row is now actionable in one click. Same seams as everywhere else —
+   setOutcome, closeOutcome, the todo toggle — so nothing here is a parallel
+   way of recording the same facts. */
 function openEndOfDayModal(){
+  renderEndOfDay();
+}
+
+function renderEndOfDay(){
   var items = computeEndOfDayItems(STATE);
   var groups = {touch:[], 'today-no-outcome':[], 'overdue-unlogged':[], 'no-close':[], todo:[]};
-  items.forEach(function(it){ groups[it.type].push(it); });
-  function line(text, extraClass){ return '<li style="padding:6px 0;border-bottom:1px solid var(--border);' + (extraClass||'') + '">' + text + '</li>'; }
-  var html = '<div class="modal-head"><h2>End of day</h2><button class="btn-ghost btn" data-action="close-modal">✕</button></div>';
-  if(!items.length){
-    html += '<div class="busted-panel">' + bustedBadgeHtml() + '<div class="busted-title">Busted!</div><div class="busted-sub">The day is closed — nothing left.</div></div>';
-  } else {
-    html += '<ol style="padding-left:18px;">';
-    groups.touch.sort(function(a,b){ return a.stage==='noshow'?-1:(b.stage==='noshow'?1:0); }).forEach(function(it){ html += line('Text due — <strong>' + escapeHtml(it.client.name) + '</strong> (' + it.stage + ')'); });
-    groups['today-no-outcome'].forEach(function(it){ html += line('Today\'s call, no outcome logged — <strong>' + escapeHtml(it.client.name) + '</strong>'); });
-    groups['overdue-unlogged'].forEach(function(it){ html += line('<span style="color:var(--red-dark);font-weight:700;">Overdue, unlogged</span> — ' + escapeHtml(it.client.name)); });
-    groups['no-close'].forEach(function(it){ html += line('Showed, no close recorded — ' + escapeHtml(it.client.name)); });
-    groups.todo.forEach(function(it){ html += line('To-do — ' + escapeHtml(it.todo.text)); });
-    html += '</ol>';
+  items.forEach(function(it){ if(groups[it.type]) groups[it.type].push(it); });
+
+  function section(title, hint, rowsHtml){
+    if(!rowsHtml) return '';
+    return '<div class="eod-section"><h4>' + title +
+      (hint ? ' <span class="eod-hint">' + hint + '</span>' : '') + '</h4>' + rowsHtml + '</div>';
   }
+  function outcomeRow(c, urgent){
+    // The three answers that actually close a past call. Anything more nuanced
+    // belongs in the contact itself, and offering it here would slow down the
+    // one job this screen exists for.
+    return '<div class="eod-row' + (urgent ? ' urgent' : '') + '">' +
+      '<span class="eod-name" data-action="open-client" data-cid="' + c.id + '">' + escapeHtml(c.name) + '</span>' +
+      '<span class="eod-when">' + (c.callDateTime ? fmtDate(safeDate(c.callDateTime), c.timezone) : '') + '</span>' +
+      '<span class="eod-acts">' +
+        '<button class="eod-btn ok" data-action="eod-outcome" data-cid="' + c.id + '" data-status="Showed">Showed</button>' +
+        '<button class="eod-btn bad" data-action="eod-outcome" data-cid="' + c.id + '" data-status="No-show">No-show</button>' +
+        '<button class="eod-btn" data-action="eod-outcome" data-cid="' + c.id + '" data-status="Rescheduled">Rescheduled</button>' +
+      '</span></div>';
+  }
+
+  var html = '<div class="modal-head"><h2>End of day</h2>' +
+    '<button class="btn-ghost btn" data-action="close-modal">✕</button></div>';
+
+  if(!items.length){
+    html += '<div class="busted-panel">' + bustedBadgeHtml() +
+      '<div class="busted-title">Busted!</div>' +
+      '<div class="busted-sub">The day is closed — nothing left.</div></div>';
+    openModalHtml(html, true);
+    return;
+  }
+
+  html += section('Calls today with no outcome', 'log these while you remember them',
+    groups['today-no-outcome'].map(function(it){ return outcomeRow(it.client, false); }).join(''));
+
+  html += section('Overdue, never logged', 'these are skewing your show rate',
+    groups['overdue-unlogged'].map(function(it){ return outcomeRow(it.client, true); }).join(''));
+
+  html += section('Showed, but no result recorded', '',
+    groups['no-close'].map(function(it){
+      return '<div class="eod-row">' +
+        '<span class="eod-name" data-action="open-client" data-cid="' + it.client.id + '">' + escapeHtml(it.client.name) + '</span>' +
+        '<span class="eod-when"></span>' +
+        '<span class="eod-acts">' +
+          '<button class="eod-btn ok" data-action="eod-close" data-cid="' + it.client.id + '" data-close="Closed">Closed</button>' +
+          '<button class="eod-btn" data-action="eod-close" data-cid="' + it.client.id + '" data-close="Not closed">Not closed</button>' +
+        '</span></div>';
+    }).join(''));
+
+  html += section('Still to send', groups.touch.length + ' waiting',
+    groups.touch.slice(0, 12).map(function(it){
+      return '<div class="eod-row quiet"><span class="eod-name" data-action="open-client" data-cid="' + it.client.id + '">' +
+        escapeHtml(it.client.name) + '</span><span class="eod-when">' + escapeHtml(it.stage) + '</span>' +
+        '<span class="eod-acts"></span></div>';
+    }).join('') + (groups.touch.length > 12
+      ? '<div class="eod-more">+ ' + (groups.touch.length - 12) + ' more on the Today tab</div>' : ''));
+
+  html += section('To-dos', '',
+    groups.todo.map(function(it){
+      return '<div class="eod-row"><span class="eod-name">' + escapeHtml(it.todo.text) + '</span>' +
+        '<span class="eod-when"></span><span class="eod-acts">' +
+        '<button class="eod-btn ok" data-action="eod-todo" data-id="' + it.todo.id + '">Done</button>' +
+        '</span></div>';
+    }).join(''));
+
   openModalHtml(html, true);
 }
 
