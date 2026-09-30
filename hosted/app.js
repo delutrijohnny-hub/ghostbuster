@@ -3402,7 +3402,7 @@ function openEndOfDayModal(){
 
 function renderEndOfDay(){
   var items = computeEndOfDayItems(STATE);
-  var groups = {touch:[], 'today-no-outcome':[], 'overdue-unlogged':[], 'no-close':[], todo:[]};
+  var groups = {'today-no-outcome':[], 'overdue-unlogged':[], 'no-close':[], todo:[]};
   items.forEach(function(it){ if(groups[it.type]) groups[it.type].push(it); });
 
   function section(title, hint, rowsHtml){
@@ -3464,13 +3464,9 @@ function renderEndOfDay(){
         '</span></div>';
     }).join(''));
 
-  html += section('Still to send', groups.touch.length + ' waiting',
-    groups.touch.slice(0, 12).map(function(it){
-      return '<div class="eod-row quiet"><span class="eod-name" data-action="open-client" data-cid="' + it.client.id + '">' +
-        escapeHtml(it.client.name) + '</span><span class="eod-when">' + escapeHtml(it.stage) + '</span>' +
-        '<span class="eod-acts"></span></div>';
-    }).join('') + (groups.touch.length > 12
-      ? '<div class="eod-more">+ ' + (groups.touch.length - 12) + ' more on the Today tab</div>' : ''));
+  // No "Still to send" section. That is the Today tab, which already shows a
+  // progress bar and a copy-all button for exactly those texts — repeating
+  // them here was a third of this screen and made the count unclearable.
 
   html += section('To-dos', '',
     groups.todo.map(function(it){

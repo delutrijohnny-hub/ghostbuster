@@ -3740,11 +3740,25 @@ function getUnloggedCalls(state, now){
 }
 
 
+/* Closing the books on today.
+
+   This used to include every text still due, which is the Today tab's entire
+   job and is already shown there as a progress bar with a copy-all button. It
+   made the count large — 40 on the live book — and roughly a third of that was
+   work the person had just been looking at.
+
+   Worse, it meant the count could never reach zero while a single text was
+   unsent, so the screen never felt finishable and the "Busted!" empty state
+   was effectively unreachable. A list you cannot clear stops being a list you
+   open.
+
+   What is left is only what end of day is actually for: the questions that
+   can ONLY be answered once the day is over, and that nothing else in the app
+   asks. Did today's calls happen. Did the old ones. Did the won ones close.
+   That is a handful, and a handful gets cleared. */
 function computeEndOfDayItems(state){
   var now = new Date();
   var items = [];
-  var textToday = getTextTodayList(state, now, '');
-  textToday.forEach(function(it){ items.push({type:'touch', stage:it.stage, client:it.client}); });
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
     if(c.ignored || !c.callDateTime) return;

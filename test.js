@@ -1676,6 +1676,98 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- end of day closes the books, it does not repeat the day ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  // Unique phone per contact: the queue dedupes by person, so a shared number
+  // silently collapses five contacts into one and the fixture stops testing
+  // what it claims to.
+  let phoneSeq = 1000;
+  const mk = (id, over) => GB.sanitizeClient(Object.assign({
+    id: id, name: id, phone: '21355' + (++phoneSeq), timezone: 'America/New_York',
+    status: 'Booked', bookedDate: ago(30)
+  }, over));
+  const build = (clients, todos) => ({
+    clients: clients, variants: GB.buildDefaultVariants(), variantStats: {},
+    todos: todos || [], epsilon: 0.2
+  });
+
+  test('texts still to send are not counted here — that is the Today tab', () => {
+    /* This screen used to include every due touch. On the live book that was
+       roughly a third of a count of 40, and it was work the person had just
+       been looking at on Today, which already shows a progress bar and a
+       copy-all button for exactly those texts. */
+    const clients = {};
+    for (let i = 0; i < 5; i++) {
+      clients['due' + i] = mk('due' + i, {
+        callDateTime: new Date(Date.now() + 5 * 86400000).toISOString()
+      });
+    }
+    const state = build(clients);
+    assert.strictEqual(GB.computeEndOfDayItems(state).length, 0,
+      'a day with texts outstanding but nothing to LOG has nothing to close');
+    // And they are still queued where they belong.
+    assert.strictEqual(GB.getTextTodayList(state, new Date(), '').length, 5,
+      'removing them from end of day must not remove them from Today');
+  });
+
+  test('it can actually reach zero, which is what makes it worth opening', () => {
+    /* The real cost of the old behaviour: the count could never hit zero
+       while a single text was unsent, so the screen never felt finishable and
+       its "Busted!" empty state was effectively unreachable. A list you
+       cannot clear stops being a list anyone opens. */
+    const clients = {};
+    for (let i = 0; i < 8; i++) {
+      clients['due' + i] = mk('due' + i, {
+        callDateTime: new Date(Date.now() + 3 * 86400000).toISOString()
+      });
+    }
+    clients.logged = mk('logged', {status: 'Completed', callDateTime: ago(2), closeOutcome: 'Closed'});
+    assert.strictEqual(GB.computeEndOfDayItems(build(clients)).length, 0,
+      'everything answered means done, however many texts are still queued');
+  });
+
+  test('the questions only the end of the day can answer are all still here', () => {
+    const clients = {
+      today:   mk('today',   {callDateTime: new Date(new Date().setHours(9, 0, 0, 0)).toISOString()}),
+      overdue: mk('overdue', {callDateTime: ago(9)}),
+      won:     mk('won',     {status: 'Completed', callDateTime: ago(4)}),
+    };
+    const items = GB.computeEndOfDayItems(build(clients, [{id: 'td1', text: 'call back', done: false}]));
+    const types = {};
+    items.forEach(i => { types[i.type] = (types[i.type] || 0) + 1; });
+    assert.strictEqual(types['today-no-outcome'], 1, 'did today\'s call happen?');
+    assert.strictEqual(types['overdue-unlogged'], 1, 'did the old one?');
+    assert.strictEqual(types['no-close'], 1, 'did the won one close?');
+    assert.strictEqual(types.todo, 1);
+    assert.ok(!items.some(i => i.type === 'touch'), 'no touches');
+  });
+
+  test('a finished to-do and an answered call both stop appearing', () => {
+    const clients = {
+      answered: mk('answered', {status: 'No-show', callDateTime: ago(3)}),
+      closed:   mk('closed',   {status: 'Completed', callDateTime: ago(3), closeOutcome: 'Not closed'}),
+    };
+    const items = GB.computeEndOfDayItems(build(clients, [{id: 'td1', text: 'done thing', done: true}]));
+    assert.strictEqual(items.length, 0, 'got: ' + JSON.stringify(items.map(i => i.type)));
+  });
+
+  test('the screen renders with items and when the day is closed', () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      STATE.clients['a'] = sanitizeClient({id:'a', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Booked', bookedDate:'${ago(30)}',
+        callDateTime:'${ago(9)}'});
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderEndOfDay()', ctx));
+    vm.runInContext("STATE.clients = {};", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderEndOfDay()', ctx),
+      'the empty state must render — it is now actually reachable');
+  });
+}
+
 console.log('\n--- a brand new business, end to end ---');
 
 /* The test that would have caught today.
