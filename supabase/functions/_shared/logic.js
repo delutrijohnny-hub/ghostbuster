@@ -1767,6 +1767,24 @@ function computeVariantPerformance(state, now){
   now = now || new Date();
   var byStage = {};
 
+  /* Library emails are not an experiment, so they are not measured as one.
+
+     A library email logs with stage 'email' and its own document id. Left
+     alone, this panel — "What actually produces appointments", which compares
+     TEXT VARIANTS within a touch — grew an "email" section whose rows were
+     labelled with raw uuids, because the row label is the variant key and a
+     library document's key is a uuid.
+
+     It is also the wrong question. The five touches have two or three
+     alternative wordings each, chosen by a bandit, and comparing them is the
+     entire point. Library emails are distinct documents a person picks
+     deliberately; "which of these wins" is not a comparison anyone asked for,
+     and the id is not a name.
+
+     If per-email reply rates are ever wanted, they belong in the Emails tab
+     labelled with each email's title, not here. */
+  function isLibraryEmail(stage){ return stage === 'email'; }
+
   function bucket(stage, variantId){
     if(!byStage[stage]) byStage[stage] = {};
     if(!byStage[stage][variantId]){
@@ -1789,6 +1807,7 @@ function computeVariantPerformance(state, now){
 
     log.forEach(function(m){
       if(!m.variantId || m.variantId === 'custom') return;
+      if(isLibraryEmail(m.stage)) return;
       // Unreviewed sends stay out of the denominator, exactly as they do for
       // the bandit: nobody checked, so they are not evidence either way.
       if(!m.reviewed) return;
@@ -1802,7 +1821,13 @@ function computeVariantPerformance(state, now){
     if(!call) return;
     var before = log.filter(function(m){
       var t = Date.parse(m.sentAt);
-      return !isNaN(t) && t < call.getTime() && m.variantId && m.variantId !== 'custom';
+      // Library emails are excluded here too, and this is the half that
+      // actually corrupts numbers: credit goes to the LAST message before the
+      // appointment, so a library email sent the morning of the call would
+      // take the credit away from the day-of text that earned it. The panel
+      // measures touches, so only touches can be credited.
+      return !isNaN(t) && t < call.getTime() && m.variantId && m.variantId !== 'custom'
+        && !isLibraryEmail(m.stage);
     });
     if(!before.length) return;
     var last = before[before.length - 1];

@@ -1676,6 +1676,84 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- a library email is not a text variant ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const book = (n, log) => {
+    const clients = {};
+    for (let i = 0; i < n; i++) {
+      clients['c' + i] = GB.sanitizeClient({
+        id: 'c' + i, name: 'P' + i, phone: '213555010' + (i % 10),
+        timezone: 'America/New_York', status: 'Completed',
+        bookedDate: ago(40), callDateTime: ago(5), messageLog: log(i)
+      });
+    }
+    return {clients, variants: GB.buildDefaultVariants(), variantStats: {}, todos: []};
+  };
+
+  test('a library email does not steal the appointment credit from the text that earned it', () => {
+    /* The panel credits the outcome to the LAST message before the
+       appointment. A library email sent the morning of the call is the last
+       message — so it took the credit away from the day-of text, quietly
+       making a real text variant look like it produced nothing.
+
+       This is the half of the problem that corrupts existing numbers, not
+       just adds a stray section. */
+    const state = book(12, (i) => [
+      {id:'t'+i, stage:'dayof', variantId:'d1', text:'t', sentAt: ago(6),
+       responded: i < 5, respondedAt: i < 5 ? ago(6) : null, reviewed: true, channel:'sms'},
+      {id:'e'+i, stage:'email', variantId:'lib-uuid-1234', text:'e', sentAt: ago(5.1),
+       responded: false, respondedAt: null, reviewed: true, channel:'email'},
+    ]);
+    const groups = GB.computeVariantPerformance(state, new Date());
+    assert.deepStrictEqual(groups.map(g => g.stage), ['dayof'],
+      'only touch stages belong in a panel that compares touch wordings');
+    const row = groups[0].rows.find(r => r.variantId === 'd1');
+    assert.strictEqual(row.credited, 12, 'the day-of text must keep its credit');
+    assert.strictEqual(row.appointments, 12);
+  });
+
+  test('library emails never appear as a variant row', () => {
+    // Their id is a document uuid, so the row would have been labelled with
+    // raw hex under a heading reading "email".
+    const state = book(12, (i) => [
+      {id:'e'+i, stage:'email', variantId:'b3f1c2d4e5f60718', text:'e', sentAt: ago(8),
+       responded: i < 4, respondedAt: i < 4 ? ago(7) : null, reviewed: true, channel:'email'},
+    ]);
+    const groups = GB.computeVariantPerformance(state, new Date());
+    assert.deepStrictEqual(groups, [], 'got: ' + JSON.stringify(groups.map(g => g.stage)));
+  });
+
+  test('an email touch from the OLD stage-keyed set is still measured', () => {
+    // Only the library's 'email' stage is excluded. An email written against
+    // a real touch is still that touch, and still comparable.
+    const state = book(12, (i) => [
+      {id:'e'+i, stage:'dayof', variantId:'own-dayof', text:'e', sentAt: ago(6),
+       responded: i < 4, respondedAt: i < 4 ? ago(6) : null, reviewed: true, channel:'email'},
+    ]);
+    const groups = GB.computeVariantPerformance(state, new Date());
+    assert.deepStrictEqual(groups.map(g => g.stage), ['dayof']);
+  });
+
+  test('a library email still counts as contact, which is what it is for', () => {
+    // Excluding it from VARIANT stats must not make it invisible: "has this
+    // person been contacted" is what stops an automated text landing on top
+    // of an email somebody sent by hand.
+    const c = GB.sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+      timezone:'America/New_York', status:'Booked', bookedDate: ago(10),
+      callDateTime: new Date(Date.now() + 86400000).toISOString(),
+      messageLog:[{id:'m1', stage:'email', variantId:'lib-1', text:'e',
+        sentAt: new Date(Date.now() - 3600000).toISOString(),
+        responded:false, respondedAt:null, reviewed:false, channel:'email'}]});
+    const inter = GB.lastInteraction(c, new Date());
+    assert.ok(inter && inter.message, 'the email must be the last interaction');
+    assert.strictEqual(inter.message.stage, 'email');
+    // And it is not counted as one of the five touches, because it is not one.
+    assert.strictEqual(GB.cadenceProgress(c, new Date()).done, 0);
+  });
+}
+
 console.log('\n--- a dead calendar connection says so ---');
 
 {
