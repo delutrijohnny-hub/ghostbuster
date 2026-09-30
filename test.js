@@ -2522,29 +2522,45 @@ test('a contact-anchored step is not blocked by a past appointment', () => {
 
 console.log('\n--- a reschedule restarts the appointment touches ---');
 
+/* A fixed morning "now", so these read the same at 9am and at 5pm.
+
+   These three tests put the appointment at 16:00 today and then passed the
+   real clock as `now`. Which means they asserted "a day-of text is due" —
+   true all morning, and correctly false from 16:00 onwards, because you do
+   not send a day-of reminder after the call has happened. So the suite passed
+   every morning and failed every afternoon.
+
+   A suite that fails depending on the wall clock is worse than a missing
+   test: it teaches you that a red run is probably nothing. The rest of the
+   file already passes an explicit `now` for exactly this reason. */
+const DAYOF_NOW = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })();
+const DAYOF_CALL = (() => { const d = new Date(); d.setHours(16, 0, 0, 0); return d.toISOString(); })();
+// Earlier the same morning, so "already sent today" is unambiguous.
+const DAYOF_SENT = (() => { const d = new Date(); d.setHours(8, 0, 0, 0); return d.toISOString(); })();
+
 test('a moved call gets a fresh day-of text', () => {
   // The live bug: a day-of text sent for the OLD date marked the stage sent
   // forever, so the new date never got one. 11 upcoming clients were stranded.
   const c = freshClient({
     bookedDate: isoDaysAgo(40),
-    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),  // today
+    callDateTime: DAYOF_CALL,                       // 16:00 today, vs a 09:00 now
     reschedules: [isoDaysAgo(3)],
     messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: isoDaysAgo(30),
       responded:false, respondedAt:null, reviewed:true}]
   });
-  assert.ok(GB.computeDue(c, new Date()).includes('dayof'),
+  assert.ok(GB.computeDue(c, DAYOF_NOW).includes('dayof'),
     'a day-of text sent for a call a month ago must not block today’s');
 });
 
 test('but the same text sent since the move is not sent twice', () => {
   const c = freshClient({
     bookedDate: isoDaysAgo(40),
-    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),
+    callDateTime: DAYOF_CALL,
     reschedules: [isoDaysAgo(3)],
-    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: new Date().toISOString(),
+    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: DAYOF_SENT,
       responded:false, respondedAt:null, reviewed:false}]
   });
-  assert.ok(!GB.computeDue(c, new Date()).includes('dayof'));
+  assert.ok(!GB.computeDue(c, DAYOF_NOW).includes('dayof'));
 });
 
 test('rescheduling does not make someone a stranger again', () => {
@@ -2561,12 +2577,12 @@ test('rescheduling does not make someone a stranger again', () => {
 test('a contact who never rescheduled behaves exactly as before', () => {
   const c = freshClient({
     bookedDate: isoDaysAgo(10),
-    callDateTime: new Date(new Date().setHours(16, 0, 0, 0)).toISOString(),
+    callDateTime: DAYOF_CALL,
     reschedules: [],
-    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: new Date().toISOString(),
+    messageLog: [{stage:'dayof',variantId:'d1',text:'x',sentAt: DAYOF_SENT,
       responded:false, respondedAt:null, reviewed:false}]
   });
-  assert.ok(!GB.computeDue(c, new Date()).includes('dayof'));
+  assert.ok(!GB.computeDue(c, DAYOF_NOW).includes('dayof'));
 });
 
 test('appointmentSetAt reads the most recent move', () => {
