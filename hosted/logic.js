@@ -1538,6 +1538,36 @@ function computeVariantPerformance(state, now){
 }
 
 
+/* Which Google account client mail should go from.
+
+   Not "whichever Gmail the browser happens to have open". These accounts are
+   signed into several at once — a personal address and a work one — and a
+   client email leaving from the personal one is a small, avoidable
+   embarrassment.
+
+   The connected calendar is the answer, and it is already the identity used to
+   decide whose lead a booking is. It is the work account by definition: it is
+   the mailbox the bookings arrive in. An explicit setting still wins where one
+   exists, for anyone whose sending address differs from their calendar.
+
+   Returns null rather than guessing when neither is known, so the caller can
+   say so instead of quietly opening the wrong mailbox. */
+function businessEmailAccount(state){
+  if(!state) return null;
+  var explicit = (state.emailFromAddress || '').trim();
+  if(explicit) return explicit;
+  var cals = state.myCalendars || [];
+  for(var i = 0; i < cals.length; i++){
+    var c = String(cals[i] || '').trim();
+    // Calendar ids are usually the owner's address, but not always — a shared
+    // calendar can be a long opaque id ending in @group.calendar.google.com,
+    // which is not a mailbox anyone can send from.
+    if(c.indexOf('@') !== -1 && c.indexOf('@group.calendar.google.com') === -1) return c;
+  }
+  return null;
+}
+
+
 /* A Gmail compose link, pre-filled and pointed at the right account.
 
    This is how email gets used today. The provider route (send-email) needs an
@@ -3487,6 +3517,7 @@ var __LOGIC_EXPORTS__ = {
   getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
   isOthersLead: isOthersLead, canEmail: canEmail, gmailComposeUrl: gmailComposeUrl,
+  businessEmailAccount: businessEmailAccount,
   getRecentSends: getRecentSends,
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,
   telHref: telHref, onDeckNudgeText: onDeckNudgeText,

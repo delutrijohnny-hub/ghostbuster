@@ -1558,6 +1558,44 @@ test('with no account configured it lets Gmail decide', () => {
   assert.ok(!u.includes('authuser='));
 });
 
+test('the sending account comes from the business calendar, not the personal one', () => {
+  // Nobody is asked to type this. The mailbox the bookings arrive in IS the
+  // work account, so the connected calendar answers the question for free.
+  assert.strictEqual(
+    GB.businessEmailAccount({ myCalendars: ['john@marketmakermgmt.com'] }),
+    'john@marketmakermgmt.com');
+});
+
+test('an explicit setting beats the calendar', () => {
+  // Some people book on one address and send from another.
+  assert.strictEqual(GB.businessEmailAccount({
+    emailFromAddress: 'hello@marketmakermgmt.com',
+    myCalendars: ['john@marketmakermgmt.com'],
+  }), 'hello@marketmakermgmt.com');
+});
+
+test('a shared calendar id is not a mailbox and is skipped', () => {
+  // Handing Gmail one of these as authuser lands on an account chooser.
+  assert.strictEqual(GB.businessEmailAccount({
+    myCalendars: ['abc123def@group.calendar.google.com', 'john@marketmakermgmt.com'],
+  }), 'john@marketmakermgmt.com');
+});
+
+test('with nothing connected it says so rather than guessing', () => {
+  assert.strictEqual(GB.businessEmailAccount({ myCalendars: [] }), null);
+  assert.strictEqual(GB.businessEmailAccount({ myCalendars: ['holidays'] }), null);
+  assert.strictEqual(GB.businessEmailAccount({ emailFromAddress: '   ' }), null);
+  assert.strictEqual(GB.businessEmailAccount(null), null);
+});
+
+test('the Email button opens the business account, end to end', () => {
+  // The two pieces together: what the app actually does per contact.
+  const state = { myCalendars: ['john@marketmakermgmt.com'] };
+  const u = GB.gmailComposeUrl('dana@example.com', 's', 'b', GB.businessEmailAccount(state));
+  assert.ok(u.includes('authuser=john%40marketmakermgmt.com'),
+    'a client email must not be able to leave from a personal Gmail');
+});
+
 test('a body with newlines and symbols survives the round trip', () => {
   const body = 'Hi Dana,\n\nHere is the link: https://meet.google.com/a-b-c?x=1&y=2\n\nJohnny';
   const u = GB.gmailComposeUrl('a@b.com', 'Subject & more', body, null);

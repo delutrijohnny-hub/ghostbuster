@@ -355,7 +355,7 @@ function buildTouchCard(client, stage, now){
     var gDraft = getEmailDraft(STATE, client, stage, STATE.senderName);
     if(gDraft){
       actions.appendChild(h('a',{class:'btn btn-sm', target:'_blank', rel:'noopener',
-        href: gmailComposeUrl(client.email, gDraft.subject, gDraft.text, STATE.emailFromAddress),
+        href: gmailComposeUrl(client.email, gDraft.subject, gDraft.text, businessEmailAccount(STATE)),
         'data-action':'sent-by-email','data-cid':client.id,'data-stage':stage,
         title:'Opens Gmail with this written and ready'},['✉ Email']));
     }
@@ -659,7 +659,7 @@ function renderGhostToday(){
       var gd = getEmailDraft(STATE, c, rec.stage || 'welcome', STATE.senderName);
       if(gd){
         acts.appendChild(h('a',{target:'_blank', rel:'noopener',
-          href: gmailComposeUrl(c.email, gd.subject, gd.text, STATE.emailFromAddress),
+          href: gmailComposeUrl(c.email, gd.subject, gd.text, businessEmailAccount(STATE)),
           'data-action':'sent-by-email','data-cid':c.id,'data-stage': rec.stage || 'welcome'},['Email']));
       }
     }
@@ -1995,12 +1995,18 @@ function renderSettingsModal(){
     '<div class="term-grid" style="margin-top:8px;">' +
       '<div><label>From name</label><input type="text" data-action="set-email-field" data-key="emailFromName" value="' +
         escapeHtml(STATE.emailFromName || STATE.senderName || '') + '" placeholder="Johnny at MarketMaker"></div>' +
-      '<div><label>From address</label><input type="text" data-action="set-email-field" data-key="emailFromAddress" value="' +
-        escapeHtml(STATE.emailFromAddress || '') + '" placeholder="johnny@yourdomain.com"></div>' +
+      '<div><label>Send client email from</label><input type="text" data-action="set-email-field" data-key="emailFromAddress" value="' +
+        escapeHtml(STATE.emailFromAddress || '') + '" placeholder="' +
+        escapeHtml(businessEmailAccount(STATE) || 'johnny@yourdomain.com') + '"></div>' +
       '<div><label>Replies go to</label><input type="text" data-action="set-email-field" data-key="emailReplyTo" value="' +
         escapeHtml(STATE.emailReplyTo || '') + '" placeholder="optional"></div>' +
     '</div>' +
-    '<div class="set-warn" style="margin-top:8px;">The from address must be on a domain verified with your email provider, or messages will be rejected. Sending is off until that is set up.</div>' +
+    (businessEmailAccount(STATE)
+      ? '<div class="hint" style="margin-top:6px;">The Email button opens Gmail as <strong>' +
+        escapeHtml(businessEmailAccount(STATE)) + '</strong>' +
+        (STATE.emailFromAddress ? '.' : ', taken from your connected calendar. Set an address above to override it.') + '</div>'
+      : '<div class="set-warn" style="margin-top:6px;">No business account known yet, so the Email button would open whichever Gmail you last used. Connect a calendar or set an address above.</div>') +
+    '<div class="set-warn" style="margin-top:8px;">For automatic sending, the address must also be on a domain verified with your email provider. That is separate from the Email button, which needs no setup.</div>' +
     (STATE.emailEnabled
       ? '<label class="set-toggle" style="margin-top:12px;"><input type="checkbox" data-action="set-auto-email"' +
         (STATE.autoSendEmail ? ' checked' : '') + '> Send due follow-up emails automatically</label>' +
