@@ -1534,6 +1534,77 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+console.log('\n--- the analytics agree with each other ---');
+
+test('the unlogged count matches the list it links to', () => {
+  // The stat card links straight to the prompt; if they use different rules
+  // the number promises work the list does not contain.
+  const st = GB.buildDefaultState();
+  const mk = (id, status) => { st.clients[id] = freshClient({id, name:id, phone:'21355500'+id,
+    bookedDate: isoDaysAgo(30), callDateTime: isoDaysAgo(4), status}); };
+  mk('1','Booked'); mk('2','Completed'); mk('3','No-show');
+  mk('4','Rescheduled'); mk('5','Ghosted');
+  const s = GB.computeStats(st, 'all', new Date());
+  assert.strictEqual(s.unloggedCalls, GB.getUnloggedCalls(st, new Date()).length,
+    'the stat and the prompt must count the same thing');
+  assert.strictEqual(s.unloggedCalls, 1, 'only the one still on an open stage');
+});
+
+test('a custom pipeline keeps its statuses through a load', () => {
+  // These were being rewritten to 'Booked' on every load, silently destroying
+  // an entire book's outcomes each time the app opened.
+  withPipeline(HVAC_PIPELINE, () => {
+    HVAC_PIPELINE.forEach(stage => {
+      const c = GB.sanitizeClient({id:'x', name:'X', phone:'2135550100', status: stage.key});
+      assert.strictEqual(c.status, stage.key, stage.key + ' was rewritten on load');
+    });
+  });
+});
+
+test('an unrecognised status is preserved, not replaced', () => {
+  const c = GB.sanitizeClient({id:'x', name:'X', phone:'2135550100', status:'Some Renamed Stage'});
+  assert.strictEqual(c.status, 'Some Renamed Stage',
+    'renaming a stage must not erase it from every contact sitting on it');
+});
+
+test('a new contact starts on the configured pipeline, not the agency default', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    assert.strictEqual(GB.defaultOpenStage(), 'New Inquiry');
+    const c = GB.sanitizeClient({id:'x', name:'X', phone:'2135550100'});
+    assert.strictEqual(c.status, 'New Inquiry');
+  });
+  assert.strictEqual(GB.defaultOpenStage(), 'Booked');
+});
+
+test('the status filter list follows the active pipeline', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    assert.ok(GB.VALID_STATUSES.includes('Estimate Completed'));
+    assert.ok(!GB.VALID_STATUSES.includes('Completed'),
+      'showing another business’s stages as filters is worse than useless');
+  });
+  assert.ok(GB.VALID_STATUSES.includes('Completed'), 'and restored afterwards');
+});
+
+test('a custom stalled stage still sets the recovery anchor', () => {
+  // Without stalledSince the recovery sequence never fires at all, silently.
+  withPipeline(HVAC_PIPELINE, () => {
+    const st = GB.buildDefaultState();
+    st.clients['a'] = freshClient({id:'a', phone:'2135550100', status:'New Inquiry'});
+    GB.setOutcome(st, 'a', 'Awaiting Decision');
+    assert.ok(st.clients['a'].stalledSince, 'no anchor means no recovery nudges, ever');
+  });
+});
+
+test('a custom pipeline reaches the Graveyard, and so the slow lane', () => {
+  withPipeline(HVAC_PIPELINE, () => {
+    const st = GB.buildDefaultState();
+    st.clients['a'] = freshClient({id:'a', name:'A', phone:'2135550100', status:'Missed Estimate',
+      bookedDate: isoDaysAgo(90), callDateTime: isoDaysAgo(60)});
+    assert.strictEqual(GB.computeDeadClients(st, new Date()).length, 1,
+      'otherwise these contacts are never nurtured either');
+  });
+});
+
 console.log('\n--- whose lead is it ---');
 
 const mine = ['john@marketmakermgmt.com'];

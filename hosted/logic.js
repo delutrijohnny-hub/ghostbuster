@@ -203,12 +203,35 @@ function setPipeline(stages){
     return st && typeof st.key === 'string' && st.key;
   }) : buildDefaultPipeline();
   if(!ACTIVE_PIPELINE.length) ACTIVE_PIPELINE = buildDefaultPipeline();
+  // Rebuilt in place so anything holding a reference sees the change.
+  VALID_STATUSES.length = 0;
+  ACTIVE_PIPELINE.forEach(function(st){ VALID_STATUSES.push(st.key); });
 }
 function getPipeline(){ return ACTIVE_PIPELINE; }
 
 // Unknown stages read as 'open' rather than throwing: a contact sitting on a
 // stage an admin just deleted should keep getting followed up, not fall out of
 // the system silently.
+// Where a brand-new contact starts: the first open stage of whatever pipeline
+// is configured, not the agency default's 'Booked'.
+function defaultOpenStage(){
+  for(var i = 0; i < ACTIVE_PIPELINE.length; i++){
+    if((ACTIVE_PIPELINE[i].role || 'open') === 'open') return ACTIVE_PIPELINE[i].key;
+  }
+  return ACTIVE_PIPELINE.length ? ACTIVE_PIPELINE[0].key : 'Booked';
+}
+
+function pipelineHasStages(keys){
+  for(var i = 0; i < keys.length; i++){
+    var found = false;
+    for(var j = 0; j < ACTIVE_PIPELINE.length; j++){
+      if(ACTIVE_PIPELINE[j].key === keys[i]){ found = true; break; }
+    }
+    if(!found) return false;
+  }
+  return true;
+}
+
 function stageRole(status){
   for(var i=0;i<ACTIVE_PIPELINE.length;i++){
     if(ACTIVE_PIPELINE[i].key === status) return ACTIVE_PIPELINE[i].role || 'open';
@@ -229,6 +252,9 @@ function isOpenStage(status){ return stageRole(status) === 'open'; }
 // sequences are separate and keep running where their own roles apply.
 function stopsCadence(status){ var r = stageRole(status); return r === 'won' || r === 'missed' || r === 'lost'; }
 
+// Kept in step with the active pipeline: the clients table builds its status
+// filters from this, and a filter list showing another business's stages is
+// both useless and confusing.
 var VALID_STATUSES = buildDefaultPipeline().map(function(st){ return st.key; });
 
 var STOP_1TO4 = {Completed:true,'No-show':true,Ghosted:true};
@@ -580,7 +606,20 @@ function sanitizeClient(raw, fallbackId){
     bookedDate: (typeof raw.bookedDate === 'string' && !isNaN(Date.parse(raw.bookedDate))) ? raw.bookedDate : nowISO(),
     timezone: resolveClientTimezone(raw),
     timezoneConfirmed: raw.timezoneConfirmed === true,
-    status: VALID_STATUSES.indexOf(raw.status) !== -1 ? raw.status : 'Booked',
+    /* A status is preserved as-is whenever it is a real string.
+
+       This used to check against VALID_STATUSES — which is derived from the
+       DEFAULT pipeline — and rewrite anything else to 'Booked'. On a custom
+       pipeline that silently reset every contact's outcome on every load: an
+       HVAC company's whole book would come back as Booked each time the app
+       opened, destroying real data on read.
+
+       Validating against the ACTIVE pipeline would be better but still wrong,
+       because it would discard a contact's stage the moment an admin renamed
+       it. Unknown stages already behave sanely — stageRole treats them as
+       'open', so the contact keeps getting followed up — which is a far better
+       failure than losing the value. */
+    status: (typeof raw.status === 'string' && raw.status) ? raw.status : defaultOpenStage(),
     messageLog: messageLog,
     notes: typeof raw.notes === 'string' ? raw.notes : '',
     recap: typeof raw.recap === 'string' ? raw.recap : '',
@@ -1208,7 +1247,15 @@ function markSent(state, clientId, stage, text){
   // being counted as a failure.
 
   var statusBefore = client.status;
-  if(!stopsCadence(client.status)){
+  /* Advancing Booked -> Confirmed -> Reminded as reminders go out.
+
+     Deliberately guarded rather than generalised. "The next open stage" sounds
+     like the right abstraction until you try it on a real pipeline: sending an
+     HVAC customer a day-of text does not mean their estimate is now scheduled.
+     So this only fires when those exact stages are in the active pipeline —
+     correct for the default, and does nothing rather than something wrong for
+     a custom one. */
+  if(!stopsCadence(client.status) && pipelineHasStages(['Booked','Confirmed','Reminded'])){
     if((stage === 'monday' || stage === 'midcheckin') && client.status === 'Booked'){
       client.status = 'Confirmed';
     } else if((stage === 'dayof' || stage === 'hourbefore') && (client.status === 'Booked' || client.status === 'Confirmed')){
@@ -1866,11 +1913,16 @@ function setOutcome(state, clientId, buttonLabel, when){
   if(!client) return;
   var newStatus = OUTCOME_TO_STATUS[buttonLabel] || buttonLabel;
   when = when || new Date();
-  if(newStatus === 'Rescheduled'){
+  // Roles, not names. stalledSince is the anchor the recovery sequence counts
+  // from, so a pipeline whose stalled stage is called "Awaiting Decision"
+  // would never have it set and would silently get no recovery nudges at all.
+  var newRole = stageRole(newStatus);
+  var wasRole = stageRole(client.status);
+  if(newRole === 'stalled'){
     recordReschedule(client, when);
-    if(client.status !== 'Rescheduled') client.stalledSince = when.toISOString();
-  } else if(newStatus === 'Ghosted'){
-    if(client.status !== 'Ghosted') client.stalledSince = when.toISOString();
+    if(wasRole !== 'stalled') client.stalledSince = when.toISOString();
+  } else if(newRole === 'lost'){
+    if(wasRole !== 'lost') client.stalledSince = when.toISOString();
   } else {
     client.stalledSince = null;
   }
@@ -2259,7 +2311,7 @@ function commitImportedClients(state, parsedList){
         youtubeLink: p.youtubeLink || '', meetLink: p.meetLink || '',
         callDateTime: p.callDateTime || null, bookedDate: p.bookedDate || nowISO(),
         timezone: timezoneForClient(p.phone, 'America/New_York'),
-        status: 'Booked', messageLog: [], notes:'', recap:'',
+        status: defaultOpenStage(), messageLog: [], notes:'', recap:'',
         closeOutcome: undefined, reschedules:[], rescheduleCount:0,
         stalledSince: null, ignored:false, manuallyAdded: !p.googleEventId, snoozedUntil:{},
         rebooked: isRebooking, hadPriorCall: hadPriorCall
@@ -2285,7 +2337,7 @@ function addManualClient(state, fields){
     youtubeLink: fields.youtubeLink || '', meetLink: fields.meetLink || '',
     callDateTime: fields.callDateTime || null, bookedDate: fields.bookedDate || nowISO(),
     timezone: fields.timezone || timezoneForClient(fields.phone, 'America/New_York'),
-    status: 'Booked', messageLog: [], notes: fields.notes || '', recap:'',
+    status: defaultOpenStage(), messageLog: [], notes: fields.notes || '', recap:'',
     closeOutcome: undefined, reschedules:[], rescheduleCount:0,
     stalledSince: null, ignored:false, manuallyAdded:true, snoozedUntil:{}
   };
@@ -2507,9 +2559,14 @@ function computeStats(state, range, now){
   // no-show — but excluding them silently lets a number describe 86 calls
   // while looking like it describes 110. Reported so the UI can say how much
   // of the picture is missing.
+  // Same rule as getUnloggedCalls, which drives the prompt this number links
+  // to: only a contact still on an OPEN stage is owed an answer. Stalled and
+  // lost are answers — they say the appointment is not happening. Counting
+  // them here while the list excluded them meant the stat and the list it
+  // pointed at disagreed.
   var unlogged = inCallWindow.filter(function(c){
     var d = safeDate(c.callDateTime);
-    return d && d.getTime() < now.getTime() && !isWon(c.status) && !isMissed(c.status);
+    return d && d.getTime() < now.getTime() && stageRole(c.status) === 'open';
   }).length;
   var closed = inCallWindow.filter(function(c){ return c.closeOutcome==='Closed'; }).length;
   var notClosed = inCallWindow.filter(function(c){ return c.closeOutcome==='Not closed'; }).length;
@@ -2594,7 +2651,10 @@ function computeHealthAlerts(state){
 }
 
 
-var DEAD_ELIGIBLE_STATUSES = {'No-show':true, Ghosted:true, Rescheduled:true};
+// Which roles can go cold. Named stages would mean a custom pipeline's
+// contacts never reach the Graveyard — and since the Graveyard is now what
+// feeds the monthly revival touch, they would never be nurtured either.
+var DEAD_ELIGIBLE_ROLES = {missed: true, lost: true, stalled: true};
 
 // A client goes to the Dead tab when the "keep them interested" follow-up
 // (recovery/noshow/rebooked/followup — or, if none was ever sent, the call
@@ -2611,7 +2671,7 @@ function isDeadClient(client, allClients, now, deadAfterDays){
   deadAfterDays = deadAfterDays == null ? 14 : deadAfterDays;
   if(client.ignored) return false;
   var completedNotClosed = isWon(client.status) && client.closeOutcome !== 'Closed';
-  if(!DEAD_ELIGIBLE_STATUSES[client.status] && !completedNotClosed) return false;
+  if(!DEAD_ELIGIBLE_ROLES[stageRole(client.status)] && !completedNotClosed) return false;
 
   var rebookedSince = allClients.some(function(other){
     if(other.id === client.id) return false;
@@ -3163,9 +3223,11 @@ function buildWeeklyDigest(state, now){
   now = now || new Date();
   var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
   var inWeek = clients.filter(function(c){ return c.callDateTime && inRange(c.callDateTime,'week',now); });
-  var showed = inWeek.filter(function(c){ return c.status==='Completed'; });
-  var noshow = inWeek.filter(function(c){ return c.status==='No-show'; });
-  var ghosted = inWeek.filter(function(c){ return c.status==='Ghosted'; });
+  // Same role-not-name rule the live stats already follow; without it a custom
+  // pipeline's weekly digest reports zeros for a week that went fine.
+  var showed = inWeek.filter(function(c){ return isWon(c.status); });
+  var noshow = inWeek.filter(function(c){ return isMissed(c.status); });
+  var ghosted = inWeek.filter(function(c){ return stageRole(c.status) === 'lost'; });
   var rescheduled = inWeek.filter(function(c){ return c.rescheduleCount>0; });
   var closed = inWeek.filter(function(c){ return c.closeOutcome==='Closed'; });
   var showUpRate = (showed.length+noshow.length) > 0 ? Math.round((showed.length/(showed.length+noshow.length))*100)+'%' : '—';
@@ -3223,6 +3285,8 @@ function buildClientsCsv(state){
 var __LOGIC_EXPORTS__ = {
   STORAGE_KEY: STORAGE_KEY, VALID_STATUSES: VALID_STATUSES, STOP_1TO4: STOP_1TO4,
   buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
+  pipelineHasStages: pipelineHasStages, DEAD_ELIGIBLE_ROLES: DEAD_ELIGIBLE_ROLES,
+  defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
   getTerminology: getTerminology, term: term, termLower: termLower,
