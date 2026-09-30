@@ -2306,11 +2306,11 @@ document.addEventListener('click', function(ev){
       window.GB_SUPABASE.functions.invoke('google-calendar-sync').then(function(res){
         if(res.error){ showToast('Sync failed — try again in a bit.'); console.error(res.error); return; }
         var cals = (res.data && res.data.results && res.data.results[0] && res.data.results[0].calendars) || [];
-        var added = cals.reduce(function(sum,c){ return sum + (c.added||0); }, 0);
-        var updated = cals.reduce(function(sum,c){ return sum + (c.updated||0); }, 0);
         if(!cals.length){ showToast('No calendar connected yet — use "Connect calendar" first.'); return; }
-        showToast('Synced: ' + added + ' new, ' + updated + ' updated.');
-        init();
+        var msg = describeSyncResult(cals);
+        showToast(msg.text);
+        if(msg.detail) console.error('GhostBuster: calendar sync — ' + msg.detail);
+        if(msg.ok) init();
       });
       break;
     case 'tab':
@@ -3088,6 +3088,73 @@ function doToggleReplied(cid, idx){
    An email sent through Gmail still has to advance the cadence and count in
    the stats, or the touch simply fires again tomorrow as though nothing
    happened. */
+/* What the sync actually did, said out loud.
+
+   This used to sum `added` and `updated` across calendars and print the
+   total. Which meant three completely different outcomes produced the same
+   reassuring sentence — "Synced: 0 new, 0 updated":
+
+     - the token refresh failed, so nothing was even fetched
+     - events were fetched and the calendar filter matched none of them
+     - there genuinely was nothing new
+
+   The function has always returned a per-calendar `error` for the first case.
+   The app threw it away. So somebody whose sync had been broken for a week
+   got a green toast telling them it worked, every time they pressed the
+   button, and the only way to find out otherwise was to open dev tools.
+
+   An error is now the headline, because it is the only one of the three the
+   person can act on. */
+function describeSyncResult(cals){
+  var failed = cals.filter(function(c){ return c && c.error; });
+  var added = 0, updated = 0, scanned = 0, filteredOut = 0;
+  cals.forEach(function(c){
+    added += c.added || 0; updated += c.updated || 0;
+    scanned += c.scanned || 0; filteredOut += c.filteredOut || 0;
+  });
+
+  if(failed.length === cals.length){
+    var why = String(failed[0].error || '');
+    // A refresh failure is the one with a specific, actionable cause, and it
+    // is the likeliest: the Google consent screen expires refresh tokens
+    // every 7 days while it is still in Testing.
+    var reconnect = /refresh|invalid_grant|unauthorized|401/i.test(why);
+    return {
+      ok: false,
+      text: reconnect
+        ? 'Calendar not connected any more — Google expired the connection. Reconnect the calendar and it will pick up today\'s bookings.'
+        : 'Sync could not reach your calendar. Nothing was changed. Details are in the console.',
+      detail: why
+    };
+  }
+
+  if(failed.length){
+    return {
+      ok: true,
+      text: added + ' new, ' + updated + ' updated — but ' + failed.length +
+        ' of ' + cals.length + ' calendars failed. ' + (failed[0].calendar || '') + ' did not sync.',
+      detail: String(failed[0].error || '')
+    };
+  }
+
+  if(!added && !updated && scanned > 0){
+    // The filter case. Nothing is wrong with the connection, and this is the
+    // state two people onboarding sat in for days with an empty app.
+    return {
+      ok: true,
+      text: 'Read ' + scanned + ' events and none of them looked like a booking. ' +
+        'Check which events count as bookings in Settings → Calendar.',
+      detail: 'scanned ' + scanned + ', filtered out ' + filteredOut
+    };
+  }
+
+  if(!added && !updated){
+    return {ok: true, text: 'Already up to date — nothing new on the calendar.', detail: null};
+  }
+
+  return {ok: true, text: 'Synced: ' + added + ' new, ' + updated + ' updated.', detail: null};
+}
+
 function markSentOnChannel(cid, stage, text, channel){
   var client = STATE.clients[cid];
   if(!client) return;

@@ -143,10 +143,16 @@ async function syncOneCalendar(
   const { events, nextSyncToken } = await fetchAllEvents(access_token, conn.sync_token);
 
   let added = 0, updated = 0, rescheduled = 0, skippedDuplicate = 0;
+  // Counted so the app can tell "your filter excluded everything" apart from
+  // "there was nothing on the calendar". Both used to surface as
+  // "Synced: 0 new, 0 updated", which is how somebody sits in front of an
+  // empty app for a week with no idea why.
+  let scanned = 0, filteredOut = 0;
   for (const ev of events) {
     if (ev.status === 'cancelled') continue;
+    scanned++;
     const parsed = clientFromGCalEvent(ev, calendarFilter);
-    if (!parsed) continue;
+    if (!parsed) { filteredOut++; continue; }
 
     const existingByEvent = byEventId.get(parsed.googleEventId);
     if (existingByEvent) {
@@ -219,7 +225,7 @@ async function syncOneCalendar(
     body: JSON.stringify({ sync_token: nextSyncToken, last_sync: new Date().toISOString() }),
   });
 
-  return { added, updated, rescheduled, skippedDuplicate };
+  return { added, updated, rescheduled, skippedDuplicate, scanned, filteredOut };
 }
 
 async function syncUserCalendars(userId: string) {

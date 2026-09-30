@@ -1651,6 +1651,70 @@ test('the examples came from the business, not from invention', () => {
     'the welcome should carry their own positioning line');
 });
 
+console.log('\n--- what the calendar sync tells you ---');
+
+{
+  // describeSyncResult lives in app.js, which needs the DOM stub.
+  const ctx = makeHostedCtx();
+  const call = (cals) => vm.runInContext('describeSyncResult(' + JSON.stringify(cals) + ')', ctx);
+
+  test('an expired Google connection says so, instead of claiming success', () => {
+    // The actual reported symptom: press Sync, get a cheerful green toast,
+    // nothing appears, no way to find out why. The consent screen is still in
+    // Testing, which expires refresh tokens every 7 days.
+    const r = call([{calendar:'ethan@marketmakermgmt.com',
+      error:'Error: Token refresh failed: {"error":"invalid_grant"}'}]);
+    assert.strictEqual(r.ok, false);
+    assert.ok(/reconnect/i.test(r.text), 'it must say what to DO: ' + r.text);
+    assert.ok(!/0 new/.test(r.text), 'never report a count for a sync that never ran');
+  });
+
+  test('a failure that is not an expired token does not claim it is one', () => {
+    const r = call([{calendar:'a@b.com', error:'Error: Calendar API error: {"code":403}'}]);
+    assert.strictEqual(r.ok, false);
+    assert.ok(!/reconnect/i.test(r.text), 'wrong advice is worse than none: ' + r.text);
+    assert.ok(/nothing was changed/i.test(r.text));
+  });
+
+  test('one calendar failing out of two is reported, not averaged away', () => {
+    const r = call([
+      {calendar:'work@x.com', added:3, updated:1, scanned:9, filteredOut:5},
+      {calendar:'personal@x.com', error:'Error: Token refresh failed'},
+    ]);
+    assert.ok(/3 new/.test(r.text));
+    assert.ok(/personal@x.com/.test(r.text), 'name the one that broke: ' + r.text);
+  });
+
+  test('a filter that excludes everything is named as the cause', () => {
+    // This is the state the calendar_filter migration put every pre-existing
+    // account into: filtering for one company's event titles.
+    const r = call([{calendar:'a@b.com', added:0, updated:0, scanned:14, filteredOut:14}]);
+    assert.ok(/14 events/.test(r.text), r.text);
+    assert.ok(/Settings/.test(r.text), 'point at the setting that fixes it: ' + r.text);
+  });
+
+  test('a genuinely quiet calendar is not dressed up as a problem', () => {
+    const r = call([{calendar:'a@b.com', added:0, updated:0, scanned:0, filteredOut:0}]);
+    assert.ok(/up to date/i.test(r.text), r.text);
+    assert.strictEqual(r.ok, true);
+  });
+
+  test('a normal sync still just reports the numbers', () => {
+    const r = call([{calendar:'a@b.com', added:2, updated:5, scanned:11, filteredOut:4}]);
+    assert.ok(/2 new/.test(r.text) && /5 updated/.test(r.text), r.text);
+    assert.strictEqual(r.ok, true);
+  });
+
+  test('an older function that reports no counts still gets a sane message', () => {
+    // The deployed function does not return scanned/filteredOut until it is
+    // redeployed. The app has to be useful before that happens.
+    const r = call([{calendar:'a@b.com', added:0, updated:0}]);
+    assert.strictEqual(r.ok, true);
+    assert.ok(r.text.length > 0);
+    assert.ok(!/undefined|NaN/.test(r.text), 'missing fields must not leak into the message: ' + r.text);
+  });
+}
+
 console.log('\n--- the email library ---');
 
 test('an entry keeps its timing note in the writer’s own words', () => {
