@@ -157,6 +157,20 @@ function renderHealthAlerts(){
       });
     }
   });
+
+  // The one-line summary is what people actually read. Naming the count, and
+  // only colouring it when there is something to act on, keeps a healthy
+  // account from looking like a warning.
+  var wrap = el('health-alerts-wrap');
+  var summary = el('alerts-summary-text');
+  if(wrap && summary){
+    var n = box.children.length;
+    wrap.classList.toggle('has-issues', n > 0);
+    summary.textContent = n
+      ? n + ' data issue' + (n === 1 ? '' : 's') + ' worth a look'
+      : 'Everything looks healthy';
+    if(!n) wrap.removeAttribute('open');
+  }
 }
 
 
@@ -298,10 +312,10 @@ function buildTouchCard(client, stage, now){
   actions.appendChild(sentLabel);
   card.appendChild(actions);
 
-  var deleteRow = document.createElement('div');
-  deleteRow.className = 'card-delete-row';
-  deleteRow.appendChild(h('button',{'data-action':'delete-client-quick','data-cid':client.id,title:'Remove this client entirely'},['Delete client']));
-  card.appendChild(deleteRow);
+  // Deleting a contact lives in the client modal, not on the working surface.
+  // A permanent, unconfirmed-looking action sitting on every card in the
+  // morning list is both a real hazard and the kind of detail that makes
+  // software feel unfinished.
 
   return card;
 }

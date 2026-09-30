@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The GhostBuster</title>
+<title>GhostBuster — follow-up that never forgets a lead</title>
+<meta name="description" content="GhostBuster is the follow-up layer for sales teams: it tells you who to contact, when, how and what to say, so no opportunity gets forgotten.">
+<meta name="theme-color" content="#14161f">
+<meta property="og:title" content="GhostBuster">
+<meta property="og:description" content="Follow-up that never forgets a lead.">
+<meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2317171a'/%3E%3Cpath d='M32 10c-10 0-17 7.5-17 17.5v16c0 1.7 2 2.5 3 1.2l3-3.7 3.5 3.5 3.5-3.5 4 3.5 4-3.5 3.5 3.5 3.5-3.5 3 3.7c1 1.3 3 .5 3-1.2v-16C45 17.5 42 10 32 10z' fill='%23fff'/%3E%3Cellipse cx='25' cy='27' rx='3.6' ry='4.4' fill='%2317171a'/%3E%3Cellipse cx='39' cy='27' rx='3.6' ry='4.4' fill='%2317171a'/%3E%3Cpath d='M6 16 L13 21 M58 16 L51 21' stroke='%23dc2f4a' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 @font-face{
@@ -156,8 +161,19 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 }
 .progress-label{font-weight:600;font-size:13px;white-space:nowrap;font-variant-numeric:tabular-nums;}
 
-/* alerts */
-.alerts{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
+/* Data-health problems are worth surfacing, but not as the first thing anyone
+   sees. Collapsed to one quiet line; the detail is a click away. Leading with
+   red boxes made a working app look broken. */
+.alerts-wrap{margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--card);overflow:hidden;}
+.alerts-summary{list-style:none;cursor:pointer;padding:9px 13px;font-size:12.5px;
+  color:var(--ink-soft);display:flex;align-items:center;gap:8px;user-select:none;}
+.alerts-summary::-webkit-details-marker{display:none;}
+.alerts-summary::before{content:'▸';color:var(--ink-faint);font-size:11px;transition:transform .12s ease;}
+.alerts-wrap[open] .alerts-summary::before{transform:rotate(90deg);}
+.alerts-summary:hover{color:var(--ink);}
+.alerts-wrap.has-issues .alerts-summary{color:var(--amber);font-weight:700;}
+.alerts{display:flex;flex-direction:column;gap:8px;padding:0 13px 13px;}
 .alert{
   background:var(--amber-soft);border:1px solid #eccb85;border-radius:var(--radius-sm);
   padding:10px 12px;font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -167,7 +183,8 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .alert .spacer{flex:1;}
 
 /* stat cards */
-.stats-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;}
+.stats-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
+.stats-row h2{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--ink);margin:0;}
 .hazard-rule{
   height:1px;margin-bottom:16px;
   background:var(--border);
@@ -193,12 +210,49 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .todo-list li.done span{text-decoration:line-through;color:var(--ink-faint);}
 .todo-list li .del{margin-left:auto;color:var(--ink-faint);background:none;border:none;font-size:14px;}
 
-/* tabs */
-.tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:14px;overflow-x:auto;
+/* Dark mode. Every surface is defined by the same tokens, so this is a
+   redefinition rather than a second stylesheet — and the semantic colours
+   (red/green/amber) are lightened rather than swapped, so a status means the
+   same thing in either theme. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg: #0f1116;
+    --card: #171a21;
+    --ink: #e8eaf2;
+    --ink-soft: #a1a7bb;
+    --ink-faint: #6b7189;
+    --border: #262a35;
+    --red: #f4566f;
+    --red-dark: #c33a51;
+    --red-soft: #3a1c23;
+    --green: #2fbc8a;
+    --green-soft: #12312a;
+    --amber: #e0a33c;
+    --amber-soft: #33270f;
+    --black: #0b0d11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --bg: #0f1116; --card: #171a21; --ink: #e8eaf2; --ink-soft: #a1a7bb;
+  --ink-faint: #6b7189; --border: #262a35;
+  --red: #f4566f; --red-dark: #c33a51; --red-soft: #3a1c23;
+  --green: #2fbc8a; --green-soft: #12312a; --amber: #e0a33c; --amber-soft: #33270f;
+  --black: #0b0d11; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+}
+
+/* Primary navigation. Sits directly under the header rather than halfway down
+   the page — navigation buried below a dashboard is the clearest tell that
+   something is a prototype rather than a product. */
+.tabs{display:flex;gap:2px;background:var(--card);border-bottom:1px solid var(--border);
+  padding:0 16px;overflow-x:auto;position:sticky;top:0;z-index:20;
   -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
   mask-image:linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);}
-.tab-btn{background:none;border:none;padding:10px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-weight:600;font-size:14px;letter-spacing:0;color:var(--ink-soft);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;}
-.tab-btn.active{color:var(--red);border-color:var(--red);}
+.tab-btn{background:none;border:none;padding:13px 15px;font-family:inherit;font-weight:600;
+  font-size:13.5px;letter-spacing:.1px;color:var(--ink-soft);border-bottom:2px solid transparent;
+  margin-bottom:-1px;white-space:nowrap;cursor:pointer;transition:color .12s ease,border-color .12s ease;}
+.tab-btn:hover{color:var(--ink);}
+.tab-btn.active{color:var(--ink);border-color:var(--green);}
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
 
@@ -257,9 +311,6 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .card .edited-note{font-size:11px;color:var(--ink-faint);}
 .card .edited-note button{border:none;background:none;color:var(--red-dark);text-decoration:underline;font-size:11px;padding:0;}
 .quick-reply-toggle{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-soft);background:var(--bg);border-radius:var(--radius-sm);padding:5px 8px;margin-bottom:8px;}
-.card-delete-row{text-align:right;margin-top:6px;}
-.card-delete-row button{border:none;background:none;color:var(--ink-faint);font-size:10.5px;text-decoration:underline;padding:0;}
-.card-delete-row button:hover{color:var(--red-dark);}
 .slimer-mark{animation:slimer-wobble 2.4s ease-in-out infinite;transform-origin:50% 100%;}
 @keyframes slimer-wobble{
   0%,100%{ transform:scaleX(1) scaleY(1) rotate(0deg); }
@@ -622,9 +673,21 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 </header>
 <div class="slime-drip" aria-hidden="true"></div>
 
+<nav class="tabs" aria-label="Sections">
+  <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
+  <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
+  <button class="tab-btn" data-action="tab" data-tab="variants">Messages</button>
+  <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
+  <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
+  <button class="tab-btn" data-action="tab" data-tab="dead"><span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
+</nav>
+
 <div class="container">
 
-  <div id="health-alerts" class="alerts"></div>
+  <details id="health-alerts-wrap" class="alerts-wrap">
+    <summary class="alerts-summary"><span id="alerts-summary-text">Everything looks healthy</span></summary>
+    <div id="health-alerts" class="alerts"></div>
+  </details>
 
   <div class="progress-bar-wrap">
     <span class="progress-label" id="progress-label">0 of 0 touches sent today</span>
@@ -632,34 +695,6 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <button class="btn btn-sm" data-action="copy-remaining">Copy all <span id="remaining-count">0</span> remaining</button>
   </div>
 
-  <div class="hazard-rule" aria-hidden="true"></div>
-  <div class="stats-row">
-    <h2 style="font-size:17px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;">Performance</h2>
-    <div class="toggle-group" id="stats-range-toggle">
-      <button data-action="set-stats-range" data-range="today" class="active">Today</button>
-      <button data-action="set-stats-range" data-range="week">This week</button>
-      <button data-action="set-stats-range" data-range="all">All-time</button>
-    </div>
-  </div>
-  <div class="stat-cards" id="stat-cards"></div>
-
-  <div class="todo-section">
-    <h3>To-dos</h3>
-    <div class="todo-row">
-      <input type="text" id="todo-input" placeholder="Add a to-do…">
-      <button class="btn btn-sm btn-primary" data-action="add-todo">Add</button>
-    </div>
-    <ul class="todo-list" id="todo-list"></ul>
-  </div>
-
-  <div class="tabs">
-    <button class="tab-btn active" data-action="tab" data-tab="calls">1 · Calls</button>
-    <button class="tab-btn" data-action="tab" data-tab="clients">2 · All clients</button>
-    <button class="tab-btn" data-action="tab" data-tab="variants">3 · Message variants</button>
-    <button class="tab-btn" data-action="tab" data-tab="weekly">4 · Weekly performance</button>
-    <button class="tab-btn" data-action="tab" data-tab="calendar">5 · Calendar</button>
-    <button class="tab-btn" data-action="tab" data-tab="dead">6 · <span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
-  </div>
 
   <div class="tab-panel active" id="tab-calls">
     <div id="on-deck"></div>
@@ -715,6 +750,24 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   </div>
 
   <div class="tab-panel" id="tab-weekly">
+    <div class="stats-row">
+      <h2>Performance</h2>
+      <div class="toggle-group" id="stats-range-toggle">
+        <button data-action="set-stats-range" data-range="today" class="active">Today</button>
+        <button data-action="set-stats-range" data-range="week">This week</button>
+        <button data-action="set-stats-range" data-range="all">All-time</button>
+      </div>
+    </div>
+    <div class="stat-cards" id="stat-cards"></div>
+    <div class="todo-section">
+      <h3>To-dos</h3>
+      <div class="todo-row">
+        <input type="text" id="todo-input" placeholder="Add a to-do…">
+        <button class="btn btn-sm btn-primary" data-action="add-todo">Add</button>
+      </div>
+      <ul class="todo-list" id="todo-list"></ul>
+    </div>
+
     <div class="chart-block">
       <h3>No-show rescue scorecard</h3>
       <div class="scorecard-grid" id="rescue-scorecard"></div>
