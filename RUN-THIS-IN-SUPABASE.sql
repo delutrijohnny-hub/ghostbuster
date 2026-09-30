@@ -123,9 +123,22 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
+-- 4. Tell the API about the new table.
+--
+-- Supabase serves the REST API through PostgREST, which keeps a
+-- cached picture of the schema. A table created in this editor
+-- can stay invisible to the app until that cache reloads — the
+-- app then gets "Could not find the table in the schema cache",
+-- which looks exactly like the table not existing at all.
+-- ------------------------------------------------------------
+notify pgrst, 'reload schema';
+
+-- ------------------------------------------------------------
 -- Did it work? This should return one row.
 -- ------------------------------------------------------------
 select
-  to_regclass('public.email_library') as email_library_table,
-  (select count(*) from pg_policies where tablename = 'email_library') as policies,
-  (select count(*) from public.app_settings where calendar_filter is null) as accounts_still_unconfigured;
+  to_regclass('public.email_library')                                              as email_library_table,
+  (select count(*) from pg_policies where tablename = 'email_library')             as policies,
+  (select count(*) from public.app_settings where calendar_filter is null)         as accounts_still_unconfigured,
+  (select count(*) from public.app_settings)                                       as total_accounts,
+  (select count(*) from public.email_library)                                      as emails_in_library;
