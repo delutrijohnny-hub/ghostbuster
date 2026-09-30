@@ -1676,6 +1676,148 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- a brand new business, end to end ---');
+
+/* The test that would have caught today.
+
+   Every individual piece was tested. Nothing walked a NEW account from
+   signing up to sending its first message, so nobody noticed that the pieces
+   composed into an app that imported nothing and, when it did, introduced the
+   business as a different company.
+
+   Three people hit that in a row. This is the guard for the composition, not
+   the parts: an account with no settings, no filter, no templates and no
+   history has to end up able to follow up on a booking. */
+{
+  /* A realistic booking from somebody else's booking tool.
+
+     The first version of this fixture said "Booked by John Smith" — which is
+     MarketMaker's own booking-tool wording, and the legacy keyword rule
+     matches on exactly that phrase. So step 1 passed WITH the bug reverted,
+     making it a test that could not fail: the same trap as the old test that
+     asserted the broken fallback.
+
+     Nothing here contains "strategy session" or "booked by", because a
+     plumber's calendar would not. */
+  const plumberBooking = {
+    id: 'gcal-evt-1',
+    summary: 'Water heater estimate - John Smith',
+    description: 'Appointment requested via website\njohn@gmail.com\n(512) 555-1234',
+    organizer: {email: 'bob@acmeplumbing.com'},
+    attendees: [
+      {email: 'bob@acmeplumbing.com', self: true},
+      {email: 'dispatch@acmeplumbing.com'},
+      {email: 'john@gmail.com'},
+    ],
+  };
+
+  test('step 1: a booking with no configuration at all is recognised', () => {
+    // The exact failure: an unconfigured account filtered for another
+    // company's event titles, so this returned false and nothing imported.
+    assert.strictEqual(GB.matchesCalendarFilter(plumberBooking, undefined), true,
+      'a new account must import a booking without being configured first');
+    // The fixture must NOT satisfy the legacy rule, or this test cannot fail.
+    assert.strictEqual(
+      GB.matchesCalendarFilter(plumberBooking, GB.LEGACY_CALENDAR_FILTER), false,
+      'the fixture looks like a MarketMaker booking, so step 1 would pass either way');
+    assert.strictEqual(GB.matchesCalendarFilter(plumberBooking, null), true);
+    assert.strictEqual(GB.matchesCalendarFilter(plumberBooking, {}), true);
+  });
+
+  test('step 2: onboarding leaves the account with a filter it can see', () => {
+    // Not merely relying on a fallback — an invisible setting is how this
+    // went unnoticed for so long.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function applyOnboarding'),
+                         app.indexOf('function', app.indexOf('function applyOnboarding') + 10));
+    assert.ok(/calendarFilter/.test(fn), 'onboarding must write a calendar filter');
+    assert.ok(/attendees/.test(fn), 'and it must be the rule that needs no setup');
+  });
+
+  test('step 3: the imported contact is the customer, not the office', () => {
+    // dispatch@acmeplumbing.com is on the invite. Emailing dispatch instead
+    // of the homeowner is invisible until somebody notices.
+    const ics = [
+      'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:gcal-evt-1',
+      'SUMMARY:Water heater estimate (John Smith)',
+      'DESCRIPTION:Booked by John Smith',
+      'DTSTART:20261005T150000Z',
+      'ORGANIZER;CN=Bob:mailto:bob@acmeplumbing.com',
+      'ATTENDEE;CN=Dispatch:mailto:dispatch@acmeplumbing.com',
+      'ATTENDEE;CN=John:mailto:john@gmail.com',
+      'END:VEVENT','END:VCALENDAR'
+    ].join('\r\n');
+    const parsed = GB.clientFromICSEvent(GB.parseICS(ics)[0]);
+    assert.strictEqual(parsed.email, 'john@gmail.com');
+    assert.strictEqual(parsed.name, 'John Smith');
+  });
+
+  test('step 4: the contact is due a first touch, and it is sendable', () => {
+    const state = {
+      clients: {}, variants: GB.buildDefaultVariants(), variantStats: {},
+      todos: [], epsilon: 0.2, senderName: 'Bob'
+    };
+    const c = GB.sanitizeClient({
+      id: 'p1', name: 'John Smith', phone: '5125551234', email: 'john@gmail.com',
+      bookedDate: new Date().toISOString(),
+      callDateTime: new Date(Date.now() + 4 * 86400000).toISOString(),
+      timezone: 'America/Chicago'
+    });
+    state.clients.p1 = c;
+
+    const due = GB.computeDue(c, new Date());
+    assert.ok(due.includes('welcome'), 'a fresh booking owes a welcome: ' + JSON.stringify(due));
+
+    const eligible = GB.eligibleVariants(state, 'welcome', c);
+    assert.ok(eligible.length, 'there must be something to send');
+    const picked = GB.pickVariant(state, 'welcome', c);
+    assert.ok(picked && picked.text, 'the bandit must return a real variant');
+  });
+
+  test('step 5: every message this new business could send names only itself', () => {
+    /* The one that would have been most embarrassing: a plumber's customer
+       receiving a text introducing the sender as a marketing agency, offering
+       to fix their YouTube channel.
+
+       Checked across EVERY variant the bandit could pick, not just the first,
+       because which one goes out is chosen at random. */
+    const c = GB.sanitizeClient({
+      id: 'p1', name: 'John Smith', phone: '5125551234', email: 'john@gmail.com',
+      bookedDate: new Date().toISOString(),
+      callDateTime: new Date(Date.now() + 4 * 86400000).toISOString(),
+      timezone: 'America/Chicago',
+      meetLink: 'https://meet.google.com/a-b-c'
+    });
+    const state = {clients: {p1: c}, variants: GB.buildDefaultVariants(),
+                   variantStats: {}, todos: [], senderName: 'Bob'};
+
+    const offenders = [];
+    Object.keys(state.variants).forEach(stage => {
+      GB.eligibleVariants(state, stage, c).forEach(v => {
+        const out = GB.renderTemplate(v.text, c, 'Bob');
+        if (/marketmaker|youtube|realtor/i.test(out)) offenders.push(stage + '/' + v.id + ': ' + out);
+      });
+    });
+    assert.deepStrictEqual(offenders, [],
+      'a message this business could send names someone else:\n' + offenders.join('\n'));
+  });
+
+  test('step 6: nothing in the whole first-run path signs the wrong name', () => {
+    const c = GB.sanitizeClient({id:'p1', name:'John Smith', phone:'5125551234',
+      bookedDate: new Date().toISOString(),
+      callDateTime: new Date(Date.now() + 4 * 86400000).toISOString(),
+      timezone:'America/Chicago'});
+    const state = {clients:{p1:c}, variants: GB.buildDefaultVariants(),
+                   variantStats:{}, todos:[], senderName:'Bob'};
+    Object.keys(state.variants).forEach(stage => {
+      GB.eligibleVariants(state, stage, c).forEach(v => {
+        const out = GB.renderTemplate(v.text, c, 'Bob');
+        assert.ok(!/Johnny/.test(out), stage + '/' + v.id + ' signs the wrong name: ' + out);
+      });
+    });
+  });
+}
+
 console.log('\n--- a library email is not a text variant ---');
 
 {
