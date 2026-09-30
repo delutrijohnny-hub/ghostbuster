@@ -1909,6 +1909,72 @@ test('the landing page does not promise anything that is not built', () => {
       'landing page claims "' + claim + '", which is not built yet'));
 });
 
+console.log('\n--- which calendar events become contacts ---');
+
+const ev = (over) => Object.assign({summary:'', description:'', organizer:{email:'me@acme.com'}, attendees:[]}, over || {});
+
+test('the legacy rule still behaves exactly as it did', () => {
+  assert.strictEqual(GB.isStrategySessionEvent(ev({summary:'Strategy Session (Dana Reed)'})), true);
+  assert.strictEqual(GB.isStrategySessionEvent(ev({description:'Booked by Dana Reed'})), true);
+  assert.strictEqual(GB.isStrategySessionEvent(ev({summary:'Weekly team meeting'})), false);
+  assert.strictEqual(GB.isStrategySessionEvent(ev({summary:'Roof inspection - John Smith'})), false);
+});
+
+test('attendee mode recognises a booking without knowing any wording', () => {
+  // The whole point: a roofing company should not have to name events
+  // "strategy session" for their calendar to work.
+  const f = {mode:'attendees'};
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Roof inspection - John Smith', attendees:[{email:'john@gmail.com'}]}), f), true);
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Estimate: 14 Oak St', attendees:[{email:'homeowner@yahoo.com'}]}), f), true);
+});
+
+test('attendee mode ignores internal meetings and rooms', () => {
+  const f = {mode:'attendees'};
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Standup', attendees:[{email:'colleague@acme.com'}]}), f), false,
+    'a colleague on your own domain is not a booking');
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Focus time', attendees:[{email:'me@acme.com', self:true}]}), f), false);
+  assert.strictEqual(GB.matchesCalendarFilter(
+    ev({summary:'Board room', attendees:[{email:'room@acme.com', resource:true}]}), f), false);
+  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Dentist'}), f), false,
+    'an event with no guests at all is not a booking');
+});
+
+test('exclusions win in every mode', () => {
+  ['all','attendees','keywords'].forEach(mode => {
+    const f = {mode, include:['inspection'], exclude:['weekly team meeting']};
+    assert.strictEqual(GB.matchesCalendarFilter(
+      ev({summary:'Weekly team meeting', attendees:[{email:'someone@else.com'}]}), f), false,
+      mode + ' mode should still honour the exclusion');
+  });
+});
+
+test('all mode takes everything that is not excluded', () => {
+  const f = {mode:'all', exclude:['lunch']};
+  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Anything at all'}), f), true);
+  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Lunch with Sam'}), f), false);
+});
+
+test('an unset filter falls back to the legacy rule rather than syncing nothing', () => {
+  // Getting this wrong means a silently empty app, which is the failure this
+  // whole change exists to fix.
+  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Strategy session'}), undefined), true);
+  assert.strictEqual(GB.matchesCalendarFilter(ev({summary:'Strategy session'}), {}), true);
+});
+
+test('the Edge Function and logic.js apply the same rule', () => {
+  // The function syncs Google Calendar, logic.js parses .ics imports. If they
+  // disagree, the same calendar produces different contacts depending on how
+  // it arrived.
+  const ts = fs.readFileSync(path.join(__dirname, 'supabase', 'functions', '_shared', 'parse.ts'), 'utf8');
+  ['matchesCalendarFilter', "mode === 'all'", "mode === 'attendees'", 'exclude', 'matchDescription']
+    .forEach(token => assert.ok(ts.includes(token), 'parse.ts is missing ' + token));
+  assert.ok(/LEGACY_FILTER/.test(ts), 'parse.ts must keep the legacy fallback too');
+});
+
 console.log('\n--- industry templates ---');
 
 test('every template is a valid, workable configuration', () => {

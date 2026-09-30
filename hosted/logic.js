@@ -1863,12 +1863,72 @@ function parseICS(text){
   return events;
 }
 
-function isStrategySessionEvent(ev){
-  var s = (ev.summary || '').toLowerCase();
-  if(s.indexOf('weekly team meeting') !== -1) return false;
-  if(s.indexOf('strategy session') !== -1) return true;
-  if(/booked by/i.test(ev.description || '')) return true;
+/* Which calendar events represent someone worth following up with.
+
+   Mirrors matchesCalendarFilter in supabase/functions/_shared/parse.ts — the
+   Edge Function applies this to Google Calendar, this copy applies it to .ics
+   imports, and they must agree or the same calendar produces different
+   contacts depending on how it arrived.
+
+   'attendees' is the default for anyone new because it needs no setup to be
+   right: an internal standup has no guest from outside your own domain, a
+   booked appointment does. Title matching only works for a business whose
+   booking tool names events predictably, which is something you have to know
+   about yourself before you can configure it. */
+var LEGACY_CALENDAR_FILTER = {
+  mode: 'keywords',
+  include: ['strategy session'],
+  matchDescription: ['booked by'],
+  exclude: ['weekly team meeting']
+};
+
+function emailDomain(email){
+  var at = String(email || '').lastIndexOf('@');
+  return at === -1 ? '' : String(email).slice(at + 1).toLowerCase();
+}
+
+function matchesCalendarFilter(ev, filter){
+  var f = (filter && filter.mode) ? filter : LEGACY_CALENDAR_FILTER;
+  var title = (ev.summary || '').toLowerCase();
+  var desc = (ev.description || '').toLowerCase();
+  var i;
+
+  // Exclusions win in every mode: a recurring internal meeting on a booking
+  // calendar is the one thing nobody wants turned into a contact.
+  var excl = f.exclude || [];
+  for(i = 0; i < excl.length; i++){
+    if(excl[i] && title.indexOf(String(excl[i]).toLowerCase()) !== -1) return false;
+  }
+
+  if(f.mode === 'all') return true;
+
+  if(f.mode === 'attendees'){
+    var organizer = emailDomain(ev.organizer && ev.organizer.email);
+    var guests = ev.attendees || [];
+    for(i = 0; i < guests.length; i++){
+      var g = guests[i];
+      if(!g || g.self || g.resource) continue;      // you, and meeting rooms
+      var d = emailDomain(g.email);
+      if(!d) continue;
+      if(!organizer || d !== organizer) return true;
+    }
+    return false;
+  }
+
+  var inc = f.include || [];
+  for(i = 0; i < inc.length; i++){
+    if(inc[i] && title.indexOf(String(inc[i]).toLowerCase()) !== -1) return true;
+  }
+  var descTerms = f.matchDescription || [];
+  for(i = 0; i < descTerms.length; i++){
+    if(descTerms[i] && desc.indexOf(String(descTerms[i]).toLowerCase()) !== -1) return true;
+  }
   return false;
+}
+
+// Kept for existing callers; new code should pass a filter explicitly.
+function isStrategySessionEvent(ev){
+  return matchesCalendarFilter(ev, LEGACY_CALENDAR_FILTER);
 }
 
 // `tzid` covers Google's zone-qualified DTSTART (e.g. DTSTART;TZID=America/New_York:...),
@@ -2969,6 +3029,7 @@ var __LOGIC_EXPORTS__ = {
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
+  matchesCalendarFilter: matchesCalendarFilter, LEGACY_CALENDAR_FILTER: LEGACY_CALENDAR_FILTER,
   parseICSDate: parseICSDate, extractAttendeeEmails: extractAttendeeEmails, clientFromICSEvent: clientFromICSEvent,
   MONTHS: MONTHS, parseHeuristicDate: parseHeuristicDate, parseBulkBlock: parseBulkBlock, parseBulkPaste: parseBulkPaste,
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,

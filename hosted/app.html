@@ -519,6 +519,12 @@ td.score-cell{width:1%;white-space:nowrap;}
 .em-note{flex:1;font-size:11.5px;color:var(--ink-faint);min-width:180px;}
 .em-note.em-error{color:var(--red);font-weight:700;}
 .set-toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);cursor:pointer;}
+.cal-mode{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);margin-bottom:6px;cursor:pointer;background:var(--card);}
+.cal-mode.selected{border-color:var(--green);background:var(--green-soft);}
+.cal-mode input{margin-top:2px;}
+.cal-mode strong{display:block;font-size:13px;}
+.cal-mode em{display:block;font-style:normal;font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.45;}
 #em-body{width:100%;font-family:inherit;font-size:13.5px;line-height:1.55;padding:9px 11px;
   border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);color:var(--ink);resize:vertical;}
 #em-subject{width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);

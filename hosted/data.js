@@ -72,6 +72,7 @@ async function loadState(){
     sequence: (settingsRes.data && Array.isArray(settingsRes.data.sequence) && settingsRes.data.sequence.length)
       ? settingsRes.data.sequence : null,
     scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
+    calendarFilter: (settingsRes.data && settingsRes.data.calendar_filter) || null,
     emailEnabled: !!(settingsRes.data && settingsRes.data.email_enabled),
     autoSendEmail: !!(settingsRes.data && settingsRes.data.auto_send_email),
     emailFromName: (settingsRes.data && settingsRes.data.email_from_name) || null,
@@ -322,6 +323,7 @@ function buildSyncSnapshot(state, uid){
     pipeline: state.pipeline || null,
     terminology: state.terminology || null,
     sequence: state.sequence || null,
+    calendar_filter: state.calendarFilter || null,
     email_enabled: !!state.emailEnabled,
     auto_send_email: !!state.autoSendEmail,
     email_from_name: state.emailFromName || null,

@@ -16,7 +16,7 @@
 // commitImportedClients() already gives the .ics import path, just written
 // against the DB instead of an in-memory object.
 
-import { clientFromGCalEvent, type GCalEvent } from '../_shared/parse.ts';
+import { clientFromGCalEvent, type CalendarFilter, type GCalEvent } from '../_shared/parse.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -131,7 +131,8 @@ async function syncOneCalendar(
   userId: string,
   conn: { calendar_id: string; refresh_token: string; sync_token: string | null },
   byEventId: Map<string, any>,
-  byEmailTime: Map<string, any>
+  byEmailTime: Map<string, any>,
+  calendarFilter?: CalendarFilter
 ) {
   const { access_token, expires_in } = await refreshAccessToken(conn.refresh_token);
   await db(`/google_oauth_tokens?user_id=eq.${userId}&calendar_id=eq.${encodeURIComponent(conn.calendar_id)}`, {
@@ -144,7 +145,7 @@ async function syncOneCalendar(
   let added = 0, updated = 0, rescheduled = 0, skippedDuplicate = 0;
   for (const ev of events) {
     if (ev.status === 'cancelled') continue;
-    const parsed = clientFromGCalEvent(ev);
+    const parsed = clientFromGCalEvent(ev, calendarFilter);
     if (!parsed) continue;
 
     const existingByEvent = byEventId.get(parsed.googleEventId);
@@ -234,10 +235,20 @@ async function syncUserCalendars(userId: string) {
     existing.filter((c: any) => c.email).map((c: any) => [`${c.email.toLowerCase()}|${c.call_date_time}`, c])
   );
 
+  // Which events count as bookings is per-organization. Loaded once per user
+  // rather than per calendar, and left undefined when unset so parse.ts falls
+  // back to the legacy rule instead of silently syncing nothing.
+  let calendarFilter: CalendarFilter | undefined;
+  try {
+    const sres = await db(`/app_settings?user_id=eq.${userId}&select=calendar_filter`);
+    const srow = (await sres.json())?.[0];
+    if (srow?.calendar_filter) calendarFilter = srow.calendar_filter as CalendarFilter;
+  } catch (_e) { /* fall back to the legacy rule rather than failing the sync */ }
+
   const perCalendar = [];
   for (const conn of connections) {
     try {
-      const result = await syncOneCalendar(userId, conn, byEventId, byEmailTime);
+      const result = await syncOneCalendar(userId, conn, byEventId, byEmailTime, calendarFilter);
       perCalendar.push({ calendar: conn.calendar_id, ...result });
     } catch (e) {
       perCalendar.push({ calendar: conn.calendar_id, error: String(e) });

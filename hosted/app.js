@@ -1597,6 +1597,12 @@ function applyOnboarding(){
     STATE.pipeline = tpl.pipeline;
     setPipeline(tpl.pipeline);
   }
+  // A new business has no idea what its booking tool names events, so default
+  // to the rule that needs no knowledge to be right. Existing accounts keep
+  // whatever they already had.
+  if(!STATE.calendarFilter){
+    STATE.calendarFilter = {mode:'attendees', include:[], matchDescription:[], exclude:[]};
+  }
   var terms = o.terminology || (tpl && tpl.terminology) || null;
   if(terms){
     STATE.terminology = terms;
@@ -1749,6 +1755,30 @@ function renderSettingsModal(){
     }).join('') +
     (SETTINGS_DRAFT.sequence.length < buildDefaultSequence().length
       ? '<button class="btn btn-sm" data-action="restore-sequence">Restore the default cadence</button>' : '') +
+    '</div>' +
+    '<div class="set-section"><h3>Which calendar events become ' + escapeHtml(termLower('contactPlural')) + '</h3>' +
+    '<div class="hint">If your bookings are not appearing, this is almost always why.</div>' +
+    ['attendees','keywords','all'].map(function(m){
+      var labels = {
+        attendees: ['Events with an outside guest', 'Anything with a guest from outside your own email domain. Works without setup.'],
+        keywords:  ['Events matching words in the title', 'For booking tools that name events predictably.'],
+        all:       ['Everything on the calendar', 'Only sensible for a calendar used just for bookings.']
+      };
+      var cf = STATE.calendarFilter || {};
+      return '<label class="cal-mode' + ((cf.mode || 'keywords') === m ? ' selected' : '') + '">' +
+        '<input type="radio" name="calmode" data-action="set-cal-mode" data-mode="' + m + '"' +
+        ((cf.mode || 'keywords') === m ? ' checked' : '') + '>' +
+        '<span><strong>' + labels[m][0] + '</strong><em>' + labels[m][1] + '</em></span></label>';
+    }).join('') +
+    ((STATE.calendarFilter && STATE.calendarFilter.mode === 'keywords')
+      ? '<div class="term-grid" style="margin-top:8px;"><div><label>Title contains any of these</label>' +
+        '<input type="text" data-action="set-cal-words" data-key="include" value="' +
+        escapeHtml(((STATE.calendarFilter || {}).include || []).join(', ')) +
+        '" placeholder="strategy session, discovery call"></div></div>' : '') +
+    '<div class="term-grid" style="margin-top:8px;"><div><label>Never include events titled</label>' +
+      '<input type="text" data-action="set-cal-words" data-key="exclude" value="' +
+      escapeHtml(((STATE.calendarFilter || {}).exclude || []).join(', ')) +
+      '" placeholder="team meeting, lunch"></div></div>' +
     '</div>' +
     '<div class="set-section"><h3>Email</h3>' +
     '<div class="hint">GhostBuster sends these itself, unlike texts, which it hands to your phone. That is also what lets it see replies.</div>' +
@@ -2115,6 +2145,18 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
+    case 'set-cal-mode': {
+      var cf = STATE.calendarFilter || {};
+      STATE.calendarFilter = {
+        mode: target.getAttribute('data-mode'),
+        include: cf.include || ['strategy session'],
+        matchDescription: cf.matchDescription || ['booked by'],
+        exclude: cf.exclude || []
+      };
+      saveState(STATE);
+      renderSettingsModal();
+      break;
+    }
     case 'set-email-enabled':
       STATE.emailEnabled = target.checked;
       saveState(STATE);
@@ -2417,6 +2459,15 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'set-cal-words'){
+    var cfw = STATE.calendarFilter || {mode:'keywords'};
+    // Split on commas, drop blanks — an empty term would match every event.
+    cfw[t.getAttribute('data-key')] = t.value.split(',')
+      .map(function(x){ return x.trim(); })
+      .filter(function(x){ return x.length; });
+    STATE.calendarFilter = cfw;
+    return;
   }
   if(sa === 'set-email-field'){
     // Written straight to STATE rather than the settings draft: these are

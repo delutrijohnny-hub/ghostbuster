@@ -97,19 +97,80 @@ export interface ParsedClient {
   bookedDate: string;
 }
 
-export function isStrategySessionEvent(ev: GCalEvent): boolean {
-  const s = (ev.summary || '').toLowerCase();
-  if (s.indexOf('weekly team meeting') !== -1) return false;
-  if (s.indexOf('strategy session') !== -1) return true;
-  if (/booked by/i.test(ev.description || '')) return true;
+export type CalendarFilter = {
+  mode?: 'attendees' | 'keywords' | 'all';
+  include?: string[];
+  matchDescription?: string[];
+  exclude?: string[];
+};
+
+// MarketMaker's original rule, kept as the fallback so an account with no
+// filter configured behaves exactly as it always did.
+export const LEGACY_FILTER: CalendarFilter = {
+  mode: 'keywords',
+  include: ['strategy session'],
+  matchDescription: ['booked by'],
+  exclude: ['weekly team meeting'],
+};
+
+function domainOf(email?: string): string {
+  const at = (email || '').lastIndexOf('@');
+  return at === -1 ? '' : (email || '').slice(at + 1).toLowerCase();
+}
+
+/* Does this calendar event represent someone worth following up with?
+
+   'attendees' is the default for anyone new because it needs no setup to be
+   right: an internal standup has no guest from outside your own domain, a
+   booked appointment does. Title matching only works for businesses whose
+   booking tool names events predictably, which is a thing you have to know
+   about yourself before you can configure it. */
+export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): boolean {
+  const f = filter && filter.mode ? filter : LEGACY_FILTER;
+  const title = (ev.summary || '').toLowerCase();
+  const desc = (ev.description || '').toLowerCase();
+
+  // Exclusions win in every mode: a recurring internal meeting sitting on a
+  // booking calendar is the one thing nobody wants turned into a contact.
+  for (const term of f.exclude || []) {
+    if (term && title.indexOf(term.toLowerCase()) !== -1) return false;
+  }
+
+  if (f.mode === 'all') return true;
+
+  if (f.mode === 'attendees') {
+    const organizer = domainOf((ev as any).organizer?.email);
+    const guests = ((ev as any).attendees || []) as Array<{ email?: string; self?: boolean; resource?: boolean }>;
+    for (const g of guests) {
+      if (g.self || g.resource) continue;          // you, and meeting rooms
+      const d = domainOf(g.email);
+      if (!d) continue;
+      // An outside guest is the signal. Same-domain guests are colleagues.
+      if (!organizer || d !== organizer) return true;
+    }
+    return false;
+  }
+
+  for (const term of f.include || []) {
+    if (term && title.indexOf(term.toLowerCase()) !== -1) return true;
+  }
+  for (const term of f.matchDescription || []) {
+    if (term && desc.indexOf(term.toLowerCase()) !== -1) return true;
+  }
   return false;
+}
+
+// Kept so existing callers and tests keep working; new code should pass an
+// explicit filter through matchesCalendarFilter.
+export function isStrategySessionEvent(ev: GCalEvent): boolean {
+  return matchesCalendarFilter(ev, LEGACY_FILTER);
 }
 
 // Mirrors extractAttendeeEmails(...).filter(excludes @marketmakermgmt.com)
 // from clientFromICSEvent, but reads the structured attendees array instead
 // of scraping ATTENDEE lines out of raw ICS text.
-export function clientFromGCalEvent(ev: GCalEvent): ParsedClient | null {
-  if (!isStrategySessionEvent(ev)) return null;
+export function clientFromGCalEvent(ev: GCalEvent, filter?: CalendarFilter): ParsedClient | null {
+  if (!matchesCalendarFilter(ev, filter)) return null;
   const dt = ev.start?.dateTime || null;
   if (!dt) return null; // all-day events are never a call booking
 
