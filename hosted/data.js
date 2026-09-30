@@ -72,6 +72,11 @@ async function loadState(){
     sequence: (settingsRes.data && Array.isArray(settingsRes.data.sequence) && settingsRes.data.sequence.length)
       ? settingsRes.data.sequence : null,
     scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
+    emailEnabled: !!(settingsRes.data && settingsRes.data.email_enabled),
+    autoSendEmail: !!(settingsRes.data && settingsRes.data.auto_send_email),
+    emailFromName: (settingsRes.data && settingsRes.data.email_from_name) || null,
+    emailFromAddress: (settingsRes.data && settingsRes.data.email_from_address) || null,
+    emailReplyTo: (settingsRes.data && settingsRes.data.email_reply_to) || null,
     pendingEvents: [],
     lastSync: null
   };
@@ -96,7 +101,7 @@ async function loadState(){
         return new Date(a.sent_at) - new Date(b.sent_at);
       }).map(function(m){
         return {
-          id: m.id,
+          id: m.id, channel: m.channel || 'sms',
           stage: m.stage, variantId: m.variant_key, text: m.text,
           sentAt: m.sent_at, responded: !!m.responded, respondedAt: m.responded_at,
           reviewed: !!m.reviewed
@@ -249,7 +254,8 @@ function rowMessage(m, clientId){
   return {
     id: m.id, client_id: clientId, stage: m.stage, variant_key: m.variantId || '',
     text: m.text, sent_at: m.sentAt, responded: !!m.responded,
-    responded_at: m.respondedAt, reviewed: !!m.reviewed
+    responded_at: m.respondedAt, reviewed: !!m.reviewed,
+    channel: m.channel || 'sms'
   };
 }
 function rowTodo(t, uid){
@@ -292,6 +298,11 @@ function snapshot(state, uid){
     pipeline: state.pipeline || null,
     terminology: state.terminology || null,
     sequence: state.sequence || null,
+    email_enabled: !!state.emailEnabled,
+    auto_send_email: !!state.autoSendEmail,
+    email_from_name: state.emailFromName || null,
+    email_from_address: state.emailFromAddress || null,
+    email_reply_to: state.emailReplyTo || null,
     score_weights: state.scoreWeights || null
   };
   return snap;

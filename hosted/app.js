@@ -306,6 +306,12 @@ function buildTouchCard(client, stage, now){
   if(!digits) smsLink.setAttribute('aria-disabled','true');
   actions.appendChild(smsLink);
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
+  // Only offered when it can actually work: an address on file and sending
+  // switched on. A button that always fails is worse than no button.
+  if(client.email && STATE.emailEnabled){
+    actions.appendChild(h('button',{class:'btn btn-sm','data-action':'compose-email',
+      'data-cid':client.id,'data-stage':stage,title:'Email ' + client.name + ' instead'},['✉ Email']));
+  }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'snooze-touch','data-cid':client.id,'data-stage':stage,title:'Push this to tomorrow'},['Not today']));
   var sentLabel = document.createElement('label');
@@ -544,6 +550,10 @@ function renderGhostToday(){
     // suggestion, not a restriction.
     if(digits && rec.action !== 'call') acts.appendChild(h('a',{href: telHref(c.phone)},['Call']));
     if(smsTo && rec.action !== 'text' && rec.action !== 'reply') acts.appendChild(h('a',{href: smsTo},['Text']));
+    if(c.email && STATE.emailEnabled){
+      acts.appendChild(h('button',{'data-action':'compose-email','data-cid':c.id,
+        'data-stage': rec.stage || 'custom'},['Email']));
+    }
     acts.appendChild(h('button',{'data-action':'open-client','data-cid':c.id},['Open']));
 
     // Where this contact sits in the one interaction lifecycle. Waiting is
@@ -1560,6 +1570,68 @@ function applyOnboarding(){
 }
 
 
+/* Email composer. Pre-filled from the stage's email template but fully
+   editable, because the whole point of a second channel is that it is used
+   where a text would not do — and those are exactly the messages worth
+   writing by hand. */
+function openEmailComposer(clientId, stage){
+  var c = STATE.clients[clientId];
+  if(!c) return;
+  if(!c.email){
+    showToast('No email address on file for ' + c.name + '.');
+    return;
+  }
+  var draft = getEmailDraft(STATE, c, stage || 'welcome', STATE.senderName) ||
+    {variantId:'custom', subject:'', text:''};
+  openModalHtml(
+    '<div class="modal-head"><h2>Email ' + escapeHtml(c.name) + '</h2>' +
+      '<button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
+    '<div class="field-row"><label>To</label><div class="em-to">' + escapeHtml(c.email) + '</div></div>' +
+    '<div class="field-row"><label>Subject</label>' +
+      '<input type="text" id="em-subject" value="' + escapeHtml(draft.subject) + '"></div>' +
+    '<div class="field-row"><label>Message</label>' +
+      '<textarea id="em-body" rows="12">' + escapeHtml(draft.text) + '</textarea></div>' +
+    '<div class="field-row em-foot">' +
+      '<span class="em-note" id="em-note">Sent from GhostBuster and logged automatically.</span>' +
+      '<button class="btn btn-sm btn-ghost" data-action="close-modal">Cancel</button> ' +
+      '<button class="btn btn-sm btn-green" data-action="send-email" data-cid="' + c.id +
+        '" data-stage="' + escapeHtml(stage || 'custom') +
+        '" data-variant="' + escapeHtml(draft.variantId) + '">Send email</button>' +
+    '</div>', true);
+}
+
+async function doSendEmail(cid, stage, variantId){
+  var subject = (el('em-subject') || {}).value || '';
+  var body = (el('em-body') || {}).value || '';
+  var note = el('em-note');
+  if(!subject.trim() || !body.trim()){
+    if(note){ note.textContent = 'A subject and a message are both required.'; note.className = 'em-note em-error'; }
+    return;
+  }
+  if(note){ note.textContent = 'Sending…'; note.className = 'em-note'; }
+  try{
+    var res = await window.GB_SUPABASE.functions.invoke('send-email', {
+      body: {clientId: cid, subject: subject, text: body, stage: stage, variantId: variantId}
+    });
+    if(res.error){
+      // The provider's own words are more useful than a generic failure, and
+      // the "not configured yet" case is a setup step rather than a bug.
+      var msg = (res.error && res.error.message) || 'Could not send.';
+      if(note){ note.textContent = msg; note.className = 'em-note em-error'; }
+      return;
+    }
+    closeModal();
+    // Reload so the sent message appears in the log and the timeline without
+    // us second-guessing what the function wrote.
+    STATE = await loadState();
+    renderAll();
+    showToast('Email sent to ' + (STATE.clients[cid] ? STATE.clients[cid].name : 'contact') + '.');
+  }catch(e){
+    if(note){ note.textContent = 'Could not reach the mail service.'; note.className = 'em-note em-error'; }
+  }
+}
+
+
 function openSettingsModal(){
   // Edited against a draft, not live state: a half-finished pipeline (a stage
   // mid-rename, a blank row) would otherwise be what computeDue sees on the
@@ -1642,6 +1714,20 @@ function renderSettingsModal(){
     (SETTINGS_DRAFT.sequence.length < buildDefaultSequence().length
       ? '<button class="btn btn-sm" data-action="restore-sequence">Restore the default cadence</button>' : '') +
     '</div>' +
+    '<div class="set-section"><h3>Email</h3>' +
+    '<div class="hint">GhostBuster sends these itself, unlike texts, which it hands to your phone. That is also what lets it see replies.</div>' +
+    '<label class="set-toggle"><input type="checkbox" data-action="set-email-enabled"' +
+      (STATE.emailEnabled ? ' checked' : '') + '> Allow sending email from this account</label>' +
+    '<div class="term-grid" style="margin-top:8px;">' +
+      '<div><label>From name</label><input type="text" data-action="set-email-field" data-key="emailFromName" value="' +
+        escapeHtml(STATE.emailFromName || STATE.senderName || '') + '" placeholder="Johnny at MarketMaker"></div>' +
+      '<div><label>From address</label><input type="text" data-action="set-email-field" data-key="emailFromAddress" value="' +
+        escapeHtml(STATE.emailFromAddress || '') + '" placeholder="johnny@yourdomain.com"></div>' +
+      '<div><label>Replies go to</label><input type="text" data-action="set-email-field" data-key="emailReplyTo" value="' +
+        escapeHtml(STATE.emailReplyTo || '') + '" placeholder="optional"></div>' +
+    '</div>' +
+    '<div class="set-warn" style="margin-top:8px;">The from address must be on a domain verified with your email provider, or messages will be rejected. Sending is off until that is set up.</div>' +
+    '</div>' +
     '<div class="set-section"><h3>What you call things</h3>' +
     '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
     '<div class="term-grid">' + termFields + '</div></div>' +
@@ -1674,6 +1760,7 @@ function saveSettingsDraft(){
     showToast('A cadence needs at least one step, or GhostBuster will never follow up.');
     return;
   }
+  // Email fields were edited live in STATE; persist them with the rest.
   STATE.pipeline = stages;
   STATE.terminology = d.terminology;
   STATE.sequence = d.sequence;
@@ -1963,6 +2050,12 @@ document.addEventListener('click', function(ev){
       // wizard never reappears.
       finishOnboarding(true);
       break;
+    case 'compose-email':
+      openEmailComposer(cid, target.getAttribute('data-stage'));
+      break;
+    case 'send-email':
+      doSendEmail(cid, target.getAttribute('data-stage'), target.getAttribute('data-variant'));
+      break;
     case 'open-settings':
       openSettingsModal();
       break;
@@ -1986,6 +2079,11 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
+    case 'set-email-enabled':
+      STATE.emailEnabled = target.checked;
+      saveState(STATE);
+      renderAll();
+      break;
     case 'remove-step':
       SETTINGS_DRAFT.sequence.splice(parseInt(target.getAttribute('data-idx'),10), 1);
       renderSettingsModal();
@@ -2231,6 +2329,13 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'set-email-field'){
+    // Written straight to STATE rather than the settings draft: these are
+    // account credentials-ish plumbing, not part of the pipeline edit that
+    // Save commits, and half-typing an address should not block saving stages.
+    STATE[t.getAttribute('data-key')] = t.value.trim() || null;
+    return;
   }
   if(SETTINGS_DRAFT && sa === 'set-term'){
     SETTINGS_DRAFT.terminology[t.getAttribute('data-key')] = t.value;

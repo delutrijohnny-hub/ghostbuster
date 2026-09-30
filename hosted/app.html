@@ -461,6 +461,16 @@ th.sortable:hover{color:var(--ink);}
 th.sortable.active{color:var(--ink);}
 th.sortable.active::after{content:' ▾';}
 td.score-cell{width:1%;white-space:nowrap;}
+/* email composer + settings */
+.em-to{font-size:13.5px;color:var(--ink-soft);padding:6px 0;}
+.em-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.em-note{flex:1;font-size:11.5px;color:var(--ink-faint);min-width:180px;}
+.em-note.em-error{color:var(--red);font-weight:700;}
+.set-toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);cursor:pointer;}
+#em-body{width:100%;font-family:inherit;font-size:13.5px;line-height:1.55;padding:9px 11px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);color:var(--ink);resize:vertical;}
+#em-subject{width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--card);color:var(--ink);font-size:13.5px;}
 /* onboarding — three decisions, then out of the way */
 .ob-head{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
 .ob-dots{display:flex;gap:6px;flex:1;}

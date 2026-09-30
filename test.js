@@ -1826,6 +1826,62 @@ test('a fully worked run-up reports complete', () => {
   assert.strictEqual(p.nextStage, null);
 });
 
+console.log('\n--- email channel ---');
+
+test('every SMS stage has an email counterpart', () => {
+  const sms = Object.keys(GB.buildDefaultVariants());
+  const email = GB.buildDefaultEmailVariants();
+  sms.forEach(stage => assert.ok(email[stage] && email[stage].length,
+    'no email version of the ' + stage + ' touch — that channel would silently do nothing'));
+});
+
+test('email variants carry a subject and render cleanly', () => {
+  const c = freshClient({callDateTime: isoDaysFromNow(1), meetLink:'https://meet.google.com/abc-defg-hij'});
+  const all = GB.buildDefaultEmailVariants();
+  Object.keys(all).forEach(stage => {
+    all[stage].forEach(v => {
+      assert.ok(v.subject && v.subject.trim(), stage + '/' + v.id + ' has no subject line');
+      assert.strictEqual(v.channel, 'email');
+      const subject = GB.renderTemplate(v.subject, c, 'Johnny');
+      const body = GB.renderTemplate(v.text, c, 'Johnny');
+      assert.ok(!subject.includes('{'), stage + '/' + v.id + ' left a placeholder in the subject: ' + subject);
+      assert.ok(!body.includes('{'), stage + '/' + v.id + ' left a placeholder in the body');
+    });
+  });
+});
+
+test('email and SMS variant ids never collide', () => {
+  const sms = Object.values(GB.buildDefaultVariants()).flat().map(v => v.id);
+  const email = Object.values(GB.buildDefaultEmailVariants()).flat().map(v => v.id);
+  const clash = email.filter(id => sms.indexOf(id) !== -1);
+  assert.deepStrictEqual(clash, [], 'shared ids would merge two channels’ stats: ' + clash.join(', '));
+});
+
+test('a link-bearing email actually carries the meeting link', () => {
+  const c = freshClient({callDateTime: isoDaysFromNow(1), meetLink:'https://meet.google.com/xyz-1234-abc'});
+  ['dayof','hourbefore'].forEach(stage => {
+    const draft = GB.getEmailDraft(GB.buildDefaultState(), c, stage, 'Johnny');
+    assert.ok(draft, 'no draft for ' + stage);
+    assert.ok(draft.text.includes('meet.google.com'), stage + ' email should include the link');
+  });
+});
+
+test('getEmailDraft returns null for a stage with no email form', () => {
+  const c = freshClient({});
+  assert.strictEqual(GB.getEmailDraft(GB.buildDefaultState(), c, 'no-such-stage', 'Johnny'), null);
+});
+
+test('the send function refuses clearly when nothing is configured', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'supabase', 'functions', 'send-email', 'index.ts'), 'utf8');
+  // Each of these is a way to send mail on someone's behalf that should not be
+  // possible; a missing check here is a real-world harm, not a broken test.
+  assert.ok(src.includes('no_provider'), 'must refuse when the API key is absent');
+  assert.ok(src.includes('email_enabled'), 'must refuse when the account has not switched sending on');
+  assert.ok(src.includes('Not your contact'), 'must verify the caller owns the contact');
+  assert.ok(src.includes('/auth/v1/user'), 'must resolve the bearer token to a real user');
+  assert.ok(src.includes('OPTIONS'), 'must answer CORS preflight or the browser never reaches it');
+});
+
 console.log('\n--- site routing ---');
 
 test('the app lives at /app and the landing page owns the root', () => {

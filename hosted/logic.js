@@ -407,6 +407,97 @@ function buildDefaultVariants(){
 }
 
 
+/* Pick the email version of a stage's message. Falls back to the built-in set
+   when an account has not customised that stage, and returns null only when
+   the stage has no email form at all — the caller then knows to offer a blank
+   composer rather than silently sending nothing. */
+function emailVariantsFor(state, stage){
+  var custom = state && state.emailVariants && state.emailVariants[stage];
+  if(custom && custom.length) return custom;
+  return buildDefaultEmailVariants()[stage] || null;
+}
+
+function getEmailDraft(state, client, stage, senderName){
+  var list = emailVariantsFor(state, stage);
+  if(!list || !list.length) return null;
+  // Same bandit as SMS would be premature: there are no email sends to learn
+  // from yet, and rotating copy nobody has measured just adds variance. First
+  // variant until there is data, which is also how the SMS side started.
+  var v = list[0];
+  return {
+    variantId: v.id,
+    subject: renderTemplate(v.subject || '', client, senderName),
+    text: renderTemplate(v.text || '', client, senderName)
+  };
+}
+
+
+/* ---- email variants ----
+   The same five touches, written for a different medium. A text is read on a
+   lock screen in three seconds; an email is read in an inbox next to forty
+   others, so it needs a subject line that survives a scan and a body that can
+   afford a sentence of context.
+
+   Kept deliberately short anyway. The failure mode for sales email is not
+   being too brief, it is reading like a template — and the longer it gets the
+   more obviously templated it looks.
+
+   Same placeholders as the SMS variants, so renderTemplate needs no changes
+   and a business editing one channel is not learning a second syntax. */
+function buildDefaultEmailVariants(){
+  return {
+    welcome: [
+      {id:'ew1', builtin:true, channel:'email',
+       subject:'Confirmed: {date} at {time}',
+       text:"Hi {name},\n\n{sender} here. You're on the calendar for {date} at {time}.\n\nI'll come ready to walk through what's working right now for businesses like yours, and where the quickest wins usually are. If anything specific is on your mind, reply and I'll make sure we cover it.\n\nTalk soon,\n{sender}"},
+      {id:'ew2', builtin:true, channel:'email',
+       subject:'{date} at {time} — a couple of things first',
+       text:"Hi {name},\n\nGood to have you booked for {date} at {time}.\n\nSo the time is useful rather than generic: is there one thing in particular you're hoping to fix? Even a sentence helps me prepare.\n\n{sender}"}
+    ],
+    monday: [
+      {id:'em1', builtin:true, channel:'email',
+       subject:'This {weekday} at {time}',
+       text:"Hi {name},\n\nQuick note that we're on for {weekday} at {time}.\n\nNothing needed from you beforehand. If the time has stopped working, just say and I'll move it.\n\n{sender}"}
+    ],
+    midcheckin: [
+      {id:'ec1', builtin:true, channel:'email',
+       subject:'Still good for {date}?',
+       text:"Hi {name},\n\nChecking in ahead of {date}. Still a good time on your end?\n\nIf something has shifted, no problem at all — reply and we'll find another slot.\n\n{sender}"}
+    ],
+    dayof: [
+      {id:'ed1', builtin:true, channel:'email',
+       subject:'Today at {time}',
+       text:"Hi {name},\n\nWe're on today at {time}. Here's the link when you're ready:\n\n{link}\n\nSee you shortly,\n{sender}"}
+    ],
+    hourbefore: [
+      {id:'eh1', builtin:true, channel:'email',
+       subject:'Starting soon — {time}',
+       text:"Hi {name},\n\nWe're on in about an hour, at {time}. Link's here:\n\n{link}\n\n{sender}"}
+    ],
+    recovery: [
+      {id:'er1', builtin:true, channel:'email',
+       subject:'Worth picking this back up?',
+       text:"Hi {name},\n\nI know how weeks get. Is this still something you want to look at?\n\nIf yes, send me a couple of times that work and I'll get us booked. If the timing has passed, tell me that too — I'd rather know than keep chasing.\n\n{sender}"}
+    ],
+    noshow: [
+      {id:'en1', builtin:true, channel:'email',
+       subject:'Missed you on {date}',
+       text:"Hi {name},\n\nLooks like {date} got away from us. Happens.\n\nWhat does later this week look like for you?\n\n{sender}"}
+    ],
+    rebooked: [
+      {id:'erb1', builtin:true, channel:'email',
+       subject:'Back on for {date} at {time}',
+       text:"Hi {name},\n\nGlad we got this back on the calendar — {date} at {time}.\n\nSame plan as before: I'll come ready with specifics for your situation.\n\n{sender}"}
+    ],
+    followup: [
+      {id:'ef1', builtin:true, channel:'email',
+       subject:'Picking up where we left off — {date}',
+       text:"Hi {name},\n\nGood to have another one booked for {date} at {time}.\n\nI'll pick up from where we finished last time rather than starting over.\n\n{sender}"}
+    ]
+  };
+}
+
+
 function buildDefaultState(){
   var variants = buildDefaultVariants();
   var variantStats = {};
@@ -2845,7 +2936,9 @@ var __LOGIC_EXPORTS__ = {
   isStalledStage: isStalledStage, isOpenStage: isOpenStage, isResolvedStage: isResolvedStage,
   stopsCadence: stopsCadence,
   uid: uid, nowISO: nowISO, safeDate: safeDate, escapeHtml: escapeHtml, clamp: clamp,
-  buildDefaultVariants: buildDefaultVariants, buildDefaultState: buildDefaultState,
+  buildDefaultVariants: buildDefaultVariants, buildDefaultEmailVariants: buildDefaultEmailVariants,
+  emailVariantsFor: emailVariantsFor, getEmailDraft: getEmailDraft,
+  buildDefaultState: buildDefaultState,
   sanitizeClient: sanitizeClient, sanitizeSnoozedUntil: sanitizeSnoozedUntil, migrateState: migrateState,
   tzDateKey: tzDateKey, keyToUTCms: keyToUTCms, keyPlusDays: keyPlusDays, mondayOfWeekKey: mondayOfWeekKey,
   fmtDate: fmtDate, fmtTime: fmtTime, weekdayName: weekdayName, localHourInTZ: localHourInTZ,
