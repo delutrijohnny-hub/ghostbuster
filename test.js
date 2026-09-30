@@ -2145,6 +2145,47 @@ test('computeVariantPerformance survives sparse data', () => {
   assert.doesNotThrow(() => GB.computeVariantPerformance(st, new Date()));
 });
 
+// logic.js, data.js and app.js all load into one global scope, in that order.
+// Two files declaring a function with the same name is not an error anywhere —
+// the later one silently wins, and the earlier file's callers get a different
+// function with a different signature.
+//
+// This is not hypothetical. data.js had snapshot(state, uid) for the
+// persistence diff; app.js has snapshot() for the undo buffer and loads after
+// it. saveState therefore received a JSON string, diff() threw on it, and the
+// try/catch turned total persistence failure into a console message. Every
+// save failed for a week and the app looked fine throughout.
+//
+// The existing "every function app.js calls is defined" check could never
+// catch this: the function was defined. It was the wrong one.
+{
+  const strip = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  const files = ['logic.js', 'data.js', 'app.js'];
+  const declared = {};
+  files.forEach(f => {
+    const src = strip(fs.readFileSync(path.join(__dirname, 'hosted', f), 'utf8'));
+    // Top-level declarations only: nested ones are function-scoped and safe.
+    [...src.matchAll(/^function\s+([A-Za-z_$]\w*)/gm)].forEach(m => {
+      (declared[m[1]] = declared[m[1]] || []).push(f);
+    });
+    [...src.matchAll(/^var\s+([A-Za-z_$]\w*)\s*=\s*function/gm)].forEach(m => {
+      (declared[m[1]] = declared[m[1]] || []).push(f);
+    });
+  });
+  const clashes = Object.keys(declared)
+    .filter(n => new Set(declared[n]).size > 1)
+    .map(n => n + ' (' + [...new Set(declared[n])].join(' + ') + ')');
+  assert.deepStrictEqual(clashes, [],
+    'the same top-level name is declared in more than one hosted file; the ' +
+    'last one loaded silently wins: ' + clashes.join(', '));
+  console.log('  ok  - no top-level name is declared in two hosted files');
+}
+
 console.log('\n--- contact timeline ---');
 
 test('history is reconstructed for contacts that predate the events table', () => {
@@ -2399,7 +2440,7 @@ function makeDataCtx(){
 test('hosted/data.js parses and defines the persistence seam', () => {
   const d = makeDataCtx();
   assert.strictEqual(d.run('typeof saveState'), 'function');
-  assert.strictEqual(d.run('typeof snapshot'), 'function');
+  assert.strictEqual(d.run('typeof buildSyncSnapshot'), 'function');
   assert.strictEqual(d.run('typeof diff'), 'function');
 });
 

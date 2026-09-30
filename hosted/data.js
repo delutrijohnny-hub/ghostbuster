@@ -197,7 +197,7 @@ async function loadState(){
   // hold right now. Until this is set, saveState refuses to delete anything —
   // so a failed or partial load can never be mistaken for "the user emptied
   // their account".
-  SYNCED = snapshot(state, uid);
+  SYNCED = buildSyncSnapshot(state, uid);
 
   return state;
 }
@@ -273,7 +273,13 @@ function rowStat(s, stage, vk, uid){
 function same(a, b){ return JSON.stringify(a) === JSON.stringify(b); }
 
 // Snapshot of everything persistable, keyed the way the diff needs it.
-function snapshot(state, uid){
+// Named buildSyncSnapshot, not snapshot: app.js declares its own snapshot()
+// for the undo buffer and loads after this file, so a function called
+// `snapshot` here is silently replaced at runtime. That shadowing broke every
+// save for a week — saveState received a JSON string instead of a bucketed
+// snapshot, diff() threw on it, and the try/catch turned a total persistence
+// failure into a console message nobody was reading.
+function buildSyncSnapshot(state, uid){
   var snap = {clients:{}, messages:{}, todos:{}, variants:{}, stats:{}, settings:null};
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
@@ -347,7 +353,7 @@ async function saveState(state){
   var uid = user.id;
 
   var ticket = ++SAVE_SEQ;
-  var next = snapshot(state, uid);
+  var next = buildSyncSnapshot(state, uid);
   var prev = SYNCED;
   var writes = [];
 

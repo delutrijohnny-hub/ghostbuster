@@ -483,6 +483,29 @@ td.score-cell{width:1%;white-space:nowrap;}
 .eod-btn.ok:hover{background:var(--green);border-color:var(--green);color:#fff;}
 .eod-btn.bad:hover{background:var(--red);border-color:var(--red);color:#fff;}
 .eod-more{font-size:11.5px;color:var(--ink-faint);padding:4px 10px;}
+/* focus mode — one message, one person, one button */
+.focus-start{margin-left:10px;vertical-align:middle;}
+.focus-top{display:flex;align-items:center;gap:12px;margin-bottom:20px;}
+.focus-count{font-size:12px;font-weight:800;color:var(--ink-faint);white-space:nowrap;
+  font-variant-numeric:tabular-nums;}
+.focus-track{flex:1;height:4px;background:var(--border);border-radius:99px;overflow:hidden;}
+.focus-fill{height:100%;background:var(--green);transition:width .2s ease;}
+.focus-who{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:10px;}
+.focus-who h2{margin:0;font-size:24px;letter-spacing:-.3px;}
+.focus-warn{font-size:12px;color:var(--amber);background:var(--amber-soft);padding:8px 11px;
+  border-radius:var(--radius-sm);margin-bottom:10px;}
+.focus-text{width:100%;font-family:inherit;font-size:15px;line-height:1.6;padding:14px 16px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--ink);
+  resize:vertical;margin-bottom:16px;}
+.focus-acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.focus-acts .btn-lg{padding:13px 30px;font-size:15px;}
+.focus-send{text-decoration:none;display:inline-block;}
+.focus-hint{margin-top:14px;font-size:11.5px;color:var(--ink-faint);}
+@media (max-width:560px){
+  .focus-who h2{font-size:20px;}
+  .focus-acts{flex-direction:column;align-items:stretch;}
+  .focus-acts .btn,.focus-acts .btn-lg{width:100%;text-align:center;}
+}
 @media (max-width:560px){ .eod-acts{flex:1 1 100%;} .eod-when{order:2;} }
 .em-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .em-note{flex:1;font-size:11.5px;color:var(--ink-faint);min-width:180px;}

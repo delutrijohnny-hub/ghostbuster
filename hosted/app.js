@@ -444,6 +444,14 @@ function renderOnDeck(){
 
 
 function renderCallsBoard(){
+  // Entry into focus mode lives on the list it works through, labelled with
+  // the count so the size of the job is visible before committing to it.
+  var todayHead = document.querySelector('#tab-calls .board-col h3');
+  if(todayHead && !todayHead.querySelector('[data-action=focus-start]')){
+    var btn = h('button',{class:'btn btn-sm btn-primary focus-start','data-action':'focus-start'},['Work the list']);
+    todayHead.appendChild(btn);
+  }
+
   var now = new Date();
   var textToday = getTextTodayList(STATE, now, UI.callsSearch);
   var todayCol = el('col-text-today');
@@ -2226,6 +2234,31 @@ document.addEventListener('click', function(ev){
       showToast('Imported ' + res2.added + ' new, updated ' + res2.updated + ', ' + res2.rescheduled + ' rescheduled.');
       break;
     }
+    case 'focus-start':
+      startFocusMode();
+      break;
+    case 'focus-send':
+      // The anchor's own navigation opens Messages; this records the send.
+      focusSend();
+      break;
+    case 'focus-copy': {
+      var ft = el('focus-text');
+      if(ft) copyToClipboard(ft.value);
+      focusSend();
+      break;
+    }
+    case 'focus-skip':
+      focusAdvance();
+      break;
+    case 'focus-snooze': {
+      var fc = FOCUS.queue[FOCUS.i];
+      snoozeTouch(STATE, fc.cid, fc.stage, new Date());
+      focusAdvance();
+      break;
+    }
+    case 'focus-exit':
+      exitFocusMode();
+      break;
     case 'eod-outcome':
       lastSnapshot = snapshot();
       setOutcome(STATE, cid, target.getAttribute('data-status'));
@@ -2386,6 +2419,20 @@ document.addEventListener('input', function(ev){
 document.addEventListener('keydown', function(ev){
   if(isTypingTarget(ev.target)) return;
   if(ev.key === 'Escape'){ closeModal(); return; }
+  // Focus mode owns the keyboard while it is open, so the global shortcuts
+  // below (tab numbers, search) cannot fire underneath it.
+  if(FOCUS){
+    var typing = ev.target && ev.target.id === 'focus-text';
+    if(ev.key === 'Escape'){ ev.preventDefault(); exitFocusMode(); return; }
+    if(ev.key === 'Enter' && !typing){
+      ev.preventDefault();
+      var sendLink = document.querySelector('[data-action=focus-send]');
+      if(sendLink) sendLink.click(); else focusSend();
+      return;
+    }
+    if((ev.key === 's' || ev.key === 'S') && !typing){ ev.preventDefault(); focusAdvance(); return; }
+    return;
+  }
   if(ev.key === '/'){ ev.preventDefault(); var s = el('calls-search'); if(s){ UI.tab='calls'; document.querySelector('[data-action=tab][data-tab=calls]').click(); s.focus(); } return; }
   if(['1','2','3','4','5'].indexOf(ev.key) !== -1){
     var tabs = ['calls','clients','variants','weekly','calendar'];
@@ -2493,6 +2540,100 @@ function downloadFile(content, filename, mimeType){
    Every row is now actionable in one click. Same seams as everywhere else —
    setOutcome, closeOutcome, the todo toggle — so nothing here is a parallel
    way of recording the same facts. */
+/* ---- focus mode ----
+   The daily loop was: read a card, click into Messages, send, come back, tick
+   a box, find the next card. Fifty-three times. Every one of those steps is
+   cheap on its own and the sum is why a morning list gets abandoned halfway.
+
+   This is the same work as one screen at a time: the message, the person, one
+   button. Send opens Messages and marks it sent in the same click, then
+   advances. That is optimistic — GhostBuster cannot see whether the message
+   actually left the phone — so every send is undoable from the toast rather
+   than being confirmed in advance. Asking first would reintroduce the step
+   this exists to remove, and a wrong "sent" costs one undo while the friction
+   costs the whole list.
+   ============================================================ */
+var FOCUS = null;
+
+function startFocusMode(){
+  var list = getTextTodayList(STATE, new Date(), UI.callsSearch || '');
+  if(!list.length){ showToast('Nothing left to send.'); return; }
+  FOCUS = {queue: list.map(function(it){ return {cid: it.client.id, stage: it.stage}; }), i: 0, sent: 0};
+  renderFocus();
+}
+
+function exitFocusMode(){
+  var sent = FOCUS ? FOCUS.sent : 0;
+  FOCUS = null;
+  closeModal();
+  renderAll();
+  if(sent) showToast(sent + ' message' + (sent === 1 ? '' : 's') + ' sent.');
+}
+
+function focusAdvance(){
+  FOCUS.i++;
+  if(FOCUS.i >= FOCUS.queue.length){ exitFocusMode(); return; }
+  renderFocus();
+}
+
+function renderFocus(){
+  if(!FOCUS) return;
+  var cur = FOCUS.queue[FOCUS.i];
+  var c = cur && STATE.clients[cur.cid];
+  // A contact can disappear mid-run — deleted in another tab, or its cadence
+  // resolved by a calendar sync. Skip rather than crash.
+  if(!c){ focusAdvance(); return; }
+
+  var text = getCardText(STATE, c, cur.stage);
+  var digits = String(c.phone || '').replace(/\D/g, '');
+  var smsHref = digits
+    ? 'sms:' + (digits.length === 10 ? '+1' + digits : '+' + digits) + '&body=' + encodeURIComponent(text)
+    : null;
+  var tz = tzChipInfo(c, new Date());
+  var prog = cadenceProgress(c, new Date());
+
+  openModalHtml(
+    '<div class="focus">' +
+      '<div class="focus-top">' +
+        '<span class="focus-count">' + (FOCUS.i + 1) + ' of ' + FOCUS.queue.length + '</span>' +
+        '<div class="focus-track"><div class="focus-fill" style="width:' +
+          Math.round((FOCUS.i / FOCUS.queue.length) * 100) + '%"></div></div>' +
+        '<button class="btn btn-sm btn-ghost" data-action="focus-exit">Done for now</button>' +
+      '</div>' +
+      '<div class="focus-who">' +
+        '<h2>' + escapeHtml(c.name) + '</h2>' +
+        '<span class="stage-chip">' + escapeHtml(cur.stage) + '</span>' +
+        '<span class="touch-chip">Touch ' + (prog.done + 1) + ' of ' + prog.total + '</span>' +
+        '<span class="tz-chip' + (tz.warn ? ' tz-warn' : '') + '">' + escapeHtml(tz.timeLabel) + ' their time</span>' +
+      '</div>' +
+      (tz.warn ? '<div class="focus-warn">⚠ It’s outside normal hours for ' + escapeHtml(c.name) + ' right now.</div>' : '') +
+      '<textarea class="focus-text" id="focus-text" rows="6">' + escapeHtml(text) + '</textarea>' +
+      '<div class="focus-acts">' +
+        (smsHref
+          ? '<a class="btn btn-primary btn-lg focus-send" href="' + smsHref + '" data-action="focus-send">Send &amp; next</a>'
+          : '<button class="btn btn-lg" data-action="focus-copy">Copy &amp; next</button>') +
+        '<button class="btn" data-action="focus-skip">Skip</button>' +
+        '<button class="btn btn-ghost" data-action="focus-snooze">Not today</button>' +
+      '</div>' +
+      '<div class="focus-hint">Enter to send · S to skip · Esc to stop</div>' +
+    '</div>', true);
+}
+
+function focusSend(){
+  var cur = FOCUS.queue[FOCUS.i];
+  var c = STATE.clients[cur.cid];
+  if(!c) { focusAdvance(); return; }
+  var edited = el('focus-text');
+  if(edited && edited.value !== getCardText(STATE, c, cur.stage)){
+    editedTextCache[cur.cid + '|' + cur.stage] = edited.value;
+  }
+  lastSnapshot = snapshot();
+  doMarkSent(cur.cid, cur.stage);
+  FOCUS.sent++;
+  focusAdvance();
+}
+
+
 function openEndOfDayModal(){
   renderEndOfDay();
 }
