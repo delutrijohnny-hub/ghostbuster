@@ -410,6 +410,10 @@ th.sortable:hover{color:var(--ink);}
 th.sortable.active{color:var(--ink);}
 th.sortable.active::after{content:' ▾';}
 td.score-cell{width:1%;white-space:nowrap;}
+/* How far through the five-touch run-up. Quiet by design: it is context for
+   the message, not a competing call to action. */
+td.touch-cell{width:1%;white-space:nowrap;color:var(--ink-faint);font-size:11.5px;font-variant-numeric:tabular-nums;}
+.card .touch-chip{font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;background:var(--bg);color:var(--ink-faint);letter-spacing:.2px;white-space:nowrap;}
 /* Temperature chips read as temperature. Pipeline-status chips stay neutral so
    the two groupings do not compete for the same glance. */
 .chip.chip-hot.active{background:#e2683c;border-color:#e2683c;color:#fff;}
@@ -692,6 +696,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
         <thead><tr>
           <th class="sortable" data-action="sort-clients" data-sort="score" title="How much this client needs attention right now">Score</th>
           <th>Name</th>
+          <th title="How far through the run-up to their call">Touch</th>
           <th class="sortable" data-action="sort-clients" data-sort="call">Call</th>
           <th>Status</th><th>Phone</th><th>Replied</th><th>Close</th>
         </tr></thead>

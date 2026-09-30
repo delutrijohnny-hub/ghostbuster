@@ -239,8 +239,13 @@ function buildTouchCard(client, stage, now){
   top.className = 'card-top';
   var nameEl = h('span',{class:'name','data-action':'open-client','data-cid':client.id},[client.name]);
   var stageChip = h('span',{class:'stage-chip' + (stage==='noshow'?' noshow':'') + (stage==='recovery'?' recovery':'')},[stage]);
+  // Where this sits in the run-up to the call, so the card reads as a step in
+  // a sequence rather than a standalone task.
+  var prog = cadenceProgress(client, now);
+  var progChip = h('span',{class:'touch-chip', title:'Sent so far: ' + (prog.sentStages.join(', ') || 'nothing yet')},
+    ['Touch ' + (prog.done + 1) + ' of ' + prog.total]);
   var tzChip = h('span',{class:'tz-chip' + (tzInfo.warn?' tz-warn':'')},[tzInfo.timeLabel + ' their time']);
-  top.appendChild(nameEl); top.appendChild(stageChip); top.appendChild(tzChip);
+  top.appendChild(nameEl); top.appendChild(stageChip); top.appendChild(progChip); top.appendChild(tzChip);
   card.appendChild(top);
 
   if(tzInfo.warn){
@@ -648,7 +653,9 @@ function renderClientsTab(){
   // Scored once, up front: the group chips need counts, the rows need badges,
   // and score sorting needs values — all from the same pass rather than three.
   var scoreNow = new Date();
-  var scoredAll = live.map(function(c){ return {client: c, g: computeGhostScore(c, scoreNow)}; });
+  var scoredAll = live.map(function(c){
+    return {client: c, g: computeGhostScore(c, scoreNow), p: cadenceProgress(c, scoreNow)};
+  });
 
   chipsBox.innerHTML = '';
   chipsBox.appendChild(h('button',{class:'chip'+(!UI.scoreFilter && UI.statusFilter===null?' active':''),
@@ -693,7 +700,7 @@ function renderClientsTab(){
 
   var tbody = el('clients-table-body'); tbody.innerHTML = '';
   if(!list.length){
-    var emptyTd = h('td',{colspan:'7'},[]);
+    var emptyTd = h('td',{colspan:'8'},[]);
     emptyTd.innerHTML = '<div class="empty-mascot">' + slimerSvg(56) + '<div>No clients found.</div></div>';
     tbody.appendChild(h('tr',{},[emptyTd]));
   }
@@ -723,6 +730,8 @@ function renderClientsTab(){
           [String(row.g.score)])
       ]),
       h('td',{},[c.name]),
+      h('td',{class:'touch-cell', title: 'Sent so far: ' + (row.p.sentStages.join(', ') || 'nothing yet')},
+        [row.p.complete ? '✓ all ' + row.p.total : row.p.label]),
       h('td',{},[when]),
       h('td',{},[h('span',{class:'status-pill st-'+c.status},[statusLabel(c.status)])]),
       h('td',{},[c.phone || '—']),

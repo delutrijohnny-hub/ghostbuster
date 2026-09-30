@@ -2219,6 +2219,99 @@ function computeDeadClients(state, now, deadAfterDays){
    the calendar Today/Week/All toggle (spec trap #1).
    ============================================================ */
 
+/* ---- where are they in the 5-touch run-up? ----
+   The pre-call sequence is a countdown to one appointment: welcome, the
+   week-of nudge, the mid-point check-in, the morning-of text and the hour
+   before. Five touches, and knowing which one someone is on is the difference
+   between a list of tasks and a sense of where each relationship stands.
+
+   Derived from the active sequence rather than a fixed list of five, so a
+   business that removes the Monday text sees "3 of 4" instead of a number
+   that silently lies. The rescue sequences are excluded: they are not part of
+   the run-up, they are what happens after it fails.
+
+   Counted against the CURRENT appointment, so a call that moves resets the
+   progress — the same reason hasSentStageThisAppointment exists. */
+function cadenceTouches(){
+  return ACTIVE_SEQUENCE.filter(function(step){
+    return step.trigger && step.trigger.type !== 'repeat_while_role';
+  }).map(function(step){ return step.stage; });
+}
+
+function cadenceProgress(client, now){
+  now = now || new Date();
+  var touches = cadenceTouches();
+  var done = [];
+  var pending = [];
+  touches.forEach(function(stage){
+    // welcome/rebooked/followup are one touch wearing three faces; any of them
+    // counts as the introduction having happened.
+    var sent = (stage === 'welcome')
+      ? (hasSentStageThisAppointment(client, 'welcome') ||
+         hasSentStage(client, 'rebooked') || hasSentStage(client, 'followup'))
+      : hasSentStageThisAppointment(client, stage);
+    (sent ? done : pending).push(stage);
+  });
+  var due = computeDue(client, now);
+  var nextStage = null;
+  for(var i = 0; i < touches.length && !nextStage; i++){
+    if(pending.indexOf(touches[i]) !== -1) nextStage = touches[i];
+  }
+  return {
+    done: done.length,
+    total: touches.length,
+    sentStages: done,
+    nextStage: nextStage,
+    // Is that next touch actually due now, or just not yet reached?
+    nextIsDue: nextStage !== null && due.indexOf(nextStage) !== -1,
+    complete: done.length === touches.length,
+    label: done.length + ' of ' + touches.length
+  };
+}
+
+
+/* Which single touch to send when several are due.
+
+   Time-critical first: a meeting link beats an introduction. Then the rescue
+   sequences, which only fire once a call has already been missed. Then the
+   relationship touches in the order a person would actually send them — you
+   introduce yourself before you check in on someone. */
+var TOUCH_PICK_ORDER = ['hourbefore', 'dayof', 'noshow', 'recovery',
+                        'welcome', 'rebooked', 'followup', 'monday', 'midcheckin'];
+
+function pickTodaysTouch(due){
+  for(var i = 0; i < TOUCH_PICK_ORDER.length; i++){
+    if(due.indexOf(TOUCH_PICK_ORDER[i]) !== -1) return TOUCH_PICK_ORDER[i];
+  }
+  // A stage from a custom sequence that isn't in the list still needs sending.
+  return due[0];
+}
+
+// Collapses items belonging to the same human. Phone is the identity where
+// there is one — names are typed inconsistently ("Karen  Villegas") in a way
+// phone numbers are not.
+function dedupeByPerson(items){
+  var seen = {};
+  var out = [];
+  items.forEach(function(it){
+    var phone = normalizedPhone(it.client.phone);
+    var key = phone ? ('p:' + phone) : ('n:' + String(it.client.name || '').toLowerCase().replace(/\s+/g, ' ').trim());
+    var prev = seen[key];
+    if(prev === undefined){
+      seen[key] = out.length;
+      out.push(it);
+      return;
+    }
+    var rankOf = function(x){
+      var i = TOUCH_PICK_ORDER.indexOf(x.stage);
+      return i === -1 ? TOUCH_PICK_ORDER.length : i;
+    };
+    if(rankOf(it) < rankOf(out[prev])) out[prev] = it;
+  });
+  return out;
+}
+
+
 function getTextTodayList(state, now, searchQuery){
   now = now || new Date();
   var q = (searchQuery||'').trim().toLowerCase();
@@ -2235,8 +2328,23 @@ function getTextTodayList(state, now, searchQuery){
     // isDeadClient's condition on its own, so this stays self-correcting.
     if(isDeadClient(c, allClients, now)) return;
     var due = computeDue(c, now);
-    due.forEach(function(stage){ items.push({client:c, stage:stage}); });
+    if(!due.length) return;
+    // One message per person per day. Several touches can come due at once —
+    // most often welcome, monday and midcheckin together after a booking is
+    // backfilled or a call moves — and queuing them all meant the same person
+    // appeared three times and would have been texted three times in an
+    // afternoon. Whatever isn't picked today stays due tomorrow, so the
+    // cadence still delivers every touch, just spread out the way a person
+    // would send them.
+    items.push({client: c, stage: pickTodaysTouch(due)});
   });
+
+  // And one card per PERSON, not per client record. A contact who ghosted and
+  // rebooked legitimately has two client rows — that is how rebooked/followup
+  // know who they are — but they are still one human with one phone, and
+  // seeing them twice in the morning list is the same sloppiness by another
+  // route. Keep whichever row's touch ranks highest.
+  items = dedupeByPerson(items);
   items.sort(function(a,b){
     function rank(it){
       if(it.stage === 'welcome' && !hasSentStage(it.client,'welcome')) return 0;
@@ -2676,6 +2784,8 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultScoreWeights: buildDefaultScoreWeights, ghostScoreBand: ghostScoreBand,
   SCORE_GROUPS: SCORE_GROUPS, scoreGroupOf: scoreGroupOf,
   computeGhostScore: computeGhostScore, rankByGhostScore: rankByGhostScore,
+  pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
+  cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,

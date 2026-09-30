@@ -186,13 +186,15 @@ test('welcome due for a long-lead-time client is never filtered out of the text-
 
 test('text-today queue puts a new booking\'s welcome text above an overdue noshow rescue', () => {
   const state = GB.buildDefaultState();
+  // Distinct phones: these are two different people, and the queue now shows
+  // one card per human rather than one per client record.
   const noshowClient = freshClient({
-    id: 'c-noshow', bookedDate: isoDaysAgo(10), callDateTime: isoDaysAgo(2),
+    id: 'c-noshow', phone: '5125550001', bookedDate: isoDaysAgo(10), callDateTime: isoDaysAgo(2),
     status: 'No-show',
     messageLog: [{ stage: 'welcome', variantId: 'w1', text: 'hi', sentAt: isoDaysAgo(9), responded: false, respondedAt: null }]
   });
   const newBookingClient = freshClient({
-    id: 'c-new-welcome', bookedDate: new Date().toISOString(), callDateTime: isoDaysFromNow(21)
+    id: 'c-new-welcome', phone: '5125550002', bookedDate: new Date().toISOString(), callDateTime: isoDaysFromNow(21)
   });
   state.clients[noshowClient.id] = noshowClient;
   state.clients[newBookingClient.id] = newBookingClient;
@@ -433,10 +435,10 @@ test('computeDue gives a rebooked client the "rebooked" stage instead of "welcom
 test('an unsent rebooked text ranks at the top of the text-today queue, same as welcome', () => {
   const state = GB.buildDefaultState();
   const noshowClient = freshClient({
-    id: 'c-noshow-2', bookedDate: isoDaysAgo(10), callDateTime: isoDaysAgo(2), status: 'No-show',
+    id: 'c-noshow-2', phone: '5125550003', bookedDate: isoDaysAgo(10), callDateTime: isoDaysAgo(2), status: 'No-show',
     messageLog: [{ stage: 'welcome', variantId: 'w1', text: 'hi', sentAt: isoDaysAgo(9), responded: false, respondedAt: null }]
   });
-  const rebookedClient = freshClient({ id: 'c-rebooked', callDateTime: isoDaysFromNow(3), rebooked: true });
+  const rebookedClient = freshClient({ id: 'c-rebooked', phone: '5125550004', callDateTime: isoDaysFromNow(3), rebooked: true });
   state.clients[noshowClient.id] = noshowClient;
   state.clients[rebookedClient.id] = rebookedClient;
   const items = GB.getTextTodayList(state, new Date(), '');
@@ -1714,6 +1716,114 @@ test('rebooked and followup still override the first touch under a custom sequen
     assert.ok(GB.computeDue(returning, new Date()).includes('rebooked'));
     assert.ok(GB.computeDue(veteran, new Date()).includes('followup'));
   });
+});
+
+console.log('\n--- one touch per person per day ---');
+
+test('several touches due produce one card, not three', () => {
+  const st = GB.buildDefaultState();
+  // The common real case: a booking backfilled late, so welcome, monday and
+  // midcheckin all come due at once.
+  st.clients['a'] = freshClient({id:'a', name:'Pam', phone:'5125550010',
+    bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
+  const due = GB.computeDue(st.clients['a'], new Date());
+  assert.ok(due.length > 1, 'fixture should have several due, got ' + JSON.stringify(due));
+  const items = GB.getTextTodayList(st, new Date(), '');
+  assert.strictEqual(items.length, 1, 'one person, one card');
+});
+
+test('the touch chosen is the most time-critical one due', () => {
+  assert.strictEqual(GB.pickTodaysTouch(['midcheckin','welcome','monday']), 'welcome',
+    'introduce yourself before checking in');
+  assert.strictEqual(GB.pickTodaysTouch(['welcome','dayof']), 'dayof',
+    'the meeting link beats an introduction');
+  assert.strictEqual(GB.pickTodaysTouch(['dayof','hourbefore']), 'hourbefore');
+  assert.strictEqual(GB.pickTodaysTouch(['midcheckin','monday']), 'monday');
+});
+
+test('a stage from a custom sequence is still sendable', () => {
+  assert.strictEqual(GB.pickTodaysTouch(['something-bespoke']), 'something-bespoke');
+});
+
+test('whatever is not sent today is still due tomorrow', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({id:'a', phone:'5125550011', bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
+  st.clients['a'] = c;
+  const first = GB.getTextTodayList(st, new Date(), '')[0].stage;
+  GB.markSent(st, 'a', first, 'sent it');
+  const second = GB.getTextTodayList(st, new Date(), '');
+  assert.strictEqual(second.length, 1, 'the next touch should surface once the first is sent');
+  assert.notStrictEqual(second[0].stage, first, 'and it should be a different one');
+});
+
+test('one human with two client records gets one card', () => {
+  // A contact who ghosted and rebooked legitimately has two rows.
+  const st = GB.buildDefaultState();
+  st.clients['old'] = freshClient({id:'old', name:'Geri Westfall', phone:'386-852-0339',
+    status:'Ghosted', stalledSince: isoDaysAgo(9), bookedDate: isoDaysAgo(40)});
+  st.clients['new'] = freshClient({id:'new', name:'Geri  Westfall', phone:'(386) 852 0339',
+    status:'Ghosted', stalledSince: isoDaysAgo(8), bookedDate: isoDaysAgo(30)});
+  const items = GB.getTextTodayList(st, new Date(), '');
+  assert.strictEqual(items.length, 1, 'same phone, differently formatted, is one person');
+});
+
+test('two different people are never collapsed', () => {
+  const st = GB.buildDefaultState();
+  st.clients['a'] = freshClient({id:'a', name:'Ann', phone:'5125550020', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(6)});
+  st.clients['b'] = freshClient({id:'b', name:'Bob', phone:'5125550021', bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(6)});
+  assert.strictEqual(GB.getTextTodayList(st, new Date(), '').length, 2);
+});
+
+console.log('\n--- five-touch progress ---');
+
+test('progress counts the run-up, not the rescue sequences', () => {
+  const touches = GB.cadenceTouches();
+  assert.deepStrictEqual(touches, ['welcome','monday','midcheckin','dayof','hourbefore']);
+  assert.ok(touches.indexOf('noshow') === -1 && touches.indexOf('recovery') === -1,
+    'a rescue is what happens after the run-up fails, not part of it');
+});
+
+test('it reads 0 of 5 for a fresh booking and counts up', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(6)});
+  assert.strictEqual(GB.cadenceProgress(c, new Date()).label, '0 of 5');
+  c.messageLog = [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(1),responded:false,respondedAt:null,reviewed:true}];
+  const p = GB.cadenceProgress(c, new Date());
+  assert.strictEqual(p.label, '1 of 5');
+  assert.strictEqual(p.nextStage, 'monday');
+});
+
+test('a rebooked or followup intro counts as the welcome touch', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(6), rebooked:true,
+    messageLog:[{stage:'rebooked',variantId:'rb1',text:'x',sentAt:isoDaysAgo(1),responded:false,respondedAt:null,reviewed:true}]});
+  assert.strictEqual(GB.cadenceProgress(c, new Date()).done, 1,
+    'the introduction happened, whichever face it wore');
+});
+
+test('a moved call resets the progress for that appointment', () => {
+  const c = freshClient({
+    bookedDate: isoDaysAgo(40), callDateTime: isoDaysFromNow(4),
+    reschedules: [isoDaysAgo(2)],
+    messageLog:[{stage:'midcheckin',variantId:'c1',text:'x',sentAt:isoDaysAgo(20),responded:false,respondedAt:null,reviewed:true}]});
+  const p = GB.cadenceProgress(c, new Date());
+  assert.ok(p.sentStages.indexOf('midcheckin') === -1,
+    'a check-in for the old date is not progress toward the new one');
+});
+
+test('the total follows a customised cadence instead of always saying five', () => {
+  withSequence(GB.buildDefaultSequence().filter(s => s.key !== 'monday'), () => {
+    const c = freshClient({bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(6)});
+    assert.strictEqual(GB.cadenceProgress(c, new Date()).total, 4,
+      'a business that dropped a touch should not be told it has five');
+  });
+});
+
+test('a fully worked run-up reports complete', () => {
+  const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(1),
+    messageLog: ['welcome','monday','midcheckin','dayof','hourbefore'].map(st => ({
+      stage: st, variantId: 'x', text:'x', sentAt: isoDaysAgo(2), responded:false, respondedAt:null, reviewed:true}))});
+  const p = GB.cadenceProgress(c, new Date());
+  assert.strictEqual(p.complete, true);
+  assert.strictEqual(p.nextStage, null);
 });
 
 console.log('\n--- hot / good / nurture / dead grouping ---');
