@@ -18,9 +18,13 @@
 //   - it is a civil hour where THEY are
 //   - a per-run cap, so a misconfiguration cannot empty an entire book
 
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const GB = require('../_shared/logic.js');
+// A STATIC import, deliberately. createRequire looked equivalent and was not:
+// the deploy bundler cannot trace a dynamic call, so it shipped this function
+// without logic.js and every invocation died with WORKER_ERROR. logic.js
+// assigns its exports to globalThis precisely so it can be imported this way.
+import '../_shared/logic.js';
+// deno-lint-ignore no-explicit-any
+const GB = (globalThis as any).GBLogic;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',

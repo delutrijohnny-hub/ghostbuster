@@ -3055,3 +3055,11 @@ var __LOGIC_EXPORTS__ = {
 };
 if(typeof module !== 'undefined' && module.exports){ module.exports = __LOGIC_EXPORTS__; }
 if(typeof window !== 'undefined'){ window.GBLogic = __LOGIC_EXPORTS__; }
+// Deno reads a .js file as an ES module, where top-level declarations are
+// module-scoped and neither `module` nor `window` exists. Assigning to
+// globalThis is what lets an Edge Function `import` this file for its side
+// effect and then pick the exports up — which in turn lets the import be
+// STATIC, so the deploy bundler actually uploads this file. A dynamic
+// createRequire looked equivalent and silently shipped a function whose
+// dependency was missing.
+if(typeof globalThis !== 'undefined'){ globalThis.GBLogic = __LOGIC_EXPORTS__; }

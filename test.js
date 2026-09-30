@@ -1905,8 +1905,15 @@ console.log('\n--- automatic email guardrails ---');
     path.join(__dirname, 'supabase', 'functions', 'auto-send-email', 'index.ts'), 'utf8');
 
   test('it shares the cadence engine instead of reimplementing it', () => {
-    assert.ok(src.includes("require('../_shared/logic.js')"),
+    // Must be a STATIC import: the deploy bundler cannot trace a dynamic
+    // require, and shipping this function without logic.js killed every
+    // invocation with WORKER_ERROR.
+    assert.ok(src.includes("import '../_shared/logic.js'"),
       'a third copy of computeDue would decide what gets sent to real people');
+    // The call, not the word — it is named in a comment explaining why it was
+    // removed, and that comment is worth keeping.
+    assert.ok(!/createRequire\s*\(/.test(src),
+      'a dynamic require is not bundled, so the dependency ships missing');
     assert.ok(src.includes('GB.computeDue('), 'must use the same due calculation as the app');
     assert.ok(src.includes('GB.pickTodaysTouch('), 'and the same one-per-day choice');
   });
