@@ -261,9 +261,18 @@ test('No-show yesterday -> noshow due', () => {
   assert.ok(GB.computeDue(c, new Date()).includes('noshow'));
 });
 
-test('No-show 30 days ago -> nothing due', () => {
+test('No-show 30 days ago -> the intensive rescue is over, the slow lane picks it up', () => {
+  // This previously asserted "nothing due", which encoded exactly the problem:
+  // the 14-day rescue window closed and the lead was never contacted again.
   const c = freshClient({ status: 'No-show', callDateTime: isoDaysAgo(30) });
-  assertDue(GB.computeDue(c, new Date()), []);
+  assertDue(GB.computeDue(c, new Date()), ['revival']);
+});
+
+test('a no-show inside the rescue window gets the rescue, not the slow lane', () => {
+  const c = freshClient({ status: 'No-show', callDateTime: isoDaysAgo(3) });
+  const due = GB.computeDue(c, new Date());
+  assert.ok(due.includes('noshow'));
+  assert.ok(!due.includes('revival'), 'the monthly nudge should not overlap the intensive chase');
 });
 
 test('no-show rescue re-fires every few days, not just once — covers "said they wanted to reschedule but never gave a date"', () => {
@@ -1500,6 +1509,143 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- nobody falls out of the follow-up ---');
+
+test('a cold lead still gets a monthly nudge instead of silence', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({
+    id:'cold', phone:'2135550001', status:'Ghosted',
+    callDateTime: isoDaysAgo(120), bookedDate: isoDaysAgo(150),
+    stalledSince: isoDaysAgo(120),
+    messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(40),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  st.clients['cold'] = c;
+  const items = GB.getTextTodayList(st, new Date(), '');
+  assert.strictEqual(items.length, 1, 'a lead in the Graveyard must not vanish from the list');
+  assert.strictEqual(items[0].stage, 'revival');
+});
+
+test('the Graveyard gets the slow lane only, never the intensive chase', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({
+    id:'cold', phone:'2135550001', status:'Ghosted',
+    callDateTime: isoDaysAgo(90), bookedDate: isoDaysAgo(120),
+    stalledSince: isoDaysAgo(90),
+    messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(40),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  st.clients['cold'] = c;
+  // computeDue alone would still offer recovery; the list is what narrows it.
+  assert.ok(GB.computeDue(c, new Date()).includes('recovery'));
+  const stages = GB.getTextTodayList(st, new Date(), '').map(i => i.stage);
+  assert.deepStrictEqual(stages, ['revival'], 'weekly chasing of a cold lead is what makes it spam');
+});
+
+test('it waits a month between nudges, not days', () => {
+  const recent = freshClient({
+    status:'Ghosted', stalledSince: isoDaysAgo(90), callDateTime: isoDaysAgo(90),
+    messageLog:[{stage:'revival',variantId:'v1',text:'x',sentAt: isoDaysAgo(9),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(!GB.computeDue(recent, new Date()).includes('revival'),
+    'nine days after the last nudge is pestering, not nurture');
+  const due = freshClient({
+    status:'Ghosted', stalledSince: isoDaysAgo(90), callDateTime: isoDaysAgo(90),
+    messageLog:[{stage:'revival',variantId:'v1',text:'x',sentAt: isoDaysAgo(35),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(GB.computeDue(due, new Date()).includes('revival'));
+});
+
+test('someone who bought is left alone', () => {
+  const c = freshClient({
+    status:'Completed', closeOutcome:'Closed',
+    callDateTime: isoDaysAgo(120), bookedDate: isoDaysAgo(150),
+    messageLog:[{stage:'dayof',variantId:'d1',text:'x',sentAt: isoDaysAgo(120),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('revival'),
+    'nurturing a customer who already bought is how a sequence becomes spam');
+});
+
+test('a call that happened but never closed does get nurtured', () => {
+  const c = freshClient({
+    status:'Completed', closeOutcome: undefined,
+    callDateTime: isoDaysAgo(120), bookedDate: isoDaysAgo(150),
+    messageLog:[{stage:'dayof',variantId:'d1',text:'x',sentAt: isoDaysAgo(120),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('revival'),
+    'they showed up and never bought — that is the definition of a lead worth keeping');
+});
+
+test('the nudge is measured from the last contact, whatever it was', () => {
+  // Anchoring to the appointment would keep firing on a fixed grid regardless
+  // of whether someone was messaged yesterday.
+  const c = freshClient({
+    status:'Ghosted', stalledSince: isoDaysAgo(200), callDateTime: isoDaysAgo(200),
+    messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(2),
+                 responded:false, respondedAt:null, reviewed:true}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('revival'),
+    'someone messaged two days ago has not been forgotten');
+});
+
+test('a reply still pauses the slow lane', () => {
+  const c = freshClient({
+    status:'Ghosted', stalledSince: isoDaysAgo(90), callDateTime: isoDaysAgo(90),
+    messageLog:[{stage:'revival',variantId:'v1',text:'x',sentAt: isoDaysAgo(35),
+                 responded:true, respondedAt: isoDaysAgo(1), reviewed:true}]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('revival'),
+    'they wrote back — a person owes them a person');
+});
+
+test('every revival message makes it easy to say no', () => {
+  // A nurture text that is hard to refuse stops being nurture.
+  GB.buildDefaultVariants().revival.forEach(v => {
+    assert.ok(/no hard feelings|a no both work|no all work|just say|leave you be|stop bugging|or a no/i.test(v.text),
+      'revival variant ' + v.id + ' gives no easy way out: ' + v.text);
+  });
+});
+
+test('the slow lane trickles instead of dumping the backlog', () => {
+  const st = GB.buildDefaultState();
+  for(let i = 0; i < 20; i++){
+    st.clients['c'+i] = freshClient({
+      id:'c'+i, name:'C'+i, phone:'21355500' + String(i).padStart(2,'0'),
+      status:'Ghosted', stalledSince: isoDaysAgo(100 + i), callDateTime: isoDaysAgo(100 + i),
+      bookedDate: isoDaysAgo(160),
+      messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(60 + i),
+                   responded:false, respondedAt:null, reviewed:true}]
+    });
+  }
+  const revivals = GB.getTextTodayList(st, new Date(), '').filter(i => i.stage === 'revival');
+  assert.strictEqual(revivals.length, GB.REVIVAL_DAILY_CAP,
+    'twenty at once is a mail merge, not nurture');
+});
+
+test('the longest silences are reached first', () => {
+  const st = GB.buildDefaultState();
+  st.clients['recent'] = freshClient({
+    id:'recent', name:'Recent', phone:'2135550001', status:'Ghosted',
+    stalledSince: isoDaysAgo(100), callDateTime: isoDaysAgo(100), bookedDate: isoDaysAgo(160),
+    messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(35),
+                 responded:false, respondedAt:null, reviewed:true}]});
+  for(let i = 0; i < 8; i++){
+    st.clients['old'+i] = freshClient({
+      id:'old'+i, name:'Old'+i, phone:'21355510' + String(i).padStart(2,'0'), status:'Ghosted',
+      stalledSince: isoDaysAgo(300), callDateTime: isoDaysAgo(300), bookedDate: isoDaysAgo(360),
+      messageLog:[{stage:'recovery',variantId:'r1',text:'x',sentAt: isoDaysAgo(200 + i),
+                   responded:false, respondedAt:null, reviewed:true}]});
+  }
+  const names = GB.getTextTodayList(st, new Date(), '')
+    .filter(i => i.stage === 'revival').map(i => i.client.name);
+  assert.ok(!names.includes('Recent'),
+    'the one contacted five weeks ago can wait behind the ones silent for months');
+});
+
 console.log('\n--- skipping a touch for good ---');
 
 test('a skipped touch never comes back', () => {
@@ -1867,7 +2013,7 @@ test('the default sequence is what the hard-coded rules did', () => {
   // just pins the shape so a step cannot be dropped unnoticed.
   const keys = GB.buildDefaultSequence().map(s => s.key);
   assert.deepStrictEqual(keys,
-    ['welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow']);
+    ['welcome','monday','midcheckin','dayof','hourbefore','recovery','noshow','revival']);
 });
 
 test('a business can drop a touch it does not want', () => {

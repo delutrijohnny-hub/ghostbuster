@@ -258,6 +258,23 @@ var HOURBEFORE_FLOOR_MIN = 10;
    GhostBuster exists to prevent. While paused the contact is not forgotten
    either: replying raises their Ghost Score, so they surface in GhostBuster
    Today for a human to answer rather than for a template to fire. */
+// Long-term nurture cadence. A month is deliberate: frequent enough that a
+// lead who comes back around is caught within weeks, rare enough that it never
+// reads as pestering.
+var REVIVAL_EVERY_DAYS = 30;
+
+/* How many long-term nudges surface in one day.
+
+   Without a cap the first run dumps the entire backlog at once — on the live
+   book that was 54 revival texts in a single morning, most to contacts who
+   were never messaged at all. That is not nurture arriving, that is a mail
+   merge, and it is the fastest way to get a number marked as spam.
+
+   Five a day drains a 54-person backlog in under a fortnight while keeping
+   any single day's list workable. The oldest silences go first, so the people
+   closest to being lost are reached soonest. */
+var REVIVAL_DAILY_CAP = 5;
+
 var REPLY_PAUSE_DAYS = 3;
 var PAUSE_EXEMPT_STAGES = {dayof: true, hourbefore: true};
 // When more than one of these is due, the nearest-term one wins: 45 minutes
@@ -386,6 +403,16 @@ function buildDefaultVariants(){
       {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still want to walk you through what's driving local YouTube conversion right now. Shoot me a time that works better and we can reset."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
+    /* The slow lane. Sent roughly monthly, indefinitely, to anyone who never
+       closed and never said no. Written to survive a long silence: it does not
+       pretend to continue a conversation, it does not guilt anyone for going
+       quiet, and it makes leaving easy — a nurture text that is hard to say no
+       to stops being nurture and becomes harassment. */
+    revival: [
+      {id:'v1', builtin:true, text:"Hey {name}, {sender} here. Been a while. If getting your video content working is still on the list this year, happy to pick it back up. If not, no hard feelings and I'll leave you be."},
+      {id:'v2', builtin:true, text:"Hi {name}, checking in after a while. Things change, so figured I'd ask: is this still something you're thinking about? A yes or a no both work."},
+      {id:'v3', builtin:true, text:"Hey {name}, circling back one more time. If the timing is better now I can send over a couple of slots. If it's not, just say and I'll stop bugging you."}
+    ],
     // Fires instead of "welcome" when a new booking is matched (by phone +
     // email) to a contact who already exists in the system but never actually
     // had a call with John (ghosted / no-showed / rescheduled and vanished) —
@@ -473,6 +500,11 @@ function buildDefaultEmailVariants(){
       {id:'eh1', builtin:true, channel:'email',
        subject:'Starting soon — {time}',
        text:"Hi {name},\n\nWe're on in about an hour, at {time}. Link's here:\n\n{link}\n\n{sender}"}
+    ],
+    revival: [
+      {id:'ev1', builtin:true, channel:'email',
+       subject:'Still on your list?',
+       text:"Hi {name},\n\nIt has been a while, so rather than guess I'll just ask: is this still something you want to look at?\n\nIf yes, send me a couple of times and I'll get us booked. If not, tell me and I'll stop landing in your inbox — either answer is genuinely fine.\n\n{sender}"}
     ],
     recovery: [
       {id:'er1', builtin:true, channel:'email',
@@ -777,10 +809,15 @@ function hasSentStageThisAppointment(client, stage){
   });
 }
 
+// A null stage means "the last time anything was sent", which is what a
+// long-term nudge measures: silence, not distance from one particular touch.
 function lastSentAtMs(client, stage){
   var latest = null;
   client.messageLog.forEach(function(m){
-    if(m.stage === stage){ var t = Date.parse(m.sentAt); if(!isNaN(t) && (latest===null || t>latest)) latest = t; }
+    if(stage === null || m.stage === stage){
+      var t = Date.parse(m.sentAt);
+      if(!isNaN(t) && (latest===null || t>latest)) latest = t;
+    }
   });
   return latest;
 }
@@ -821,7 +858,19 @@ function buildDefaultSequence(){
                                                    anchor:'stalled', afterDays:2, everyDays: FOLLOWUP_REFIRE_DAYS}},
     {key:'noshow',     stage:'noshow',     trigger:{type:'repeat_while_role', roles:['missed'],
                                                    anchor:'appointment', afterDays:0,
-                                                   everyDays: FOLLOWUP_REFIRE_DAYS, windowDays:14}}
+                                                   everyDays: FOLLOWUP_REFIRE_DAYS, windowDays:14}},
+    /* Long-term nurture, and the point of the whole product: a lead that went
+       quiet is not a lead that said no. The intensive sequences above run out
+       after a fortnight and used to leave contacts in the Graveyard, never
+       contacted again — 67 people on the live book. This keeps going roughly
+       monthly, indefinitely, for anyone who never closed and never refused.
+       Slow enough not to be a nuisance, permanent enough that nobody is
+       forgotten. */
+    {key:'revival',    stage:'revival',    trigger:{type:'repeat_while_role',
+                                                   roles:['stalled','lost','missed','won'],
+                                                   unlessClosed: true, anchor:'lastContact',
+                                                   afterDays: REVIVAL_EVERY_DAYS,
+                                                   everyDays: REVIVAL_EVERY_DAYS}}
   ];
 }
 
@@ -869,9 +918,26 @@ function stepIsDue(step, client, now, ctx){
   if(t.type === 'repeat_while_role'){
     var roles = t.roles || [];
     if(roles.indexOf(stageRole(client.status)) === -1) return false;
-    var anchorMs = t.anchor === 'stalled'
-      ? (client.stalledSince ? Date.parse(client.stalledSince) : NaN)
-      : (ctx.callDate ? ctx.callDate.getTime() : NaN);
+    // A closed deal is the one outcome that ends the relationship on purpose.
+    // Nurturing someone who already bought is the fastest way to make a
+    // nurture sequence feel like spam.
+    if(t.unlessClosed && client.closeOutcome === 'Closed') return false;
+    var anchorMs;
+    if(t.anchor === 'stalled'){
+      anchorMs = client.stalledSince ? Date.parse(client.stalledSince) : NaN;
+    } else if(t.anchor === 'lastContact'){
+      // Anchored to the last time anything was sent, whatever the stage, so a
+      // long-term nudge measures silence rather than distance from one event.
+      // Falls back to the appointment for a contact never messaged at all.
+      var lastAny = null;
+      (client.messageLog || []).forEach(function(m){
+        var mt = Date.parse(m.sentAt);
+        if(!isNaN(mt) && (lastAny === null || mt > lastAny)) lastAny = mt;
+      });
+      anchorMs = lastAny !== null ? lastAny : (ctx.callDate ? ctx.callDate.getTime() : NaN);
+    } else {
+      anchorMs = ctx.callDate ? ctx.callDate.getTime() : NaN;
+    }
     if(isNaN(anchorMs)) return false;
     var daysSince = (now.getTime() - anchorMs) / 86400000;
     if(daysSince < (t.afterDays || 0)) return false;
@@ -2653,13 +2719,18 @@ function getTextTodayList(state, now, searchQuery){
     var c = state.clients[cid];
     if(c.ignored) return;
     if(q && c.name.toLowerCase().indexOf(q) === -1) return;
-    // A client who's gone cold long enough to show up in the Dead list has,
-    // by definition, already gotten their last recovery/noshow/rebooked
-    // touch — queuing them here too would mean chasing leads forever even
-    // after they've been written off. New activity (a rebooking) clears
-    // isDeadClient's condition on its own, so this stays self-correcting.
-    if(isDeadClient(c, allClients, now)) return;
     var due = computeDue(c, now);
+    /* The Graveyard used to be a dead end: once a contact went cold they were
+       dropped from this list for good, on the reasoning that they had already
+       had their last chase. That quietly contradicted the entire premise —
+       never let a lead slip — and on the live book it had silenced 67 people.
+
+       A cold contact now keeps exactly one thing: the monthly revival touch.
+       The intensive sequences stay off, so nobody in the Graveyard gets chased
+       weekly, but nobody is forgotten either. */
+    if(isDeadClient(c, allClients, now)){
+      due = due.filter(function(stage){ return stage === 'revival'; });
+    }
     if(!due.length) return;
     // One message per person per day. Several touches can come due at once —
     // most often welcome, monday and midcheckin together after a booking is
@@ -2670,6 +2741,23 @@ function getTextTodayList(state, now, searchQuery){
     // would send them.
     items.push({client: c, stage: pickTodaysTouch(due)});
   });
+
+  /* Trickle the long-term nudges. Everything else in this list is time-bound
+     — a call is today, a rescue window is closing — but revival has no
+     deadline, so it is the one thing that can safely wait a day. Longest
+     silence first: the people closest to being lost for good are reached
+     first. */
+  var revivals = items.filter(function(it){ return it.stage === 'revival'; });
+  if(revivals.length > REVIVAL_DAILY_CAP){
+    revivals.sort(function(a, b){
+      var la = lastSentAtMs(a.client, null), lb = lastSentAtMs(b.client, null);
+      var aMs = la === null ? 0 : la, bMs = lb === null ? 0 : lb;
+      return aMs - bMs;
+    });
+    var keep = {};
+    revivals.slice(0, REVIVAL_DAILY_CAP).forEach(function(it){ keep[it.client.id] = true; });
+    items = items.filter(function(it){ return it.stage !== 'revival' || keep[it.client.id]; });
+  }
 
   // And one card per PERSON, not per client record. A contact who ghosted and
   // rebooked legitimately has two client rows — that is how rebooked/followup
@@ -3122,7 +3210,7 @@ var __LOGIC_EXPORTS__ = {
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
   hasSentStage: hasSentStage, hasSentStageThisAppointment: hasSentStageThisAppointment,
   appointmentSetAt: appointmentSetAt, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
-  REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
+  REVIVAL_EVERY_DAYS: REVIVAL_EVERY_DAYS, REVIVAL_DAILY_CAP: REVIVAL_DAILY_CAP, REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
   buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
   describeTrigger: describeTrigger,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
