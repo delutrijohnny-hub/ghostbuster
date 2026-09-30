@@ -168,6 +168,19 @@ function assertDue(actual, expected) {
   console.log('  ok  - logic.js and hosted/logic.js are byte-identical');
 }
 
+// The Edge Function shares logic.js rather than reimplementing the cadence.
+// parse.ts already demonstrates the cost of a hand-maintained copy — its
+// AREA_CODE_TZ table is a second source of truth that has to be updated twice.
+// A third copy of computeDue would be considerably worse: it decides what gets
+// sent to real people, unattended.
+{
+  const a = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const b = fs.readFileSync(path.join(__dirname, 'supabase', 'functions', '_shared', 'logic.js'), 'utf8');
+  assert.strictEqual(a, b,
+    'logic.js and supabase/functions/_shared/logic.js have drifted — run: cp logic.js supabase/functions/_shared/logic.js');
+  console.log('  ok  - the Edge Function shares the same logic.js, byte for byte');
+}
+
 console.log('\n--- computeDue ---');
 
 test('booked today, call 3 weeks out -> welcome due', () => {
@@ -1880,6 +1893,71 @@ test('the send function refuses clearly when nothing is configured', () => {
   assert.ok(src.includes('Not your contact'), 'must verify the caller owns the contact');
   assert.ok(src.includes('/auth/v1/user'), 'must resolve the bearer token to a real user');
   assert.ok(src.includes('OPTIONS'), 'must answer CORS preflight or the browser never reaches it');
+});
+
+console.log('\n--- automatic email guardrails ---');
+
+// This function mails real people with nobody watching. Each of these is a way
+// that could go wrong at scale, so they are asserted against the source rather
+// than trusted to stay true.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'auto-send-email', 'index.ts'), 'utf8');
+
+  test('it shares the cadence engine instead of reimplementing it', () => {
+    assert.ok(src.includes("require('../_shared/logic.js')"),
+      'a third copy of computeDue would decide what gets sent to real people');
+    assert.ok(src.includes('GB.computeDue('), 'must use the same due calculation as the app');
+    assert.ok(src.includes('GB.pickTodaysTouch('), 'and the same one-per-day choice');
+  });
+
+  test('dry run is the default, and a live run needs a secret', () => {
+    assert.ok(/dryRun = payload\.dryRun !== false/.test(src),
+      'an accidental invocation must report, not mail');
+    assert.ok(src.includes('CRON_SECRET'), 'a live run must be authenticated');
+    assert.ok(/!dryRun && \(!CRON_SECRET \|\| payload\.secret !== CRON_SECRET\)/.test(src));
+  });
+
+  test('it only touches accounts that opted in twice', () => {
+    assert.ok(src.includes('email_enabled=eq.true'), 'must require email to be enabled');
+    assert.ok(src.includes('auto_send_email=eq.true'), 'must require automatic sending separately');
+  });
+
+  test('it respects working hours where the contact is, not where the server is', () => {
+    assert.ok(src.includes('timeZone: tz'), 'the hour must be computed in their zone');
+    assert.ok(/SEND_FROM_HOUR|SEND_TO_HOUR/.test(src));
+    assert.ok(src.includes('outside their working hours'));
+  });
+
+  test('it cannot contact the same person twice in a day', () => {
+    assert.ok(src.includes('already contacted today'),
+      'automation must not add to a conversation a human already started today');
+  });
+
+  test('a misconfiguration cannot empty an entire book in one run', () => {
+    assert.ok(src.includes('MAX_PER_RUN_PER_ORG'), 'there must be a per-run cap');
+  });
+
+  test('config is reset between accounts so one business cannot leak into another', () => {
+    // logic.js holds pipeline and sequence module-level; a loop over orgs must
+    // set and clear them, or the second org inherits the first one's cadence.
+    assert.ok(src.includes('GB.setPipeline(settings.pipeline'), 'must set per account');
+    assert.ok(src.includes('GB.setPipeline(null)'), 'and clear it afterwards');
+    assert.ok(src.includes('GB.setSequence(null)'));
+  });
+
+  test('sent mail is logged the same shape a manual send produces', () => {
+    assert.ok(src.includes("channel: 'email'"), 'must record the channel');
+    assert.ok(src.includes('/message_log'), 'must log at all, or the cadence never advances');
+    assert.ok(src.includes('reviewed: false'), 'and must enter the reply-review queue like any other send');
+  });
+}
+
+test('turning email off also turns automatic sending off', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const block = app.slice(app.indexOf("case 'set-email-enabled':"), app.indexOf("case 'remove-step':"));
+  assert.ok(/if\(!target\.checked\) STATE\.autoSendEmail = false;/.test(block),
+    'otherwise the toggle looks like it stopped everything while a job keeps mailing');
 });
 
 console.log('\n--- site routing ---');

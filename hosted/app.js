@@ -1793,6 +1793,13 @@ function renderSettingsModal(){
         escapeHtml(STATE.emailReplyTo || '') + '" placeholder="optional"></div>' +
     '</div>' +
     '<div class="set-warn" style="margin-top:8px;">The from address must be on a domain verified with your email provider, or messages will be rejected. Sending is off until that is set up.</div>' +
+    (STATE.emailEnabled
+      ? '<label class="set-toggle" style="margin-top:12px;"><input type="checkbox" data-action="set-auto-email"' +
+        (STATE.autoSendEmail ? ' checked' : '') + '> Send due follow-up emails automatically</label>' +
+        '<div class="hint" style="margin-top:4px;">Hourly, only during 8am–7pm where the ' + escapeHtml(termLower('contact')) +
+        ' is, never more than once a day per person, and never to someone who has replied recently. ' +
+        'Texts are always still yours to send.</div>'
+      : '') +
     '</div>' +
     '<div class="set-section"><h3>What you call things</h3>' +
     '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
@@ -2159,7 +2166,20 @@ document.addEventListener('click', function(ev){
     }
     case 'set-email-enabled':
       STATE.emailEnabled = target.checked;
+      // Switching sending off must also stop the unattended sender, or the
+      // toggle would look like it had turned everything off while a scheduled
+      // job kept mailing people.
+      if(!target.checked) STATE.autoSendEmail = false;
       saveState(STATE);
+      renderSettingsModal();
+      renderAll();
+      break;
+    case 'set-auto-email':
+      STATE.autoSendEmail = target.checked;
+      saveState(STATE);
+      showToast(target.checked
+        ? 'Automatic emails are on. They start at the next hourly run.'
+        : 'Automatic emails are off.');
       renderAll();
       break;
     case 'remove-step':
