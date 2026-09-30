@@ -570,6 +570,7 @@ function sanitizeClient(raw, fallbackId){
   return {
     id: id,
     googleEventId: typeof raw.googleEventId === 'string' ? raw.googleEventId : null,
+    organizerEmail: typeof raw.organizerEmail === 'string' ? raw.organizerEmail : null,
     name: (typeof raw.name === 'string' && raw.name.trim()) ? raw.name.trim() : 'Unknown',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
     email: typeof raw.email === 'string' ? raw.email : '',
@@ -1427,6 +1428,32 @@ function computeVariantPerformance(state, now){
   });
   out.sort(function(a, b){ return a.stage.localeCompare(b.stage); });
   return out;
+}
+
+
+/* Whose lead is this?
+
+   A team shares calendars. When a colleague books a discovery call and puts it
+   on your calendar too, the sync creates a contact in YOUR book — and the
+   follow-up sequence then offers to text someone about a call they booked with
+   somebody else. On the live book that was roughly 30 contacts organized by
+   nine different teammates, five of whom were about to receive a revival text.
+
+   The identity that matters is the CONNECTED CALENDAR, not the login. Johnny
+   signs in as a personal Gmail address while his events are organized by his
+   work address, so comparing against the login would have misfiled all 74 of
+   his own contacts as somebody else's.
+
+   Only a positively different organizer counts as someone else's. Contacts
+   with no organizer recorded — 55 of them, mostly from earlier imports — are
+   left alone rather than guessed at, because being wrong here means either
+   texting another rep's client or silently dropping your own. */
+function isOthersLead(client, myCalendars){
+  var organizer = (client.organizerEmail || '').toLowerCase().trim();
+  if(!organizer) return false;
+  var mine = (myCalendars || []).map(function(c){ return String(c || '').toLowerCase().trim(); });
+  if(!mine.length) return false;   // nothing to compare against yet
+  return mine.indexOf(organizer) === -1;
 }
 
 
@@ -2448,6 +2475,7 @@ function rankByGhostScore(state, now, opts){
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
     if(c.ignored) return;
+    if(isOthersLead(c, state.myCalendars)) return;
     var g = computeGhostScore(c, now, w, state);
     if(g.score < min) return;
     out.push({client: c, score: g.score, band: g.band, reasons: g.reasons});
@@ -2719,6 +2747,9 @@ function getTextTodayList(state, now, searchQuery){
     var c = state.clients[cid];
     if(c.ignored) return;
     if(q && c.name.toLowerCase().indexOf(q) === -1) return;
+    // A colleague's booking that happens to sit on your calendar is not yours
+    // to follow up. They stay visible in All clients, marked, but never queued.
+    if(isOthersLead(c, state.myCalendars)) return;
     var due = computeDue(c, now);
     /* The Graveyard used to be a dead end: once a contact went cold they were
        dropped from this list for good, on the reasoning that they had already
@@ -3246,6 +3277,7 @@ var __LOGIC_EXPORTS__ = {
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   getUnloggedCalls: getUnloggedCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
+  isOthersLead: isOthersLead,
   getRecentSends: getRecentSends,
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,
   telHref: telHref, onDeckNudgeText: onDeckNudgeText,

@@ -1509,6 +1509,58 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every function hosted/app.js calls is actually defined');
 }
 
+console.log('\n--- whose lead is it ---');
+
+const mine = ['john@marketmakermgmt.com'];
+
+test('a booking organized by a teammate is not yours to follow up', () => {
+  const c = freshClient({organizerEmail:'ethan.m@marketmakermgmt.com'});
+  assert.strictEqual(GB.isOthersLead(c, mine), true);
+});
+
+test('your own bookings stay yours', () => {
+  assert.strictEqual(GB.isOthersLead(freshClient({organizerEmail:'john@marketmakermgmt.com'}), mine), false);
+  assert.strictEqual(GB.isOthersLead(freshClient({organizerEmail:'JOHN@MarketMakerMGMT.com'}), mine), false,
+    'address comparison must not be case sensitive');
+});
+
+test('an unknown organizer is left alone rather than guessed at', () => {
+  // Being wrong here means either texting another rep's client or silently
+  // dropping your own.
+  assert.strictEqual(GB.isOthersLead(freshClient({organizerEmail:null}), mine), false);
+  assert.strictEqual(GB.isOthersLead(freshClient({organizerEmail:''}), mine), false);
+});
+
+test('with no connected calendar nothing is misfiled', () => {
+  const c = freshClient({organizerEmail:'someone@else.com'});
+  assert.strictEqual(GB.isOthersLead(c, []), false);
+  assert.strictEqual(GB.isOthersLead(c, undefined), false);
+});
+
+test('it compares against the calendar, not the login', () => {
+  // These accounts sign in personally and organize from a work address;
+  // comparing against the login would misfile every one of their own contacts.
+  const c = freshClient({organizerEmail:'john@marketmakermgmt.com'});
+  assert.strictEqual(GB.isOthersLead(c, ['delutrijohnny@gmail.com']), true,
+    'wrong identity, wrong answer — which is why myCalendars is what is passed');
+  assert.strictEqual(GB.isOthersLead(c, mine), false);
+});
+
+test("a teammate's lead never reaches the send queue or the ranked list", () => {
+  const st = GB.buildDefaultState();
+  st.myCalendars = mine;
+  st.clients['theirs'] = freshClient({id:'theirs', name:'Theirs', phone:'2135550001',
+    organizerEmail:'tessa@marketmakermgmt.com',
+    bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  st.clients['mine'] = freshClient({id:'mine', name:'Mine', phone:'2135550002',
+    organizerEmail:'john@marketmakermgmt.com',
+    bookedDate: isoDaysAgo(1), callDateTime: isoDaysFromNow(5)});
+  const queued = GB.getTextTodayList(st, new Date(), '').map(i => i.client.id);
+  assert.deepStrictEqual(queued, ['mine']);
+  const ranked = GB.rankByGhostScore(st, new Date(), {min:0}).map(r => r.client.id);
+  assert.ok(!ranked.includes('theirs'), 'nor should it be ranked for attention');
+});
+
 console.log('\n--- nobody falls out of the follow-up ---');
 
 test('a cold lead still gets a monthly nudge instead of silence', () => {

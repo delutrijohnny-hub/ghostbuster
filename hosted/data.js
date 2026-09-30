@@ -52,6 +52,13 @@ async function loadState(){
   if(todosRes.error) throw todosRes.error;
   var settingsRes = await sb.from('app_settings').select('*').eq('user_id', uid).maybeSingle();
   if(settingsRes.error) throw settingsRes.error;
+  // Which calendars are mine — the identity that decides whose lead a booking
+  // is. Not the login address: these accounts sign in personally and organize
+  // from a work address. A failure here leaves the list empty, which
+  // isOthersLead reads as "cannot tell", so nothing is misfiled.
+  var calRes = await sb.from('google_oauth_tokens').select('calendar_id').eq('user_id', uid);
+  var myCalendars = (!calRes.error && calRes.data)
+    ? calRes.data.map(function(r){ return r.calendar_id; }).filter(Boolean) : [];
 
   var state = {
     clients: {},
@@ -73,6 +80,7 @@ async function loadState(){
       ? settingsRes.data.sequence : null,
     scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
     calendarFilter: (settingsRes.data && settingsRes.data.calendar_filter) || null,
+    myCalendars: myCalendars,
     emailEnabled: !!(settingsRes.data && settingsRes.data.email_enabled),
     autoSendEmail: !!(settingsRes.data && settingsRes.data.auto_send_email),
     emailFromName: (settingsRes.data && settingsRes.data.email_from_name) || null,
@@ -94,6 +102,7 @@ async function loadState(){
     state.clients[row.id] = {
       id: row.id,
       googleEventId: row.google_event_id,
+      organizerEmail: row.organizer_email,
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
@@ -260,6 +269,7 @@ function reportSaveHealth(ok, detail){
 function rowClient(c, uid){
   return {
     id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
+    organizer_email: c.organizerEmail || null,
     name: c.name, phone: c.phone, email: c.email,
     youtube_link: c.youtubeLink, meet_link: c.meetLink,
     call_date_time: c.callDateTime, booked_date: c.bookedDate,

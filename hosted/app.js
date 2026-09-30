@@ -848,12 +848,19 @@ function renderClientsTab(){
     // tooltip because a table row has no room for prose.
     var why = row.g.reasons.filter(function(r){ return r.points > 0 && r.label !== 'Baseline'; })
       .map(function(r){ return r.label + ' +' + r.points; }).join('\n');
-    var tr = h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
+    // Marked, not hidden: a contact that simply vanished would look like data
+    // loss. Saying whose it is explains why it never appears in the queue.
+    var others = isOthersLead(c, STATE.myCalendars);
+    var tr = h('tr',{class:'clickable' + (others ? ' others-lead' : ''),'data-action':'open-client','data-cid':c.id},[
       h('td',{class:'score-cell'},[
         h('span',{class:'score-dot ' + row.g.band, title: why || 'Nothing pushing this one up right now'},
           [String(row.g.score)])
       ]),
-      h('td',{},[c.name]),
+      h('td',{},[
+        c.name,
+        others ? h('span',{class:'others-tag', title:'Booked by ' + c.organizerEmail + ' — not in your follow-up queue'},
+          [String(c.organizerEmail || '').split('@')[0]]) : ''
+      ]),
       h('td',{class:'touch-cell', title: 'Sent so far: ' + (row.p.sentStages.join(', ') || 'nothing yet')},
         [row.p.complete ? '✓ all ' + row.p.total : row.p.label]),
       h('td',{},[when]),
