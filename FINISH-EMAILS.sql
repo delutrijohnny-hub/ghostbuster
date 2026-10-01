@@ -1,22 +1,25 @@
 -- ============================================================
--- Email library: everything outstanding, in one script.
+-- GhostBuster email library: everything outstanding, one paste.
 --
---   1. repair em-dashes that arrived mangled through the clipboard
---   2. pre-call email uses {when}, so it reads right with or without
---      a time booked
+-- Combines the three scripts into one so there is nothing to keep
+-- track of. Every step checks before it acts, so this is safe to
+-- run twice, and safe whether or not any earlier script was run.
+--
+--   1. repair em-dashes mangled in transit through the clipboard
+--   2. pre-call email uses {when} (reads right with or without a
+--      time booked)
 --   3. add the "no time booked yet" intro email
---   4. drop the real Google scheduling link into every place that
---      was waiting for one
+--   4. drop the Google scheduling link everywhere one was needed
+--   5. rebuild the post-call recap around {recap}, the contact's
+--      own call notes
+--   6. scheduling link into the re-engagement emails
+--   7. both onboarding questionnaires into the payment email
 --
--- Safe to run twice, and safe to run whether or not the previous
--- script was run -- each step checks before it acts.
---
--- PURE ASCII on purpose: the mangled characters are rebuilt with
--- chr() rather than written out, because writing them would send
--- them back through the clipboard that mangled them.
+-- PURE ASCII on purpose: mangled characters are rebuilt with chr()
+-- rather than written out, because writing them would send them
+-- back through the clipboard that mangled them.
 -- ============================================================
 
--- 1. Repair the mis-decoded em-dashes.
 do $do$
 declare
   bad text := chr(8218) || chr(196) || chr(238);
@@ -148,7 +151,83 @@ end $do$;
 -- What is left needing a human. Should be two: the package link (you are
 -- grabbing a fresh one) and the questionnaire (the document had two Airtable
 -- links and nothing said which).
+
+do $do$
+declare n int;
+begin
+  update public.email_library
+  set body = $r$Hi {name},
+
+Great connecting today and getting into your channel goals properly.
+
+Here is what we actually talked about:
+
+{recap}
+
+On our side, that means the editing, optimisation and consistency work does not hold you back, so you can focus on creating while still getting the views, leads and ROI you want from YouTube. Concretely that covers branding, thumbnails, editing, and cutting your long-form into short-form.
+
+If anything above is wrong or I missed something, just reply and tell me -- better now than after we have started.
+
+If it is easier to talk it through, grab whichever time suits you:
+
+https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ15gdR6L_RxtIS4-qdyoUyPNWg1_4j6D0dgoTLpqCLVgRdqhp8m17qFovK4dovqTfsvmZUmxIdM
+
+Best regards,
+{sender}$r$,
+      when_to_send = 'the same day as the call, once your notes are in',
+      updated_at = now()
+  where title like 'Post-call recap%';
+  get diagnostics n = row_count;
+  raise notice 'rebuilt % post-call recap email(s)', n;
+  if n = 0 then
+    raise notice 'no post-call recap email found -- was the loader run?';
+  end if;
+end $do$;
+
+-- Put the scheduling link in the two re-engagement emails too, where the
+-- whole point is to get back on the calendar.
+do $do$
+declare cal text := 'https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ15gdR6L_RxtIS4-qdyoUyPNWg1_4j6D0dgoTLpqCLVgRdqhp8m17qFovK4dovqTfsvmZUmxIdM'; n int;
+begin
+  update public.email_library
+  set body = body || chr(10) || chr(10) || 'If you would rather just grab a time:' ||
+             chr(10) || chr(10) || cal,
+      updated_at = now()
+  where (title like 'Gone quiet%' or title like 'Intro - no time%')
+    and body not like '%' || cal || '%';
+  get diagnostics n = row_count;
+  raise notice 'added the scheduling link to % re-engagement email(s)', n;
+end $do$;
+
+do $do$
+declare n int;
+begin
+  update public.email_library
+  set body = replace(body,
+        '[CLIENT ONBOARDING QUESTIONNAIRE LINK]',
+        $q$There are two short forms to fill in -- they capture a few more details about your audience and brand voice, and let our team start preparing before your onboarding call:
+
+Onboarding form 1:
+https://airtable.com/appS49YcdAlU5c1mX/pagEp1WtEPQMxxJ5b/form
+
+Onboarding form 2:
+https://airtable.com/appQzCkh6j1r5SUhl/pag3ko8boVDx0zx8V/form$q$),
+      updated_at = now()
+  where body like '%[CLIENT ONBOARDING QUESTIONNAIRE LINK]%';
+  get diagnostics n = row_count;
+  raise notice 'added both questionnaires to % email(s)', n;
+end $do$;
+
+-- Only the package link should be left. Anything else listed here is
+-- something I have not filled in and you should know about.
+
+-- ============================================================
+-- Where everything stands. Only the package link should be left.
+-- ============================================================
 select title,
-       case when body like '%[%]%' then 'still has a placeholder' else 'ready to send' end as status
+       case when body like '%[%]%' then 'NEEDS: ' || substring(body from '\[[^\]]+\]')
+            when body like '%{recap}%' then 'uses your call notes'
+            else 'ready to send' end as status,
+       case when body like '%calendar.google.com%' then 'booking link' else '' end as extras
 from public.email_library
 order by sort_order;
