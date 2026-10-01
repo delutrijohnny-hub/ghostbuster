@@ -3931,14 +3931,31 @@ test('a stage from a custom sequence is still sendable', () => {
 });
 
 test('whatever is not sent today is still due tomorrow', () => {
+  /* This test's NAME was always right and its assertion was always wrong: it
+     demanded the next touch surface the moment the first was sent, which is
+     the same day, not tomorrow. So it locked in the double-texting — send
+     Caitlin her welcome and she reappeared immediately with a midpoint text.
+
+     Same shape as the calendar-filter test that asserted its own bug. Worth
+     saying plainly: a test whose name and assertion disagree is worse than no
+     test, because the name is what anyone reads when deciding whether the
+     behaviour is covered. */
   const st = GB.buildDefaultState();
-  const c = freshClient({id:'a', phone:'5125550011', bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
-  st.clients['a'] = c;
-  const first = GB.getTextTodayList(st, new Date(), '')[0].stage;
+  st.clients['a'] = freshClient({id:'a', phone:'5125550011',
+    bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(4)});
+  const now = new Date();
+
+  const first = GB.getTextTodayList(st, now, '')[0].stage;
   GB.markSent(st, 'a', first, 'sent it');
-  const second = GB.getTextTodayList(st, new Date(), '');
-  assert.strictEqual(second.length, 1, 'the next touch should surface once the first is sent');
-  assert.notStrictEqual(second[0].stage, first, 'and it should be a different one');
+
+  assert.deepStrictEqual(GB.getTextTodayList(st, now, ''), [],
+    'nothing else should surface for the same person on the same day');
+
+  // Tomorrow, the next one is there.
+  const tomorrow = new Date(now.getTime() + 26 * 3600000);
+  const next = GB.getTextTodayList(st, tomorrow, '');
+  assert.strictEqual(next.length, 1, 'the next touch should surface the following day');
+  assert.notStrictEqual(next[0].stage, first, 'and it should be a different one');
 });
 
 test('one human with two client records gets one card', () => {
