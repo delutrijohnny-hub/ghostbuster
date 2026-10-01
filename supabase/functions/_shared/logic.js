@@ -1569,6 +1569,17 @@ function renderTemplate(template, client, senderName){
        data.js derives this from the account's own email, so the fallback is a
        last resort rather than a normal path. */
     sender: senderName || 'your name',
+    /* Empty when there is no appointment, and tidyTemplate then removes the
+       preposition that was leading up to it.
+
+       These must NOT invent a day. A welcome touch fires for a contact with
+       no call date at all — a manually added lead, say — so substituting
+       "soon" would turn "You're locked in for {date}" into "You're locked in
+       soon", telling someone they have an appointment they have never booked.
+       Saying nothing is recoverable; asserting a booking that does not exist
+       is not.
+
+       {when} below is the opt-in version for copy that genuinely wants it. */
     date: callDate ? fmtDate(callDate, tz) : '',
     // Zone spelled out, so "11:00 AM PDT" can't be read as 11am wherever the
     // reader happens to be.
@@ -1577,10 +1588,74 @@ function renderTemplate(template, client, senderName){
     // Never point a client at their calendar — the invite's Meet link is
     // pulled through by the sync now. If one is genuinely missing this reads
     // as an obvious placeholder rather than quietly shipping vague wording.
+    /* "on Monday", "on Oct 15", or "soon" when nothing is booked.
+
+       The placeholder for copy that has to read naturally either way — an
+       email sent before a time is agreed, which is a normal thing to send.
+       It carries its own preposition so the sentence works in all three
+       cases: "Looking forward to our call {when}."
+
+       A day name inside the coming week, a date beyond it, because "on
+       Tuesday" is ambiguous once it could mean one of several Tuesdays. */
+    when: (function(){
+      if(!callDate) return 'soon';
+      var days = (callDate.getTime() - Date.now()) / 86400000;
+      return (days >= 0 && days < 7)
+        ? 'on ' + weekdayName(callDate, tz)
+        : 'on ' + fmtDate(callDate, tz);
+    })(),
     link: client.meetLink || '(no link on file — paste one before sending)',
     channel: extractChannelHandle(client.youtubeLink) || ''
   };
-  return String(template).replace(/\{(\w+)\}/g, function(m, key){ return (key in vals) ? vals[key] : m; });
+  /* Substitute, and when a value is empty take its preposition with it.
+
+     Doing this at substitution time rather than afterwards is the whole
+     trick. Afterwards, "hopping on at ." and "locked in for ." look the same
+     — a preposition before a full stop — but "hopping on." is correct English
+     and "locked in for." is not. Here the structure is still visible: the
+     "at " belonged to {time}, the "for " belonged to {date}, and the "on" in
+     "hopping on" belonged to nothing and is left alone.
+
+     An earlier version stripped prepositions from the finished string and
+     turned "You're locked in for Oct 4" into "You're locked." */
+  var out = String(template).replace(
+    /([ \t]*)((?:ahead of|prior to|in advance of|at|on|for|in|by)[ \t]+)?((?:this|next)[ \t]+)?\{(\w+)\}/gi,
+    function(m, space, prep, demo, key){
+      if(!(key in vals)) return m;
+      var val = vals[key];
+      if(val !== '') return space + (prep || '') + (demo || '') + val;
+      return '';   // the placeholder, its preposition and the space before it
+    });
+  return tidyTemplate(out);
+}
+
+/* Repair the sentence after a placeholder came back empty or vague.
+
+   Filling a template is not just substitution: the words AROUND a placeholder
+   assume it will have content. "on {weekday}" assumes a day; "at {time}"
+   assumes a time. When there is no appointment yet, those leave behind a
+   dangling preposition and a space before the full stop — which is how a
+   client receives "see you at ." and concludes the sender is careless.
+
+   Deliberately small. It fixes the three shapes the built-in and library
+   copy actually produces, rather than attempting to parse English:
+     "on soon"  -> "soon"      (a day that is not set yet)
+     "for soon" -> "soon"
+     "at ."     -> "."         (a time that does not exist)
+   plus the double spaces and floating punctuation those leave behind. */
+function tidyTemplate(text){
+  /* Whatever punctuation an emptied placeholder left behind.
+
+     Deliberately tiny now that renderTemplate removes the preposition at
+     substitution time: this only has to clean up doubled spaces and a comma
+     or full stop left floating after the words in front of it disappeared.
+     It no longer touches prepositions, because at this point there is no way
+     to tell a dangling one from a correct one. */
+  return String(text)
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,!?;:])/g, '$1')
+    .replace(/([.,!?;:])\1+/g, '$1')
+    .replace(/[ \t]+$/gm, '');
 }
 
 
@@ -3905,6 +3980,7 @@ var __LOGIC_EXPORTS__ = {
   calendarHealth: calendarHealth, describeCalendarHealth: describeCalendarHealth,
   STALE_AFTER_HOURS: STALE_AFTER_HOURS,
   TOUCH_LIST_ORDER: TOUCH_LIST_ORDER, touchListRank: touchListRank, byTouchOrder: byTouchOrder,
+  tidyTemplate: tidyTemplate,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,

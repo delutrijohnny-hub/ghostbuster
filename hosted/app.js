@@ -1158,7 +1158,7 @@ function renderEmailLibrary(){
 
       body.appendChild(h('div',{class:'lib-foot'},[
         h('span',{class:'lib-tokens'},[
-          'Fills in automatically: {name} {sender} {date} {time} {weekday} {link}'
+          'Fills in automatically: {name} {sender} {when} {date} {time} {weekday} {link}'
         ]),
         h('div',{class:'lib-foot-actions'},[
           h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-download','data-id':d.id},['Download']),

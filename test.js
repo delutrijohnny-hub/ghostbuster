@@ -1676,6 +1676,93 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- a message with no appointment on it still reads like English ---');
+
+{
+  const mk = (over) => GB.sanitizeClient(Object.assign({
+    id: 'c', name: 'Dana Reed', phone: '2135550100', timezone: 'America/New_York'
+  }, over));
+  const noDate = mk({});
+  const soonCall = mk({callDateTime: new Date(Date.now() + 3 * 86400000).toISOString(),
+                       meetLink: 'https://meet.google.com/a-b-c'});
+  const farCall = mk({callDateTime: new Date(Date.now() + 30 * 86400000).toISOString()});
+
+  test('an empty placeholder takes its preposition with it', () => {
+    /* "Looking forward to our call on {weekday}." used to go out as
+       "...our call on ." to a real client, because the placeholder emptied
+       and the word leading up to it stayed. This happens whenever something
+       is sent before a time is booked, which is normal. */
+    assert.strictEqual(
+      GB.renderTemplate('Looking forward to our call on {weekday}.', noDate, 'Bob'),
+      'Looking forward to our call.');
+    assert.strictEqual(
+      GB.renderTemplate('Hey {name}, see you at {time}.', noDate, 'Bob'),
+      'Hey Dana, see you.');
+    assert.strictEqual(
+      GB.renderTemplate("You're locked in for {date} at {time}.", noDate, 'Bob'),
+      "You're locked in.");
+  });
+
+  test('a preposition that belongs to the sentence is left alone', () => {
+    /* The reason this is done at substitution time rather than on the
+       finished string: afterwards "hopping on at ." and "locked in for ."
+       look identical — a preposition before a full stop — but "hopping on."
+       is correct and "locked in for." is not. An earlier attempt stripped
+       them afterwards and turned "You're locked in for Oct 4" into
+       "You're locked." */
+    assert.strictEqual(
+      GB.renderTemplate('Hey {name}, hopping on at {time}. Link below.', noDate, 'Bob'),
+      'Hey Dana, hopping on. Link below.');
+    assert.strictEqual(
+      GB.renderTemplate("You're locked in for {date}.", noDate, 'Bob'),
+      "You're locked in.");
+  });
+
+  test('nothing changes when there IS an appointment', () => {
+    const out = GB.renderTemplate("You're locked in for {date} at {time}.", soonCall, 'Bob');
+    assert.ok(/locked in for \w/.test(out), out);
+    assert.ok(/ at \d/.test(out), out);
+    assert.ok(!/ {2}/.test(out));
+  });
+
+  test('{when} carries its own preposition and says "soon" when nothing is booked', () => {
+    // The opt-in placeholder, for copy that has to read either way.
+    assert.strictEqual(
+      GB.renderTemplate('Looking forward to our call {when}.', noDate, 'Bob'),
+      'Looking forward to our call soon.');
+    const near = GB.renderTemplate('Looking forward to our call {when}.', soonCall, 'Bob');
+    assert.ok(/call on \w+day\.$/.test(near), 'a day name inside the week: ' + near);
+    const far = GB.renderTemplate('Looking forward to our call {when}.', farCall, 'Bob');
+    assert.ok(/call on \w+ \d+\.$/.test(far), 'a date beyond it: ' + far);
+  });
+
+  test('{date} never invents an appointment that does not exist', () => {
+    /* A welcome touch fires for a contact with NO call date — a manually
+       added lead. Substituting "soon" there would turn "You're locked in for
+       {date}" into "You're locked in soon", telling someone they have an
+       appointment they never booked. Saying nothing is recoverable; asserting
+       a booking is not. */
+    const out = GB.renderTemplate('Call is {date} at {time}, {weekday}.', noDate, 'Bob');
+    assert.ok(!/soon/.test(out), 'only {when} may say soon: ' + out);
+    const lead = GB.sanitizeClient({id: 'x', name: 'Pat', phone: '2135550100',
+      status: 'Booked', bookedDate: new Date(Date.now() - 86400000).toISOString()});
+    assert.ok(GB.computeDue(lead, new Date()).includes('welcome'),
+      'sanity: a dateless contact really does come due a welcome');
+  });
+
+  test('every built-in renders cleanly with no appointment at all', () => {
+    const v = GB.buildDefaultVariants();
+    const broken = [];
+    Object.keys(v).forEach(stage => v[stage].forEach(x => {
+      const out = GB.renderTemplate(x.text, noDate, 'Bob');
+      if (/ {2}/.test(out) || /\s[.,]/.test(out) || /\b(at|for)\s*[.,]/.test(out)) {
+        broken.push(stage + '/' + x.id + ': ' + out);
+      }
+    }));
+    assert.deepStrictEqual(broken, [], 'reads badly without an appointment:\n' + broken.join('\n'));
+  });
+}
+
 console.log('\n--- the morning list reads in an order ---');
 
 {
