@@ -41,6 +41,16 @@ create table if not exists public.email_library (
   -- email can hold what a text cannot.
   body text,
 
+  -- Optionally pinned to one of the five touches.
+  --
+  -- Sending a text is one tap: the message is written, you press send. Email
+  -- cost two extra clicks because every send went through a picker -- and in
+  -- practice the same email goes out for the same touch nearly every time.
+  -- Re-making a decision you have already made is the friction that stops a
+  -- channel being used. Pinned, the Email button opens this one directly.
+  -- Null is the normal case: an email sent whenever the moment calls for it.
+  touch text,
+
   -- Hand-ordered. The library reads as the order the business sells in, which
   -- alphabetical would destroy.
   sort_order integer not null default 0,

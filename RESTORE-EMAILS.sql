@@ -11,6 +11,11 @@
 -- Safe to run as many times as you like. Pure ASCII.
 -- ============================================================
 
+-- The table already exists in production, so the new column is added here
+-- rather than only in the migration. 'if not exists' makes it a no-op once
+-- it has run.
+alter table public.email_library add column if not exists touch text;
+
 do $do$
 declare
   target_user uuid;

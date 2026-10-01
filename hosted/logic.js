@@ -690,6 +690,19 @@ function sanitizeEmailDoc(raw, fallbackId){
     whenToSend: typeof raw.whenToSend === 'string' ? raw.whenToSend.trim() : '',
     subject: subject,
     body: body,
+    /* Optionally pinned to one of the five touches.
+
+       Sending a text is one tap: the message is already written, you press
+       send. Email cost two extra clicks, because every send went through a
+       picker. The picker exists because a library is a real choice — but in
+       practice the same email goes out for the same touch nearly every time,
+       and making someone re-make a decision they have already made is exactly
+       the friction that stops a channel being used.
+
+       Pin one here and the Email button on that touch opens it directly.
+       Leave it empty and the picker still appears, which is what you want for
+       a pricing breakdown that goes out whenever it is asked for. */
+    touch: (typeof raw.touch === 'string' && raw.touch) ? raw.touch : '',
     sortOrder: Number.isFinite(raw.sortOrder) ? raw.sortOrder : 0,
     archived: !!raw.archived,
     updatedAt: (typeof raw.updatedAt === 'string' && !isNaN(Date.parse(raw.updatedAt))) ? raw.updatedAt : nowISO()
@@ -753,6 +766,20 @@ function seedEmailLibrary(emailVariants){
   order.forEach(take);
   Object.keys(emailVariants || {}).forEach(take);
   return out.filter(Boolean);
+}
+
+/* The email pinned to a touch, if there is one.
+
+   First match in library order, so if two are pinned to the same touch the
+   one the business put first wins — a stable answer rather than whichever
+   the database returned. */
+function emailForTouch(state, stage){
+  if(!stage) return null;
+  var docs = emailLibrary(state);
+  for(var i = 0; i < docs.length; i++){
+    if(docs[i].touch === stage) return docs[i];
+  }
+  return null;
 }
 
 /* One library entry, filled in for a contact.
@@ -4061,7 +4088,7 @@ var __LOGIC_EXPORTS__ = {
   buildNotesPrompt: buildNotesPrompt, splitDraftedEmail: splitDraftedEmail,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
-  renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,
+  emailForTouch: emailForTouch,   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,
   exportFilename: exportFilename,
   buildDefaultState: buildDefaultState,
   sanitizeClient: sanitizeClient, sanitizeSnoozedUntil: sanitizeSnoozedUntil, migrateState: migrateState,

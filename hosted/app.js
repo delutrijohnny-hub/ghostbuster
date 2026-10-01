@@ -388,11 +388,31 @@ function buildTouchCard(client, stage, now){
      and the reply arrives where they already look. Offered whenever there is a
      usable address — unlike the provider route it does not depend on
      email_enabled, which is why email is usable today. */
-  if(canEmail(client)){
-    // A picker rather than a direct link now that email is a library: there is
-    // a real choice to make, and the timing note on each entry is what makes
-    // it. Only offered when there is something to pick.
-    if(emailLibrary(STATE).length){
+  if(canEmail(client) && emailLibrary(STATE).length){
+    /* One click when the answer is already known.
+
+       A text is one tap: the message is written, you press send. Email cost
+       two extra clicks because every send went through the picker — and in
+       practice the same email goes out for the same touch nearly every time.
+       Re-making a decision you have already made is the friction that stops
+       a channel getting used.
+
+       Pin an email to this touch in the Emails tab and the button becomes a
+       direct Gmail link, same as the text. Nothing pinned and it still opens
+       the picker, which is right for an email that goes out whenever it is
+       asked for rather than on a schedule. */
+    var pinned = emailForTouch(STATE, stage);
+    var pinnedDraft = pinned ? renderEmailDoc(STATE, pinned.id, client, STATE.senderName) : null;
+    if(pinnedDraft){
+      actions.appendChild(h('a',{class:'btn btn-sm', target:'_blank', rel:'noopener',
+        href: gmailComposeUrl(client.email, pinnedDraft.subject, pinnedDraft.text, businessEmailAccount(STATE)),
+        'data-action':'sent-by-email','data-cid':client.id,'data-doc':pinned.id,
+        title:'Opens Gmail with "' + pinned.title + '" written and ready'},['✉ Email']));
+      // Still reachable, for the day it is not the right one.
+      actions.appendChild(h('button',{class:'btn btn-sm btn-ghost',
+        'data-action':'pick-email','data-cid':client.id,
+        title:'Pick a different email'},['▾']));
+    } else {
       actions.appendChild(h('button',{class:'btn btn-sm',
         'data-action':'pick-email','data-cid':client.id,
         title:'Pick one of your emails, filled in for ' + client.name},['✉ Email']));
@@ -1246,6 +1266,20 @@ function renderEmailLibrary(){
         'In your own words. This is what you read when you are picking which email to send, so write it the way you would say it.'
       ]));
 
+      body.appendChild(h('label',{class:'lib-label'},['Send this one automatically for']));
+      var pinSel = h('select',{class:'lib-input','data-action':'set-email-doc','data-id':d.id,'data-field':'touch'},[]);
+      pinSel.appendChild(h('option',{value:''},['Nothing - I will pick it each time']));
+      TOUCH_LIST_ORDER.forEach(function(st){
+        var o = h('option',{value:st},[touchLabel(st)]);
+        if(d.touch === st) o.selected = true;
+        pinSel.appendChild(o);
+      });
+      body.appendChild(pinSel);
+      body.appendChild(h('div',{class:'lib-hint'},[
+        'Pinned to a touch, the Email button on that ' + termLower('contact') +
+        ' opens this one straight away - one click, like a text. Leave it unset for emails you send when the moment calls for it.'
+      ]));
+
       body.appendChild(h('label',{class:'lib-label'},['Subject line']));
       body.appendChild(h('input',{type:'text',class:'lib-input',
         'data-action':'set-email-doc','data-id':d.id,'data-field':'subject',
@@ -1303,7 +1337,9 @@ function openEmailPicker(client){
       ' data-action="sent-by-email" data-cid="' + escapeHtml(client.id) + '"' +
       ' data-doc="' + escapeHtml(d.id) + '">' +
       '<div class="pick-main">' +
-        '<strong>' + escapeHtml(d.title) + '</strong>' +
+        '<strong>' + escapeHtml(d.title) +
+          (d.touch ? ' <span class="pick-pin">' + escapeHtml(touchLabel(d.touch)) + '</span>' : '') +
+        '</strong>' +
         '<span class="pick-when">' + escapeHtml(d.whenToSend ? 'Send ' + d.whenToSend : 'No timing noted') + '</span>' +
         '<span class="pick-subj">' + escapeHtml(r.subject || '(no subject)') + '</span>' +
       '</div>' +

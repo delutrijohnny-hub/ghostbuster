@@ -107,7 +107,7 @@ async function loadState(){
     emailLibrary: (libRes.data || []).map(function(r){
       return {
         id: r.id, title: r.title, whenToSend: r.when_to_send || '',
-        subject: r.subject || '', body: r.body || '',
+        subject: r.subject || '', body: r.body || '', touch: r.touch || '',
         sortOrder: Number.isFinite(r.sort_order) ? r.sort_order : 0,
         archived: !!r.archived, updatedAt: r.updated_at
       };
@@ -248,7 +248,7 @@ async function loadState(){
       } else {
         state.emailLibrary = (libSeedRes.data || []).map(function(r){
           return {id: r.id, title: r.title, whenToSend: r.when_to_send || '',
-                  subject: r.subject || '', body: r.body || '',
+                  subject: r.subject || '', body: r.body || '', touch: r.touch || '',
                   sortOrder: Number.isFinite(r.sort_order) ? r.sort_order : 0,
                   archived: !!r.archived, updatedAt: r.updated_at};
         });
@@ -401,7 +401,7 @@ function rowEmailVariant(v, stage, uid){
 }
 function rowEmailDoc(d, uid){
   return {id: d.id, user_id: uid, title: d.title, when_to_send: d.whenToSend || '',
-          subject: d.subject || '', body: d.body || '',
+          subject: d.subject || '', body: d.body || '', touch: d.touch || null,
           sort_order: d.sortOrder, archived: !!d.archived};
 }
 function rowStat(s, stage, vk, uid){

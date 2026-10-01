@@ -2797,6 +2797,38 @@ test('an entry fills in for a contact, with the same placeholders as everything 
   assert.ok(!r.subject.includes('{time}'), 'the subject must be rendered too');
 });
 
+test('an email pinned to a touch is what that touch sends', () => {
+  /* Sending a text is one tap. Email cost two extra clicks because every send
+     went through the picker, and in practice the same email goes out for the
+     same touch nearly every time. Re-making a decision you have already made
+     is the friction that stops a channel being used. */
+  const state = {emailLibrary: [
+    {id: 'a', title: 'Pricing breakdown', body: 'x', sortOrder: 0},
+    {id: 'b', title: 'Day of', body: 'y', touch: 'dayof', sortOrder: 10},
+  ]};
+  assert.strictEqual(GB.emailForTouch(state, 'dayof').title, 'Day of');
+  assert.strictEqual(GB.emailForTouch(state, 'welcome'), null,
+    'an unpinned touch must fall back to the picker, not to an arbitrary email');
+  assert.strictEqual(GB.emailForTouch(state, ''), null);
+  assert.strictEqual(GB.emailForTouch({emailLibrary: []}, 'dayof'), null);
+});
+
+test('two emails pinned to one touch resolve the same way every time', () => {
+  // Library order decides, so the answer is stable rather than whichever row
+  // the database happened to return first.
+  const state = {emailLibrary: [
+    {id: 'b', title: 'Second', body: 'y', touch: 'dayof', sortOrder: 20},
+    {id: 'a', title: 'First', body: 'x', touch: 'dayof', sortOrder: 10},
+  ]};
+  assert.strictEqual(GB.emailForTouch(state, 'dayof').title, 'First');
+});
+
+test('the pin survives a round trip through the sanitizer', () => {
+  assert.strictEqual(GB.sanitizeEmailDoc({title: 'x', body: 'y', touch: 'dayof'}).touch, 'dayof');
+  assert.strictEqual(GB.sanitizeEmailDoc({title: 'x', body: 'y'}).touch, '');
+  assert.strictEqual(GB.sanitizeEmailDoc({title: 'x', body: 'y', touch: 42}).touch, '');
+});
+
 test('a deleted entry renders as nothing, not as a blank email', () => {
   // So the caller can say "that email is gone" instead of opening an empty
   // compose window addressed to a real client.
