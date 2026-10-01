@@ -1250,32 +1250,31 @@ function renderEmailLibrary(){
     if(open){
       var body = h('div',{class:'lib-doc-body'},[]);
 
-      body.appendChild(h('label',{class:'lib-label'},['What is this email?']));
-      body.appendChild(h('input',{type:'text',class:'lib-input',
-        'data-action':'set-email-doc','data-id':d.id,'data-field':'title',
-        value: d.title, placeholder:'e.g. Pricing breakdown'}));
+      /* Name and timing side by side, then the email itself.
 
-      body.appendChild(h('label',{class:'lib-label'},['When should it go out?']));
-      body.appendChild(h('input',{type:'text',class:'lib-input',
-        'data-action':'set-email-doc','data-id':d.id,'data-field':'whenToSend',
-        value: d.whenToSend,
-        placeholder:'e.g. after they ask what it costs'}));
+         These were six stacked fields with a paragraph of help under two of
+         them, which reads as a form to be filled in rather than a thing to be
+         written. The two short ones pair up, their help shrinks to one line,
+         and the subject and body -- the only parts that are actually the
+         email -- get the room. */
+      var meta = h('div',{class:'lib-meta'},[]);
+      var nameCol = h('div',{},[
+        h('label',{class:'lib-label'},['Name it']),
+        h('input',{type:'text',class:'lib-input',
+          'data-action':'set-email-doc','data-id':d.id,'data-field':'title',
+          value: d.title, placeholder:'e.g. Pricing breakdown'})
+      ]);
+      var whenCol = h('div',{},[
+        h('label',{class:'lib-label'},['When it goes out']),
+        h('input',{type:'text',class:'lib-input',
+          'data-action':'set-email-doc','data-id':d.id,'data-field':'whenToSend',
+          value: d.whenToSend, placeholder:'e.g. after they ask what it costs'})
+      ]);
+      meta.appendChild(nameCol);
+      meta.appendChild(whenCol);
+      body.appendChild(meta);
       body.appendChild(h('div',{class:'lib-hint'},[
-        'In your own words. This is what you read when you are picking which email to send, so write it the way you would say it.'
-      ]));
-
-      body.appendChild(h('label',{class:'lib-label'},['Send this one automatically for']));
-      var pinSel = h('select',{class:'lib-input','data-action':'set-email-doc','data-id':d.id,'data-field':'touch'},[]);
-      pinSel.appendChild(h('option',{value:''},['Nothing - I will pick it each time']));
-      TOUCH_LIST_ORDER.forEach(function(st){
-        var o = h('option',{value:st},[touchLabel(st)]);
-        if(d.touch === st) o.selected = true;
-        pinSel.appendChild(o);
-      });
-      body.appendChild(pinSel);
-      body.appendChild(h('div',{class:'lib-hint'},[
-        'Pinned to a touch, the Email button on that ' + termLower('contact') +
-        ' opens this one straight away - one click, like a text. Leave it unset for emails you send when the moment calls for it.'
+        'In your own words - this is what you read when picking which to send.'
       ]));
 
       body.appendChild(h('label',{class:'lib-label'},['Subject line']));
@@ -1338,16 +1337,28 @@ function renderEmailLibrary(){
       }
       body.appendChild(pv);
 
+      var pinRow = h('div',{class:'lib-pinrow'},[
+        h('span',{class:'lib-pinlabel'},['Send automatically for'])
+      ]);
+      var pinSel = h('select',{class:'lib-pin','data-action':'set-email-doc','data-id':d.id,'data-field':'touch'},[]);
+      pinSel.appendChild(h('option',{value:''},['nothing - I pick it each time']));
+      TOUCH_LIST_ORDER.forEach(function(st){
+        var o = h('option',{value:st},[touchLabel(st)]);
+        if(d.touch === st) o.selected = true;
+        pinSel.appendChild(o);
+      });
+      pinRow.appendChild(pinSel);
+      body.appendChild(pinRow);
+
       body.appendChild(h('div',{class:'lib-foot'},[
         h('span',{class:'lib-tokens'},[
-          'Fills in automatically: {name} {sender} {when} {date} {time} {weekday} {link}'
+          'Fills in: {name} {sender} {when} {date} {time} {link}'
         ]),
         h('div',{class:'lib-foot-actions'},[
           h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-download','data-id':d.id},['Download']),
           h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'up'},['↑']),
           h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'down'},['↓']),
-          h('button',{class:'btn btn-sm btn-ghost danger','data-action':'email-doc-delete','data-id':d.id},['Delete']),
-          h('button',{class:'btn btn-sm btn-green','data-action':'email-doc-save','data-id':d.id},['Save'])
+          h('button',{class:'btn btn-sm btn-ghost danger','data-action':'email-doc-delete','data-id':d.id},['Delete'])
         ])
       ]));
       card.appendChild(body);
@@ -2890,15 +2901,6 @@ document.addEventListener('click', function(ev){
       renderEmailLibrary();
       break;
     }
-    case 'email-doc-save': {
-      var sdoc = findEmailDoc(target.getAttribute('data-id'));
-      if(sdoc) sdoc.updatedAt = new Date().toISOString();
-      saveState(STATE);
-      LIB_OPEN = null;
-      renderEmailLibrary();
-      showToast('Saved.');
-      break;
-    }
     case 'email-doc-delete': {
       var ddoc = findEmailDoc(target.getAttribute('data-id'));
       if(!ddoc) break;
@@ -3217,6 +3219,27 @@ document.addEventListener('change', function(ev){
     el('epsilon-val').textContent = STATE.epsilon.toFixed(2);
   }
   if(t.id === 'f-tz'){ t.setAttribute('data-touched', '1'); }
+  /* An edited email saves itself when you leave the field.
+
+     Everything else in the app works this way -- a contact's notes, its
+     recap, its phone number. The library alone required pressing Save, so
+     editing an email and clicking away lost the edit silently. That is both
+     friction and a data loss, and the inconsistency is its own problem:
+     having learned that typing is enough everywhere else, nobody goes
+     looking for a button here.
+
+     On change rather than on input, so it saves when you leave a field
+     instead of on every keystroke. */
+  if(t.getAttribute && t.getAttribute('data-action') === 'set-email-doc'){
+    var edoc = findEmailDoc(t.getAttribute('data-id'));
+    if(edoc){
+      edoc[t.getAttribute('data-field')] = t.value;
+      edoc.updatedAt = new Date().toISOString();
+      saveState(STATE);
+      renderEmailLibrary();
+    }
+    return;
+  }
   if(t.getAttribute && t.getAttribute('data-action') === 'save-client-field'){
     var cid2 = t.getAttribute('data-cid'), field = t.getAttribute('data-field');
     var c = STATE.clients[cid2];

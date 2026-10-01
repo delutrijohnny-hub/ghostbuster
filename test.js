@@ -2854,6 +2854,30 @@ test('an entry fills in for a contact, with the same placeholders as everything 
   assert.ok(!r.subject.includes('{time}'), 'the subject must be rendered too');
 });
 
+test('editing an email saves itself, like every other field in the app', () => {
+  /* Contacts' notes, recap and phone all save when you leave the field. The
+     library alone required pressing Save, so editing an email and clicking
+     away lost it silently. The inconsistency is its own problem: having
+     learned that typing is enough everywhere else, nobody goes looking for a
+     button here. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const changeStart = app.indexOf("document.addEventListener('change'");
+  const inputStart = app.indexOf("document.addEventListener('input'");
+  assert.ok(changeStart !== -1 && inputStart > changeStart, 'listeners not where expected');
+  const changeBlock = app.slice(changeStart, inputStart);
+
+  assert.ok(changeBlock.includes("'set-email-doc'"),
+    'an email edit must be handled on change, so it saves when you leave the field');
+  const handler = changeBlock.slice(changeBlock.indexOf("'set-email-doc'"));
+  assert.ok(/saveState\(STATE\)/.test(handler.slice(0, 500)),
+    'and it must actually save');
+
+  // The Save button is gone, because leaving it implies the other fields do
+  // not save themselves.
+  assert.ok(!app.includes("'email-doc-save'"),
+    'the explicit Save button should be gone now that editing autosaves');
+});
+
 test('previewing an email neither sends it nor logs it', () => {
   /* The Gmail button opens a draft and sends nothing, but it logs the send
      the moment it is clicked -- so clicking it just to look would record an
