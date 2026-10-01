@@ -571,29 +571,6 @@ td.score-cell{width:1%;white-space:nowrap;}
 .tf-chip.recovery.on,.tf-chip.revival.on{background:var(--amber);border-color:var(--amber);color:#fff;}
 @media (max-width:560px){ .tf-chip{flex:1 1 calc(50% - 3px);justify-content:center;} }
 
-/* Heading between runs of the same kind of message on the Today list.
-
-   Built from the pill language the cards already use rather than a new one,
-   and tinted by stage so the colour says "these are the cold ones" before the
-   words are read. Warm green to open the list, amber for the chasing, red for
-   a missed call — the same three meanings those colours carry everywhere else
-   in the app. */
-.touch-group{margin:20px 0 9px;}
-.touch-group:first-child{margin-top:2px;}
-.touch-group-chip{display:inline-flex;align-items:center;gap:7px;
-  font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;
-  padding:4px 11px;border-radius:99px;
-  background:var(--bg);color:var(--ink-soft);border:1px solid var(--border);}
-.touch-group-chip b{font-weight:800;opacity:.6;}
-/* A first hello, and the two kinds of "we're back on". */
-.touch-group-chip.welcome,
-.touch-group-chip.rebooked,
-.touch-group-chip.followup{background:var(--green-soft);color:var(--green);border-color:transparent;}
-/* They missed it. */
-.touch-group-chip.noshow{background:var(--red-soft);color:var(--red-dark);border-color:transparent;}
-/* The cold chasing. */
-.touch-group-chip.recovery,
-.touch-group-chip.revival{background:var(--amber-soft);color:var(--amber);border-color:transparent;}
 /* Phone layout for the library, the picker and the calendar notice.
 
    Reasoned from the widths rather than eyeballed, because a local file cannot

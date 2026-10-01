@@ -613,20 +613,18 @@ function renderCallsBoard(){
         : buildBustedPanel());
     }
 
-    var lastStage = null;
-    shown.forEach(function(it, i){
-      // With a filter on, every card is the same kind and the button above
-      // already says which, so a heading would only repeat it.
-      if(!UI.touchFilter && it.stage !== lastStage){
-        var runLength = 0;
-        for(var j = i; j < shown.length && shown[j].stage === it.stage; j++) runLength++;
-        todayCol.appendChild(h('div',{class:'touch-group'},[
-          h('span',{class:'touch-group-chip ' + it.stage},[
-            touchLabel(it.stage), h('b',{},[String(runLength)])
-          ])
-        ]));
-        lastStage = it.stage;
-      }
+    /* No headings between the cards at all now.
+
+       They were the first attempt at grouping and the buttons replaced them.
+       Keeping both meant the list was divided twice over -- once by a row you
+       choose from and again by dividers you did not -- and the dividers break
+       the column exactly where you are reading down it.
+
+       The buttons are the grouping. Pick the kind you are ready to work and
+       the list is only that; leave it on All and the order still runs
+       welcomes first through the cold chasing last, without anything cutting
+       across it. */
+    shown.forEach(function(it){
       todayCol.appendChild(buildTouchCard(it.client, it.stage, now));
     });
   }

@@ -2023,24 +2023,31 @@ console.log('\n--- the morning list reads in an order ---');
     assert.strictEqual(items[1].stage, 'second_visit');
   });
 
-  test('the heading is tinted by what the group means, not per stage name', () => {
+  test('the filter buttons are tinted by what the group means, not per stage name', () => {
     /* Three meanings, reusing the colours the rest of the app already uses:
        green to open, red for a missed call, amber for the cold chasing.
-       Tying the class to the stage key means a stage with no colour falls
-       back to the neutral chip rather than being invisible. */
+
+       This assertion used to point at the inline headings. Those are gone --
+       the buttons replaced them and keeping both divided the list twice over
+       -- so it follows the behaviour to where it now lives rather than being
+       deleted along with the markup it happened to name. */
     const styles = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
     ['welcome', 'rebooked', 'followup'].forEach(st =>
-      assert.ok(styles.includes('.touch-group-chip.' + st), st + ' should be tinted'));
-    assert.ok(/\.touch-group-chip\.noshow\{[^}]*red/.test(styles), 'a missed call should read red');
-    assert.ok(/\.touch-group-chip\.recovery,[\s\S]{0,60}revival\{[^}]*amber/.test(styles),
+      assert.ok(styles.includes('.tf-chip.' + st + '.on'), st + ' should be tinted'));
+    assert.ok(/\.tf-chip\.noshow\.on\{[^}]*red/.test(styles), 'a missed call should read red');
+    assert.ok(/\.tf-chip\.recovery\.on,[\s\S]{0,60}revival\.on\{[^}]*amber/.test(styles),
       'the cold chasing should read amber');
     // The neutral default has to exist, or an untinted stage has no chip at all.
-    assert.ok(/\.touch-group-chip\{[^}]*background/.test(styles));
+    assert.ok(/\.tf-chip\{[^}]*background/.test(styles));
+    // And nothing should still be rendering the old headings.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(!/touch-group/.test(app),
+      'the inline headings should be gone, not merely hidden');
   });
 
-  test('every stage the list can produce gets a readable heading', () => {
+  test('every stage the list can produce gets a readable label', () => {
     // The card chip used to print the raw key, so it read "midcheckin". The
-    // heading replaced it, which only works if the heading is readable.
+    // filter button replaced it, which only works if the label is readable.
     GB.TOUCH_LIST_ORDER.forEach(st => {
       const label = GB.touchLabel(st);
       assert.ok(label && label !== st, st + ' has no readable label: ' + label);
