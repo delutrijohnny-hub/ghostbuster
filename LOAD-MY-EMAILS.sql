@@ -25,7 +25,7 @@ begin
   insert into public.email_library (user_id, org_id, title, when_to_send, subject, body, sort_order)
   select target_user, target_org, v.title, v.when_to_send, v.subject, v.body, v.sort_order
   from (values
-  ($body$Before the call — what we do$body$, $body$after they book, a day or two before the call$body$, $body$Excited to chat {date} — a few examples inside$body$, $body$Hey {name},
+  ($body$Before the call - what we do$body$, $body$after they book, a day or two before the call$body$, $body$Excited to chat {date} - a few examples inside$body$, $body$Hey {name},
 
 Thanks again for taking the time to connect. Looking forward to our call on {weekday}.
 
@@ -49,19 +49,19 @@ https://www.youtube.com/@Tatlondonolive/shorts
 
 See you {weekday},
 {sender}$body$, 0),
-  ($body$Post-call recap$body$, $body$the same day as the call, while it is fresh$body$, $body$Great talking with you — here's what I think we can build$body$, $body$Hi {name},
+  ($body$Post-call recap$body$, $body$the same day as the call, while it is fresh$body$, $body$Great talking with you - here's what I think we can build$body$, $body$Hi {name},
 
 Great connecting with you today and diving deeper into your channel goals. I know you've got a strong setup and vision already, but it's our team's job to make sure the editing, optimization, and consistency side doesn't hold you back. That way you can focus on creating while still getting the views, leads, and ROI you want from YouTube.
 
 What we talked about:
 
-Branding — a strong visual identity. Custom banner, consistent thumbnail style, clear fonts and colours that align with your personal brand.
+Branding - a strong visual identity. Custom banner, consistent thumbnail style, clear fonts and colours that align with your personal brand.
 
-Thumbnails — eye-catching, high-conversion thumbnails that tell a story and boost click-through rates.
+Thumbnails - eye-catching, high-conversion thumbnails that tell a story and boost click-through rates.
 
-Editing — clean, modern editing that emphasises your insights, removes filler, and adds visual elements like maps, stats and B-roll.
+Editing - clean, modern editing that emphasises your insights, removes filler, and adds visual elements like maps, stats and B-roll.
 
-Short-form clips — new cuts, or your long-form videos cut into high-performing Shorts, Reels and TikToks to build reach and engagement.
+Short-form clips - new cuts, or your long-form videos cut into high-performing Shorts, Reels and TikToks to build reach and engagement.
 
 I've attached links to a variety of our clients' YouTube channels. You'll see a mix of different people here, some realtors, some not. For certain clients we mainly focus on long-form content, while for others we primarily post on short-form. Some are just getting started with under 500 subscribers, while others have grown past 200,000. This should give you a sense of the range of work we do and how we tailor our approach to each client.
 
@@ -103,7 +103,7 @@ If you have any questions, or want to see more or different types of channels we
 
 Best,
 {sender}$body$, 20),
-  ($body$Onboarding — payment and channel access$body$, $body$as soon as they say yes$body$, $body$Let's get started — onboarding details inside$body$, $body$Hi {name},
+  ($body$Onboarding - payment and channel access$body$, $body$as soon as they say yes$body$, $body$Let's get started - onboarding details inside$body$, $body$Hi {name},
 
 It was great to meet with you! I'm really excited to work together. Below are the next steps to move forward.
 
@@ -111,7 +111,7 @@ Here is the payment link for our services:
 
 [PASTE THE RIGHT PACKAGE LINK HERE]
 
-Once you've paid, we'll need to be added as a manager of the channel. Here's how: on your desktop, go to your YouTube channel and click your profile picture in the top right. In the dropdown, select "YouTube Studio". Look on the left for options like Content and Dashboard, then scroll to the bottom left and find the "Settings" tab. Click it and a pop-up will appear. Go to the "Permissions" tab, and from there you can add us as a manager. Enter this email — youtubemanager@marketmakermgmt.com — and click save.
+Once you've paid, we'll need to be added as a manager of the channel. Here's how: on your desktop, go to your YouTube channel and click your profile picture in the top right. In the dropdown, select "YouTube Studio". Look on the left for options like Content and Dashboard, then scroll to the bottom left and find the "Settings" tab. Click it and a pop-up will appear. Go to the "Permissions" tab, and from there you can add us as a manager. Enter this email - youtubemanager@marketmakermgmt.com - and click save.
 
 If you run into any issues, let me know.
 
@@ -121,7 +121,7 @@ As soon as these steps are done, please pick the time that works best for our in
 
 Best regards,
 {sender}$body$, 30),
-  ($body$Payment received — questionnaire$body$, $body$once their payment clears$body$, $body$Excited to begin our partnership$body$, $body$Hi {name},
+  ($body$Payment received - questionnaire$body$, $body$once their payment clears$body$, $body$Excited to begin our partnership$body$, $body$Hi {name},
 
 I wanted to personally confirm that we've received your payment. We're thrilled to have you on board and eager to begin building a YouTube presence that reflects the strength of your brand.
 
@@ -133,7 +133,7 @@ Thank you again for your trust in us. We're excited to collaborate and can't wai
 
 Warm regards,
 {sender}$body$, 40),
-  ($body$Missed the call — easy reschedule$body$, $body$when they no-show and you want to make it easy$body$, $body$Let's reschedule your appointment$body$, $body$Hi {name},
+  ($body$Missed the call - easy reschedule$body$, $body$when they no-show and you want to make it easy$body$, $body$Let's reschedule your appointment$body$, $body$Hi {name},
 
 I noticed we missed each other for our scheduled appointment to review your YouTube channel. I completely understand how busy things can get, and I'd still love the chance to connect with you.
 
@@ -145,9 +145,9 @@ Looking forward to speaking with you soon!
 
 Best,
 {sender}$body$, 50),
-  ($body$Missed the call — the direct one$body$, $body$when they no-show and you want to be straight about it$body$, $body$Missed appointment — I take these seriously$body$, $body$Hey {name},
+  ($body$Missed the call - the direct one$body$, $body$when they no-show and you want to be straight about it$body$, $body$Missed appointment - I take these seriously$body$, $body$Hey {name},
 
-I wanted to follow up because we had an appointment scheduled earlier, and I didn't see you on the call. I completely understand that clients, family, or unexpected issues come up — that's part of life and business.
+I wanted to follow up because we had an appointment scheduled earlier, and I didn't see you on the call. I completely understand that clients, family, or unexpected issues come up - that's part of life and business.
 
 That said, when you book a call with me or my assistant, I personally block off that time to focus on your channel strategy. I don't overbook or double-stack calls because I take these meetings seriously, whether you decide to work with us or not. I value professionalism and respect for each other's time.
 
@@ -163,9 +163,9 @@ Appreciate your understanding,
 
 It was a pleasure speaking with you, and I'm looking forward to hopefully speaking again soon.
 
-I'm going to be completely honest — this has nothing to do with real estate or avocados. I just figured if I'm lucky enough to earn 15 seconds of your attention, like I did with the call, I'd better use it to show I'm not like the 17 other sales emails you're getting today.
+I'm going to be completely honest - this has nothing to do with real estate or avocados. I just figured if I'm lucky enough to earn 15 seconds of your attention, like I did with the call, I'd better use it to show I'm not like the 17 other sales emails you're getting today.
 
-Honestly {name}, when I checked out your channel, I really liked your energy. I just think with a little help we could tighten things up and make everything hit harder. I'd start with the branding — locking in colours and fonts that show up everywhere, from the banner to the thumbnails — and then bring that same feel into the editing. I also noticed you're not using any short-form content yet. I love using it to get quick attention and then funnel people into your longer videos where you can really build connection and trust.
+Honestly {name}, when I checked out your channel, I really liked your energy. I just think with a little help we could tighten things up and make everything hit harder. I'd start with the branding - locking in colours and fonts that show up everywhere, from the banner to the thumbnails - and then bring that same feel into the editing. I also noticed you're not using any short-form content yet. I love using it to get quick attention and then funnel people into your longer videos where you can really build connection and trust.
 
 I've attached links to a variety of our clients' YouTube channels. You'll see a mix of different people here, some realtors, some not. For certain clients we mainly focus on long-form content, while for others we primarily post on short-form. Some are just getting started with under 500 subscribers, while others have grown past 200,000. This should give you a sense of the range of work we do and how we tailor our approach to each client.
 
@@ -185,7 +185,7 @@ If you have any questions, or want to see more or different types of channels, l
 
 Best,
 {sender}$body$, 70),
-  ($body$Not a fit — but they know someone$body$, $body$when they are not a fit themselves but offered to pass it on$body$, $body$For anyone you think might benefit$body$, $body$Hi {name},
+  ($body$Not a fit - but they know someone$body$, $body$when they are not a fit themselves but offered to pass it on$body$, $body$For anyone you think might benefit$body$, $body$Hi {name},
 
 It was such a pleasure speaking with you earlier. I'm so glad you liked the idea of using YouTube, and I appreciate you thinking of others who might benefit from this kind of visibility.
 
@@ -197,7 +197,7 @@ Short-form clips for Instagram, Facebook and other platforms
 
 An automated posting schedule, so they're always top-of-mind without extra work
 
-Our goal is to make it easy, consistent and hands-off — so they can focus on their business while we handle the marketing side. If anyone you know would like to see how this might work for them, I'd be happy to offer a quick call or send over examples of what we do.
+Our goal is to make it easy, consistent and hands-off - so they can focus on their business while we handle the marketing side. If anyone you know would like to see how this might work for them, I'd be happy to offer a quick call or send over examples of what we do.
 
 Thank you again for your time, and for thinking of us.
 
