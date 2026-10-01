@@ -1676,6 +1676,98 @@ function codeOnly(src){
   return out;
 }
 
+console.log('\n--- drafting from the notes of a call that just happened ---');
+
+{
+  const client = GB.sanitizeClient({id: 'c', name: 'Dana Reed', phone: '2135550100'});
+  const notes = 'Posting monthly, wants weekly. Budget ~800. Decides Friday.';
+
+  test('the notes are the source, and the model is told not to go beyond them', () => {
+    /* Notes are shorthand. A model filling gaps in shorthand produces
+       confident sentences about things that were never said — which the
+       customer then reads and corrects, or worse, believes. */
+    const p = GB.buildNotesPrompt({client, notes, channel: 'email', senderName: 'Johnny'});
+    assert.ok(p.includes(notes), 'the notes must actually be in the prompt');
+    assert.ok(/do not invent/i.test(p), 'the model must be told not to invent');
+    assert.ok(/shorter message rather than filling the gap/i.test(p),
+      'and told what to do instead when the notes are thin');
+  });
+
+  test('it writes in the business own voice, not in software voice', () => {
+    const p = GB.buildNotesPrompt({client, notes, channel: 'email', senderName: 'Johnny',
+      examples: ['Hey {name}, great connecting today. Here is what I think we can build.']});
+    assert.ok(p.includes('great connecting today'), 'examples must reach the prompt');
+  });
+
+  test('a text and an email are asked for differently', () => {
+    const sms = GB.buildNotesPrompt({client, notes, channel: 'sms', senderName: 'Johnny'});
+    const email = GB.buildNotesPrompt({client, notes, channel: 'email', senderName: 'Johnny'});
+    assert.ok(/lock screen/i.test(sms), 'a text should be asked to be short');
+    assert.ok(/no subject line/i.test(sms), 'and to skip the subject');
+    assert.ok(/Subject: /.test(email), 'an email should be asked for a subject line');
+  });
+
+  test('a drafted email splits into subject and body', () => {
+    const d = GB.splitDraftedEmail('Subject: Great talking today\n\nHi Dana,\n\nHere is the plan.');
+    assert.strictEqual(d.subject, 'Great talking today');
+    assert.ok(d.text.startsWith('Hi Dana,'));
+  });
+
+  test('a draft with no subject line becomes all body, never a paragraph in the subject', () => {
+    // A paragraph in the subject field is a far more visible failure than a
+    // missing subject, so the first line is never silently promoted.
+    const d = GB.splitDraftedEmail('Hi Dana,\n\nGreat talking today about the weekly cadence.');
+    assert.strictEqual(d.subject, '');
+    assert.ok(d.text.startsWith('Hi Dana,'));
+  });
+
+  test('empty notes produce a prompt rather than throwing', () => {
+    const p = GB.buildNotesPrompt({client, notes: '', channel: 'email'});
+    assert.ok(typeof p === 'string' && p.length > 0);
+    assert.strictEqual(GB.splitDraftedEmail('').text, '');
+    assert.strictEqual(GB.splitDraftedEmail(null).text, '');
+  });
+
+  test('a draft sent from the panel is still logged as contact', () => {
+    /* 'notes-draft' is not a library document id, so renderEmailDoc returns
+       null for it. Left alone, the send would never be recorded — and an
+       unlogged email is one the automated side does not know about, so a text
+       could go out on top of it the same afternoon. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const block = app.slice(app.indexOf("case 'sent-by-email'"), app.indexOf("case 'pick-email'"));
+    assert.ok(/notes-draft/.test(block),
+      'the sent-by-email handler does not recognise a notes draft, so it would not log it');
+    assert.ok(/NOTES_PANEL\.draft/.test(block),
+      'and it should take the text from the panel, which already has it rendered');
+  });
+
+  test('the panel renders, empty and with a draft', () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      STATE.senderName = 'Johnny';
+      STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana Reed', phone:'2135550100',
+        email:'dana@example.com', timezone:'America/New_York', status:'Booked',
+        callDateTime: new Date(Date.now() - 3600000).toISOString()});
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+      'the panel must render before anything is chosen');
+
+    vm.runInContext(`
+      NOTES_PANEL.cid = 'c1';
+      NOTES_PANEL.notes = 'Wants weekly. Budget 800.';
+      NOTES_PANEL.draft = {channel:'email', subject:'Great talking', text:'Hi Dana,'};
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+      'and with a draft on screen');
+
+    // A contact with no email address must not be offered an Open in Gmail
+    // button that cannot work.
+    vm.runInContext("STATE.clients['c1'].email = '';", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx));
+  });
+}
+
 console.log('\n--- a message with no appointment on it still reads like English ---');
 
 {

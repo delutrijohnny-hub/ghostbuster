@@ -929,6 +929,70 @@ function describeCalendarHealth(health){
   };
 }
 
+
+/* Draft a follow-up from what was actually said on the call.
+
+   The existing AI drafting rewrites one cadence touch in the business's
+   voice. This is a different job: the input is a page of notes from a call
+   that just happened, and the output has to be specific to that conversation
+   — the thing a generic template can never be.
+
+   Built here rather than in the render layer so it can be tested. The voice
+   examples are the business's OWN messages, which is what stops the model
+   writing like software: for email that is the library, for text the
+   variants. Without them the model reverts to the register of every sales
+   email ever written, which is the one thing nobody answers.
+
+   Explicitly forbidden from inventing: notes are shorthand, and a model
+   filling gaps in shorthand produces confident sentences about things that
+   were never said — which the customer then reads and corrects, or worse,
+   believes. */
+function buildNotesPrompt(opts){
+  opts = opts || {};
+  var client = opts.client || {};
+  var notes = String(opts.notes || '').trim();
+  var channel = opts.channel === 'sms' ? 'sms' : 'email';
+  var sender = opts.senderName || 'the sender';
+  var examples = (opts.examples || []).filter(function(t){ return (t || '').trim(); }).slice(0, 3);
+
+  var lines = [];
+  lines.push(channel === 'sms'
+    ? 'Draft ONE short follow-up text message for ' + sender + ' to send to ' +
+      firstName(client.name || 'them') + ' after a call that has just happened.'
+    : 'Draft ONE follow-up email for ' + sender + ' to send to ' +
+      firstName(client.name || 'them') + ' after a call that has just happened.');
+
+  lines.push('These are ' + sender + "'s notes from that call. Everything in the message must come from them:");
+  lines.push(notes);
+
+  if(examples.length){
+    lines.push("Match " + sender + "'s voice, shown in messages they actually send:");
+    lines.push(examples.map(function(t){ return '- "' + t.replace(/\s+/g, ' ').slice(0, 400) + '"'; }).join('\n'));
+  }
+
+  lines.push(channel === 'sms'
+    ? 'Short enough to read on a lock screen. Casual and warm, the way a person texts. No subject line, no greeting block, no sign-off beyond a name if the examples use one.'
+    : 'Open with one line that shows you were listening, then the substance, then a clear next step. No corporate phrasing. Start with a subject line on its own first line, prefixed exactly "Subject: ", then a blank line, then the email.');
+
+  lines.push('Use only what is in the notes. Do not invent details, numbers, promises, dates or names that are not there — if the notes are thin, write a shorter message rather than filling the gap.');
+  lines.push('Output only the message itself. No preamble, no explanation, no quotes around it.');
+
+  return lines.join('\n\n');
+}
+
+/* Split "Subject: ...\n\nbody" into its two halves.
+
+   The model is asked for that shape, and mostly obliges. When it does not,
+   the whole thing becomes the body rather than the first line being silently
+   promoted into a subject line — a paragraph in the subject field is a far
+   more visible failure than a missing one. */
+function splitDraftedEmail(text){
+  var raw = String(text || '').trim();
+  var m = raw.match(/^subject:\s*(.+?)\s*\n([\s\S]*)$/i);
+  if(!m) return {subject: '', text: raw};
+  return {subject: m[1].trim(), text: m[2].trim()};
+}
+
 function buildDefaultState(){
   var variants = buildDefaultVariants();
   var variantStats = {};
@@ -3994,6 +4058,7 @@ var __LOGIC_EXPORTS__ = {
   STALE_AFTER_HOURS: STALE_AFTER_HOURS,
   TOUCH_LIST_ORDER: TOUCH_LIST_ORDER, touchListRank: touchListRank, byTouchOrder: byTouchOrder,
   tidyTemplate: tidyTemplate,
+  buildNotesPrompt: buildNotesPrompt, splitDraftedEmail: splitDraftedEmail,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,

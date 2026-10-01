@@ -1061,10 +1061,111 @@ function renderDeadTab(){
 
    Downloadable, because copy a business wrote should not be trapped in
    someone else's web app. */
+/* From a call you just had, to a message that mentions it.
+
+   The gap this closes: a recap email is only worth sending if it says what
+   was actually discussed, and typing that out per contact is the work nobody
+   does. Notes already exist — in Granola, in a notebook, in your head on the
+   drive back — so the job is to get them into the contact and let them drive
+   the message.
+
+   Saving and drafting are separate buttons on purpose. The notes are worth
+   keeping on the contact whether or not a draft gets written: they feed the
+   recap email's {recap}, the AI text drafting, and the next person who opens
+   that contact in six months. */
+var NOTES_PANEL = {cid: '', notes: '', draft: null, channel: 'email', busy: false};
+
+function recentContactsForNotes(){
+  // Whoever you have most likely just spoken to: calls nearest to now first,
+  // past or future, since notes get written straight after a call.
+  var now = Date.now();
+  return Object.keys(STATE.clients)
+    .map(function(k){ return STATE.clients[k]; })
+    .filter(function(c){ return !c.ignored && c.callDateTime; })
+    .sort(function(a, b){
+      return Math.abs(Date.parse(a.callDateTime) - now) - Math.abs(Date.parse(b.callDateTime) - now);
+    })
+    .slice(0, 60);
+}
+
+function renderNotesPanel(box){
+  var wrap = h('div',{class:'np'},[]);
+
+  wrap.appendChild(h('div',{class:'np-head'},[
+    h('h3',{},['Draft from your call notes']),
+    h('span',{class:'hint'},[
+      'Paste what came out of the call. It saves to the ' + termLower('contact') +
+      ' and writes a follow-up that actually mentions it.'
+    ])
+  ]));
+
+  var picker = h('select',{class:'np-select','data-action':'np-client'},[]);
+  picker.appendChild(h('option',{value:''},['Choose a ' + termLower('contact') + '...']));
+  recentContactsForNotes().forEach(function(c){
+    var d = safeDate(c.callDateTime);
+    var opt = h('option',{value:c.id},[c.name + (d ? '  -  ' + fmtDate(d, c.timezone) : '')]);
+    if(c.id === NOTES_PANEL.cid) opt.selected = true;
+    picker.appendChild(opt);
+  });
+  wrap.appendChild(picker);
+
+  wrap.appendChild(h('textarea',{class:'np-notes',rows:'6','data-action':'np-notes',
+    placeholder:'Posting once a month, wants weekly. Likes the short-form idea. Budget around 800. Decides Friday.'},
+    [NOTES_PANEL.notes]));
+
+  var acts = h('div',{class:'np-acts'},[]);
+  var ready = !!(NOTES_PANEL.cid && NOTES_PANEL.notes.trim());
+  function btn(action, label, cls){
+    var b = h('button',{class:'btn btn-sm ' + (cls||''),'data-action':action},[label]);
+    if(!ready || NOTES_PANEL.busy) b.disabled = true;
+    return b;
+  }
+  acts.appendChild(btn('np-save','Save to ' + termLower('contact'), 'btn-ghost'));
+  acts.appendChild(btn('np-draft-email', NOTES_PANEL.busy ? 'Writing...' : 'Draft an email', 'btn-green'));
+  acts.appendChild(btn('np-draft-sms', NOTES_PANEL.busy ? 'Writing...' : 'Draft a text', ''));
+  wrap.appendChild(acts);
+
+  if(!NOTES_PANEL.cid){
+    wrap.appendChild(h('div',{class:'np-hint'},['Pick someone above to start.']));
+  } else if(!NOTES_PANEL.notes.trim()){
+    wrap.appendChild(h('div',{class:'np-hint'},['Paste the notes and the buttons wake up.']));
+  }
+
+  if(NOTES_PANEL.draft){
+    var d = NOTES_PANEL.draft;
+    var out = h('div',{class:'np-draft'},[]);
+    out.appendChild(h('div',{class:'np-draft-head'},[
+      h('strong',{},[d.channel === 'sms' ? 'Drafted text' : 'Drafted email']),
+      h('span',{class:'hint'},['Read it before it goes. It was written from your notes, not checked against them.'])
+    ]));
+    if(d.channel === 'email'){
+      out.appendChild(h('input',{type:'text',class:'np-subject','data-action':'np-edit','data-field':'subject',
+        value: d.subject, placeholder:'Subject'}));
+    }
+    out.appendChild(h('textarea',{class:'np-body',rows:'10','data-action':'np-edit','data-field':'text'},[d.text]));
+
+    var foot = h('div',{class:'np-draft-acts'},[]);
+    var c = STATE.clients[NOTES_PANEL.cid];
+    if(d.channel === 'email' && c && canEmail(c)){
+      foot.appendChild(h('a',{class:'btn btn-sm btn-green', target:'_blank', rel:'noopener',
+        href: gmailComposeUrl(c.email, d.subject, d.text, businessEmailAccount(STATE)),
+        'data-action':'sent-by-email','data-cid':c.id,'data-doc':'notes-draft'},['Open in Gmail']));
+    }
+    foot.appendChild(h('button',{class:'btn btn-sm','data-action':'np-copy'},['Copy']));
+    foot.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'np-discard'},['Discard']));
+    out.appendChild(foot);
+    wrap.appendChild(out);
+  }
+
+  box.appendChild(wrap);
+}
+
 function renderEmailLibrary(){
   var box = el('email-library');
   if(!box) return;
   box.innerHTML = '';
+
+  renderNotesPanel(box);
 
   var docs = emailLibrary(STATE);
 
@@ -2515,7 +2616,17 @@ document.addEventListener('click', function(ev){
       var ec = STATE.clients[cid];
       if(!ec) break;
       var docId = target.getAttribute('data-doc');
-      var edraft = docId ? renderEmailDoc(STATE, docId, ec, STATE.senderName) : null;
+      /* A draft written from call notes is not a library document, so
+         renderEmailDoc cannot find it and would return null — which would
+         mean the send was never logged at all. That matters beyond the
+         timeline: an unlogged email is an email the automated side does not
+         know about, so a text could go out on top of it the same afternoon.
+
+         It is already rendered and already on screen, so it is taken from
+         the panel directly. */
+      var edraft = (docId === 'notes-draft' && NOTES_PANEL.draft)
+        ? {subject: NOTES_PANEL.draft.subject, text: NOTES_PANEL.draft.text}
+        : (docId ? renderEmailDoc(STATE, docId, ec, STATE.senderName) : null);
       // A library email is not a cadence touch, so there is no stage to
       // advance. It is logged against 'email' so it still counts as contact —
       // which is what stops an automated text going out on top of it — and so
@@ -2554,6 +2665,58 @@ document.addEventListener('click', function(ev){
     }
     case 'reload-app':
       window.location.reload();
+      break;
+    case 'np-save': {
+      var nsc = STATE.clients[NOTES_PANEL.cid];
+      if(!nsc) break;
+      nsc.recap = NOTES_PANEL.notes.trim();
+      saveState(STATE);
+      showToast('Saved to ' + nsc.name + '. The recap email will use it.');
+      break;
+    }
+    case 'np-draft-email':
+    case 'np-draft-sms': {
+      var ndc = STATE.clients[NOTES_PANEL.cid];
+      if(!ndc || !NOTES_PANEL.notes.trim()) break;
+      var chan = sa === 'np-draft-sms' ? 'sms' : 'email';
+      // Notes are worth keeping whether or not the draft is any good, and
+      // this is the moment they are definitely in front of us.
+      ndc.recap = NOTES_PANEL.notes.trim();
+      saveState(STATE);
+
+      // The business's own words, so the model has a voice to match.
+      var examples = chan === 'sms'
+        ? (STATE.variants.welcome || []).map(function(v){ return v.text; })
+        : emailLibrary(STATE).map(function(d){ return d.body; });
+
+      NOTES_PANEL.busy = true;
+      renderEmailLibrary();
+      callGemini(buildNotesPrompt({
+        client: ndc, notes: NOTES_PANEL.notes, channel: chan,
+        senderName: STATE.senderName, examples: examples
+      })).then(function(text){
+        var parts = chan === 'email' ? splitDraftedEmail(text) : {subject: '', text: text.trim()};
+        NOTES_PANEL.draft = {channel: chan, subject: parts.subject, text: parts.text};
+        NOTES_PANEL.busy = false;
+        renderEmailLibrary();
+      }).catch(function(e){
+        NOTES_PANEL.busy = false;
+        renderEmailLibrary();
+        showToast('Could not write a draft - ' + e.message);
+      });
+      break;
+    }
+    case 'np-copy': {
+      var npd = NOTES_PANEL.draft;
+      if(!npd) break;
+      copyToClipboard(npd.channel === 'email' && npd.subject
+        ? npd.subject + '\n\n' + npd.text : npd.text);
+      showToast('Copied.');
+      break;
+    }
+    case 'np-discard':
+      NOTES_PANEL.draft = null;
+      renderEmailLibrary();
       break;
     case 'pick-email': {
       var pc = STATE.clients[target.getAttribute('data-cid')];
@@ -2979,6 +3142,30 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'np-client'){
+    NOTES_PANEL.cid = t.value;
+    // Pull across whatever is already on the contact, so notes written
+    // earlier are not silently replaced by an empty box.
+    var npc = STATE.clients[t.value];
+    if(npc && !NOTES_PANEL.notes.trim()) NOTES_PANEL.notes = npc.recap || '';
+    NOTES_PANEL.draft = null;
+    renderEmailLibrary();
+    return;
+  }
+  if(sa === 'np-notes'){
+    NOTES_PANEL.notes = t.value;
+    // No re-render: it would steal focus mid-sentence. The buttons enable on
+    // the next render, which the select or a button press triggers.
+    var npBtns = document.querySelectorAll('[data-action^="np-draft"], [data-action="np-save"]');
+    for(var npI = 0; npI < npBtns.length; npI++){
+      npBtns[npI].disabled = !(NOTES_PANEL.cid && t.value.trim());
+    }
+    return;
+  }
+  if(sa === 'np-edit'){
+    if(NOTES_PANEL.draft) NOTES_PANEL.draft[t.getAttribute('data-field')] = t.value;
+    return;   // no re-render: it would steal focus mid-sentence
   }
   if(sa === 'set-email-doc'){
     var doc = findEmailDoc(t.getAttribute('data-id'));

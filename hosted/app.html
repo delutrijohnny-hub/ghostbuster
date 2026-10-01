@@ -625,6 +625,32 @@ td.score-cell{width:1%;white-space:nowrap;}
 .cal-mode input{margin-top:2px;}
 .cal-mode strong{display:block;font-size:13px;}
 .cal-mode em{display:block;font-style:normal;font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.45;}
+/* Draft-from-notes panel, above the library in the Emails tab. Sits in a
+   card so it reads as a tool rather than another library entry. */
+.np{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;margin-bottom:22px;box-shadow:var(--shadow);}
+.np-head h3{margin:0 0 3px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;}
+.np-head .hint{font-size:11.5px;color:var(--ink-faint);display:block;line-height:1.5;max-width:62ch;}
+.np-select{width:100%;margin-top:11px;padding:8px 11px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);font-size:13.5px;font-family:inherit;}
+.np-notes{width:100%;margin-top:9px;padding:9px 11px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);
+  font-family:inherit;font-size:13.5px;line-height:1.55;resize:vertical;}
+.np-acts{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;}
+.np-acts .btn[disabled]{opacity:.45;cursor:not-allowed;}
+.np-hint{font-size:11.5px;color:var(--ink-faint);margin-top:7px;}
+.np-draft{margin-top:14px;padding-top:13px;border-top:1px solid var(--border);}
+.np-draft-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+.np-draft-head .hint{font-size:11px;color:var(--ink-faint);flex:1;min-width:200px;}
+.np-subject,.np-body{width:100%;padding:8px 11px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);
+  font-family:inherit;font-size:13.5px;margin-bottom:7px;}
+.np-body{line-height:1.6;resize:vertical;}
+.np-draft-acts{display:flex;gap:7px;flex-wrap:wrap;}
+@media (max-width:560px){
+  .np-acts .btn,.np-draft-acts .btn,.np-draft-acts a.btn{flex:1;text-align:center;
+    padding-top:9px;padding-bottom:9px;}
+}
 /* the email library — documents, not touches: a collapsed index you scan,
    one open at a time because these are long */
 .lib-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
