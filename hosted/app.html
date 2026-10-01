@@ -679,6 +679,18 @@ td.score-cell{width:1%;white-space:nowrap;}
   border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);font-size:13.5px;}
 .lib-body{line-height:1.6;resize:vertical;min-height:220px;}
 .lib-hint{font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.5;}
+/* Preview: the email as it will arrive, rendered for a real contact. Styled
+   like a received message rather than a form, so it reads as the thing
+   itself rather than as more settings. */
+.lib-preview{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);}
+.lib-preview-out{margin-top:9px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--bg);padding:11px 13px;}
+.lp-line{display:flex;gap:9px;font-size:12.5px;margin-bottom:4px;align-items:baseline;}
+.lp-k{flex:0 0 54px;font-size:10px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--ink-faint);}
+.lp-body{margin:9px 0 0;padding-top:9px;border-top:1px solid var(--border);
+  font-family:inherit;font-size:13px;line-height:1.6;white-space:pre-wrap;
+  word-wrap:break-word;color:var(--ink);}
 .lib-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px;}
 .lib-tokens{flex:1;font-size:11px;color:var(--ink-faint);font-family:ui-monospace,Menlo,monospace;min-width:180px;}
 .lib-foot-actions{display:flex;gap:6px;flex-wrap:wrap;}

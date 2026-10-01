@@ -2854,6 +2854,43 @@ test('an entry fills in for a contact, with the same placeholders as everything 
   assert.ok(!r.subject.includes('{time}'), 'the subject must be rendered too');
 });
 
+test('previewing an email neither sends it nor logs it', () => {
+  /* The Gmail button opens a draft and sends nothing, but it logs the send
+     the moment it is clicked -- so clicking it just to look would record an
+     email that never went. Previewing is a different intent from sending and
+     needs its own control, or the data quietly fills with sends that did not
+     happen. */
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.senderName = 'Johnny';
+    STATE.emailLibrary = [{id:'a', title:'Before the call', whenToSend:'after they book',
+      subject:'Chat on {weekday}', body:'Hey {name}, see you {when}.', sortOrder:0}];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Caitlin Reed', phone:'2135550100',
+      email:'caitlin@example.com', timezone:'America/New_York', status:'Booked',
+      callDateTime: new Date(Date.now() + 3*86400000).toISOString()});
+    LIB_OPEN = 'a'; LIB_PREVIEW = {a: 'c1'};
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext('renderEmailLibrary()', ctx),
+    'the preview must render');
+
+  // Nothing was sent: no message landed on the contact.
+  const logged = vm.runInContext("STATE.clients['c1'].messageLog.length", ctx);
+  assert.strictEqual(logged, 0, 'previewing must not log a send');
+});
+
+test('the preview warns about anything still unfilled', () => {
+  // A [PLACEHOLDER] or a {brace} that survives to the preview is one that
+  // would go out exactly as written, which is the whole point of looking.
+  const client = GB.sanitizeClient({id: 'c1', name: 'Caitlin', phone: '2135550100'});
+  const state = {emailLibrary: [{id: 'a', title: 'X', subject: 's',
+    body: 'Hi {name}, pay here: [PASTE THE RIGHT PACKAGE LINK HERE]', sortOrder: 0}]};
+  const r = GB.renderEmailDoc(state, 'a', client, 'Johnny');
+  const leftovers = (r.text + ' ' + r.subject).match(/\{\w+\}|\[[A-Z][^\]]*\]/g);
+  assert.deepStrictEqual(leftovers, ['[PASTE THE RIGHT PACKAGE LINK HERE]'],
+    'the placeholder must be detectable: ' + r.text);
+});
+
 test('the contact modal offers one button per email, each a real Gmail link', () => {
   /* "I just booked Caitlin, send her the before-call email" is one thought,
      and it was four actions: find her, open the picker, read the list,

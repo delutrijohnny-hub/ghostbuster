@@ -1289,6 +1289,55 @@ function renderEmailLibrary(){
         placeholder:'Paste or write the whole thing. There is no length limit here — this is the place for the long ones.'},
         [d.body]));
 
+      /* See it exactly as it will arrive, before it goes near anyone.
+
+         The Gmail button opens a draft and sends nothing, but it logs the
+         send the moment it is clicked — so clicking it just to look records
+         an email that never went. Previewing is a different intent from
+         sending and needs its own control, or the data quietly fills with
+         sends that did not happen.
+
+         Rendered against a real contact rather than dummy values, because
+         the question being asked is "what does {name} become for Caitlin",
+         and sample data answers a different question. */
+      var pv = h('div',{class:'lib-preview'},[]);
+      pv.appendChild(h('label',{class:'lib-label'},['Preview it for someone']));
+      var pvSel = h('select',{class:'lib-input','data-action':'lib-preview','data-id':d.id},[]);
+      pvSel.appendChild(h('option',{value:''},['Pick a ' + termLower('contact') + ' to preview with...']));
+      recentContactsForNotes().forEach(function(pc){
+        var o = h('option',{value:pc.id},[pc.name]);
+        if(LIB_PREVIEW[d.id] === pc.id) o.selected = true;
+        pvSel.appendChild(o);
+      });
+      pv.appendChild(pvSel);
+
+      var pvClient = STATE.clients[LIB_PREVIEW[d.id]];
+      if(pvClient){
+        var r = renderEmailDoc(STATE, d.id, pvClient, STATE.senderName);
+        if(r){
+          var box2 = h('div',{class:'lib-preview-out'},[]);
+          box2.appendChild(h('div',{class:'lp-line'},[
+            h('span',{class:'lp-k'},['To']), h('span',{},[pvClient.email || '(no email address on file)'])
+          ]));
+          box2.appendChild(h('div',{class:'lp-line'},[
+            h('span',{class:'lp-k'},['From']),
+            h('span',{},[businessEmailAccount(STATE) || '(whichever Gmail you last used)'])
+          ]));
+          box2.appendChild(h('div',{class:'lp-line'},[
+            h('span',{class:'lp-k'},['Subject']), h('strong',{},[r.subject || '(no subject)'])
+          ]));
+          box2.appendChild(h('pre',{class:'lp-body'},[r.text]));
+          var leftovers = (r.text + ' ' + r.subject).match(/\{\w+\}|\[[A-Z][^\]]*\]/g);
+          if(leftovers){
+            box2.appendChild(h('div',{class:'set-warn'},[
+              'Still unfilled: ' + leftovers.join(', ') + ' — these would go out exactly as written.'
+            ]));
+          }
+          pv.appendChild(box2);
+        }
+      }
+      body.appendChild(pv);
+
       body.appendChild(h('div',{class:'lib-foot'},[
         h('span',{class:'lib-tokens'},[
           'Fills in automatically: {name} {sender} {when} {date} {time} {weekday} {link}'
@@ -1374,6 +1423,9 @@ function findEmailDoc(id){
 // Which library entry is expanded. Only one at a time: these are long, and a
 // page of simultaneously-open 18-row textareas is unreadable.
 var LIB_OPEN = null;
+// Which contact each library entry is being previewed against. Per entry, so
+// opening a second email does not silently reuse the first one's choice.
+var LIB_PREVIEW = {};
 
 /* Hand the browser a text file.
 
@@ -3221,6 +3273,11 @@ document.addEventListener('input', function(ev){
   if(ONBOARDING && sa === 'ob-term'){
     ONBOARDING.terminology[t.getAttribute('data-key')] = t.value;
     return;   // no re-render: rebuilding the modal would steal focus mid-word
+  }
+  if(sa === 'lib-preview'){
+    LIB_PREVIEW[t.getAttribute('data-id')] = t.value;
+    renderEmailLibrary();
+    return;
   }
   if(sa === 'np-client'){
     NOTES_PANEL.cid = t.value;
