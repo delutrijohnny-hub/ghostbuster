@@ -326,14 +326,21 @@ function buildTouchCard(client, stage, now){
   var top = document.createElement('div');
   top.className = 'card-top';
   var nameEl = h('span',{class:'name','data-action':'open-client','data-cid':client.id},[client.name]);
-  var stageChip = h('span',{class:'stage-chip' + (stage==='noshow'?' noshow':'') + (stage==='recovery'?' recovery':'')},[stage]);
+  /* No stage chip on the card.
+
+     Every card now sits under a heading naming its stage, so the chip
+     repeated that word on every row — and it printed the raw key, so it read
+     "midcheckin" rather than "Mid-point check-in". Redundant and ugly is a
+     bad combination directly under a heading that says it properly. The
+     .stage-chip style stays for the review panel and focus mode, which have
+     no grouping to lean on. */
   // Where this sits in the run-up to the call, so the card reads as a step in
   // a sequence rather than a standalone task.
   var prog = cadenceProgress(client, now);
   var progChip = h('span',{class:'touch-chip', title:'Sent so far: ' + (prog.sentStages.join(', ') || 'nothing yet')},
     ['Touch ' + (prog.done + 1) + ' of ' + prog.total]);
   var tzChip = h('span',{class:'tz-chip' + (tzInfo.warn?' tz-warn':'')},[tzInfo.timeLabel + ' their time']);
-  top.appendChild(nameEl); top.appendChild(stageChip); top.appendChild(progChip); top.appendChild(tzChip);
+  top.appendChild(nameEl); top.appendChild(progChip); top.appendChild(tzChip);
   card.appendChild(top);
 
   if(tzInfo.warn){
@@ -557,9 +564,15 @@ function renderCallsBoard(){
       if(it.stage !== lastStage){
         var runLength = 0;
         for(var j = i; j < textToday.length && textToday[j].stage === it.stage; j++) runLength++;
+        // Same pill language the cards already use, tinted by stage, so the
+        // heading reads as part of the existing vocabulary rather than a new
+        // one — and the colour says "these are the cold ones" before the
+        // words are read.
         todayCol.appendChild(h('div',{class:'touch-group'},[
-          h('span',{class:'touch-group-name'},[touchLabel(it.stage)]),
-          h('span',{class:'touch-group-count'},[String(runLength)])
+          h('span',{class:'touch-group-chip ' + it.stage},[
+            touchLabel(it.stage),
+            h('b',{},[String(runLength)])
+          ])
         ]));
         lastStage = it.stage;
       }

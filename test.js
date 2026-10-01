@@ -1746,6 +1746,40 @@ console.log('\n--- the morning list reads in an order ---');
     assert.strictEqual(items[1].stage, 'second_visit');
   });
 
+  test('the heading is tinted by what the group means, not per stage name', () => {
+    /* Three meanings, reusing the colours the rest of the app already uses:
+       green to open, red for a missed call, amber for the cold chasing.
+       Tying the class to the stage key means a stage with no colour falls
+       back to the neutral chip rather than being invisible. */
+    const styles = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+    ['welcome', 'rebooked', 'followup'].forEach(st =>
+      assert.ok(styles.includes('.touch-group-chip.' + st), st + ' should be tinted'));
+    assert.ok(/\.touch-group-chip\.noshow\{[^}]*red/.test(styles), 'a missed call should read red');
+    assert.ok(/\.touch-group-chip\.recovery,[\s\S]{0,60}revival\{[^}]*amber/.test(styles),
+      'the cold chasing should read amber');
+    // The neutral default has to exist, or an untinted stage has no chip at all.
+    assert.ok(/\.touch-group-chip\{[^}]*background/.test(styles));
+  });
+
+  test('every stage the list can produce gets a readable heading', () => {
+    // The card chip used to print the raw key, so it read "midcheckin". The
+    // heading replaced it, which only works if the heading is readable.
+    GB.TOUCH_LIST_ORDER.forEach(st => {
+      const label = GB.touchLabel(st);
+      assert.ok(label && label !== st, st + ' has no readable label: ' + label);
+      assert.ok(/^[A-Z]/.test(label), label + ' should start capitalised');
+    });
+  });
+
+  test('the per-card stage chip is gone, since the heading now says it', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function buildTouchCard'), app.indexOf('function', app.indexOf('function buildTouchCard') + 10));
+    assert.ok(!/stageChip/.test(fn),
+      'buildTouchCard still adds a stage chip, duplicating the group heading');
+    // But the style must survive for the panels that have no grouping.
+    assert.ok(/stage-chip/.test(app), 'the review panel and focus mode still need it');
+  });
+
   test('the real list comes out grouped, not interleaved', () => {
     // End to end through getTextTodayList, not just the comparator.
     const clients = {};
