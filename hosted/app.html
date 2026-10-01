@@ -693,6 +693,14 @@ td.score-cell{width:1%;white-space:nowrap;}
 .pick-when{display:block;font-size:11.5px;color:var(--ink-soft);}
 .pick-subj{display:block;font-size:11.5px;color:var(--ink-faint);margin-top:3px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* One button per library email, on the contact. The library is the list, so
+   a new email shows up here the moment it is written. */
+.ce-btns{display:flex;flex-wrap:wrap;gap:6px;}
+.ce-btn{display:inline-block;padding:6px 11px;border:1px solid var(--border);
+  border-radius:99px;background:var(--card);color:var(--ink);
+  font-size:12px;font-weight:700;text-decoration:none;line-height:1.3;}
+.ce-btn:hover{border-color:var(--green);background:var(--green-soft);color:var(--green);}
+@media (max-width:560px){ .ce-btn{flex:1 1 calc(50% - 3px);text-align:center;} }
 .pick-pin{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;
   background:var(--green-soft);color:var(--green);padding:1px 6px;border-radius:99px;
   margin-left:6px;vertical-align:middle;}

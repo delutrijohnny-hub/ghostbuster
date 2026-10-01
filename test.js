@@ -2797,6 +2797,73 @@ test('an entry fills in for a contact, with the same placeholders as everything 
   assert.ok(!r.subject.includes('{time}'), 'the subject must be rendered too');
 });
 
+test('the contact modal offers one button per email, each a real Gmail link', () => {
+  /* "I just booked Caitlin, send her the before-call email" is one thought,
+     and it was four actions: find her, open the picker, read the list,
+     choose. The library IS the list of buttons, so a new email appears there
+     the moment it is written and nothing has to be wired up. */
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.senderName = 'Johnny';
+    STATE.myCalendars = ['john@marketmakermgmt.com'];
+    STATE.emailLibrary = [
+      {id:'a', title:'Before the call - what we do', whenToSend:'after they book',
+       subject:'Excited to chat {date}', body:'Hey {name}, looking forward to it.', sortOrder:0},
+      {id:'b', title:'Post-call recap', whenToSend:'same day',
+       subject:'Great talking', body:'Hi {name}, here is what we covered.', sortOrder:10}
+    ];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Caitlin Reed', phone:'2135550100',
+      email:'caitlin@example.com', timezone:'America/New_York', status:'Booked',
+      callDateTime: new Date(Date.now() + 4*86400000).toISOString()});
+  `, ctx);
+  const html = vm.runInContext("emailButtonsHtml(STATE.clients['c1'])", ctx);
+
+  assert.ok(html.includes('Before the call - what we do'), 'a button per email: ' + html.slice(0, 200));
+  assert.ok(html.includes('Post-call recap'));
+  assert.ok(html.includes('mail.google.com'), 'each must be a real compose link');
+  assert.ok(html.includes('authuser=john%40marketmakermgmt.com'),
+    'and must open the business account, not whichever Gmail was last used');
+  assert.ok(html.includes('Caitlin'), 'filled in for this contact');
+  assert.ok(!/\{name\}/.test(html), 'placeholders must be rendered, never shipped raw');
+  assert.ok(/data-action="sent-by-email"/.test(html), 'and the send must still be logged');
+});
+
+test('a contact with no email address is told why, not shown dead buttons', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.emailLibrary = [{id:'a', title:'X', subject:'s', body:'b', sortOrder:0}];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'NoMail', phone:'2135550100'});
+  `, ctx);
+  const html = vm.runInContext("emailButtonsHtml(STATE.clients['c1'])", ctx);
+  assert.ok(!/mail\.google\.com/.test(html), 'no compose link that cannot work');
+  assert.ok(/No email address/.test(html), 'say why: ' + html);
+});
+
+test('an empty library points at where emails live rather than showing nothing', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.emailLibrary = [];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100', email:'d@e.com'});
+  `, ctx);
+  const html = vm.runInContext("emailButtonsHtml(STATE.clients['c1'])", ctx);
+  assert.ok(/Emails tab/.test(html), html);
+});
+
+test('the contact modal still renders end to end with the buttons in it', () => {
+  const ctx = makeHostedCtx();
+  vm.runInContext(`
+    STATE = buildDefaultState();
+    STATE.emailLibrary = [{id:'a', title:'X', whenToSend:'now', subject:'s', body:'Hi {name}', sortOrder:0}];
+    STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+      email:'d@e.com', timezone:'America/New_York', status:'Booked',
+      callDateTime: new Date(Date.now() + 86400000).toISOString()});
+  `, ctx);
+  assert.doesNotThrow(() => vm.runInContext("openClientModal('c1')", ctx));
+});
+
 test('an email pinned to a touch is what that touch sends', () => {
   /* Sending a text is one tap. Email cost two extra clicks because every send
      went through the picker, and in practice the same email goes out for the

@@ -1960,6 +1960,50 @@ function openAddClientModal(){
 }
 
 
+/* Every email, one button each, on the contact itself.
+
+   "I just booked Caitlin, send her the before-call email" is one thought, and
+   it was four actions: find her, open the picker, read the list, choose. A
+   button per email collapses that to one — the same shape as the text side,
+   where the message is already written and you press send.
+
+   This replaces picking for the common case rather than adding to it: the
+   library IS the list of buttons, so a new email appears here the moment it
+   is written, and nothing has to be configured to connect the two.
+
+   Each button is a real Gmail link, filled in for this contact and pinned to
+   the business account, and logs the send the same way everything else does. */
+function emailButtonsHtml(c){
+  if(!canEmail(c)){
+    return '<div class="field-row"><label>Send an email</label>' +
+      '<div class="hint">No email address on file for ' + escapeHtml(c.name) +
+      ', so there is nothing to send to. Add one above.</div></div>';
+  }
+  var docs = emailLibrary(STATE);
+  if(!docs.length){
+    return '<div class="field-row"><label>Send an email</label>' +
+      '<div class="hint">Nothing in your library yet. The Emails tab is where they live.</div></div>';
+  }
+  var from = businessEmailAccount(STATE);
+  var btns = docs.map(function(d){
+    var r = renderEmailDoc(STATE, d.id, c, STATE.senderName);
+    if(!r) return '';
+    // title carries the timing note, so hovering answers "is this the right
+    // one?" without opening anything.
+    return '<a class="ce-btn" target="_blank" rel="noopener"' +
+      ' href="' + escapeHtml(gmailComposeUrl(c.email, r.subject, r.text, from)) + '"' +
+      ' data-action="sent-by-email" data-cid="' + escapeHtml(c.id) + '"' +
+      ' data-doc="' + escapeHtml(d.id) + '"' +
+      ' title="' + escapeHtml(d.whenToSend ? 'Send ' + d.whenToSend : d.subject || d.title) + '">' +
+      escapeHtml(d.title) + '</a>';
+  }).join('');
+
+  return '<div class="field-row"><label>Send an email</label>' +
+    '<div class="ce-btns">' + btns + '</div>' +
+    '<div class="hint">Opens Gmail' + (from ? ' as ' + escapeHtml(from) : '') +
+    ', written for ' + escapeHtml(firstName(c.name)) + '. Read it, then send.</div></div>';
+}
+
 function openClientModal(clientId){
   var c = STATE.clients[clientId];
   if(!c) return;
@@ -1990,6 +2034,7 @@ function openClientModal(clientId){
     '<div class="field-row"><label>Reschedule count</label><div>' + c.rescheduleCount + '</div></div>' +
     '<div class="field-row"><label>Outcome</label><div class="outcome-btns">' + outcomeButtons + '</div></div>' +
     '<div class="field-row"><label>Call recap</label><textarea data-action="save-client-field" data-cid="'+c.id+'" data-field="recap">'+escapeHtml(c.recap)+'</textarea></div>' +
+    emailButtonsHtml(c) +
     '<div class="field-row"><label>Closed?</label><div class="outcome-btns">' +
       '<button class="btn btn-sm' + (c.closeOutcome==='Closed'?' btn-green':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Closed">Closed</button>' +
       '<button class="btn btn-sm' + (c.closeOutcome==='Not closed'?' btn-primary':'') + '" data-action="set-close" data-cid="'+c.id+'" data-close="Not closed">Not closed</button>' +
