@@ -1,39 +1,40 @@
 -- ============================================================
--- Email library: repair the dashes, and handle "no time booked yet".
+-- Email library: everything outstanding, in one script.
 --
--- Three things, all safe to run twice:
---   1. repairs em-dashes that arrived mangled through the clipboard
---   2. makes the pre-call email work whether or not a time is set
---   3. adds an intro email for when nothing is booked yet
+--   1. repair em-dashes that arrived mangled through the clipboard
+--   2. pre-call email uses {when}, so it reads right with or without
+--      a time booked
+--   3. add the "no time booked yet" intro email
+--   4. drop the real Google scheduling link into every place that
+--      was waiting for one
 --
--- PURE ASCII on purpose. The mangled characters are rebuilt with
--- chr() from their code points rather than written literally,
--- because writing them would mean sending them back through the
--- same clipboard that mangled them in the first place.
+-- Safe to run twice, and safe to run whether or not the previous
+-- script was run -- each step checks before it acts.
+--
+-- PURE ASCII on purpose: the mangled characters are rebuilt with
+-- chr() rather than written out, because writing them would send
+-- them back through the clipboard that mangled them.
 -- ============================================================
 
 -- 1. Repair the mis-decoded em-dashes.
 do $do$
 declare
-  bad  text := chr(8218) || chr(196) || chr(238);
-  good text := chr(45);
-  n    int;
+  bad text := chr(8218) || chr(196) || chr(238);
+  n   int;
 begin
   update public.email_library
-  set title        = replace(title, bad, good),
-      subject      = replace(subject, bad, good),
-      body         = replace(body, bad, good),
-      when_to_send = replace(when_to_send, bad, good),
+  set title        = replace(title, bad, chr(45)),
+      subject      = replace(subject, bad, chr(45)),
+      body         = replace(body, bad, chr(45)),
+      when_to_send = replace(when_to_send, bad, chr(45)),
       updated_at   = now()
   where title like '%' || bad || '%' or subject like '%' || bad || '%'
      or body like '%' || bad || '%'  or when_to_send like '%' || bad || '%';
   get diagnostics n = row_count;
-  raise notice 'repaired % email(s)', n;
+  raise notice 'step 1: repaired % email(s)', n;
 end $do$;
 
--- 2. The pre-call email now uses {when}, which reads "on Tuesday" inside the
---    coming week, "on Oct 31" beyond it, and "soon" when nothing is booked --
---    so the same email works either way.
+-- 2. The pre-call email adapts to whether a time is booked.
 do $do$
 declare n int;
 begin
@@ -62,26 +63,19 @@ https://www.youtube.com/@Tatlondonolive/shorts
 
 Talk soon,
 {sender}$pre$,
-      when_to_send = 'after they book, a day or two before the call',
       updated_at = now()
-  where title like 'Before the call%';
+  where title like 'Before the call%' and body not like '%{when}%';
   get diagnostics n = row_count;
-  raise notice 'updated % pre-call email(s) to use {when}', n;
+  raise notice 'step 2: updated % pre-call email(s)', n;
 end $do$;
 
--- 3. A separate intro for when there is no time on the calendar at all.
---    Different job from the pre-call email: this one exists to get something
---    booked, so it ends with the booking link rather than "see you then".
+-- 3. The intro for when nothing is on the calendar at all.
 do $do$
 declare
-  target_user uuid;
-  target_org  uuid;
-  n           int;
+  target_user uuid; target_org uuid; n int;
 begin
   select id into target_user from auth.users where email = 'delutrijohnny@gmail.com';
-  if target_user is null then
-    raise exception 'No auth user found for delutrijohnny@gmail.com';
-  end if;
+  if target_user is null then raise exception 'no auth user for delutrijohnny@gmail.com'; end if;
   select org_id into target_org from public.memberships where user_id = target_user limit 1;
 
   insert into public.email_library (user_id, org_id, title, when_to_send, subject, body, sort_order)
@@ -113,25 +107,48 @@ https://www.youtube.com/@Tatlondonolive/shorts
 
 Grab whichever time suits you here and I'll come prepared:
 
-[BOOKING LINK]
+https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ15gdR6L_RxtIS4-qdyoUyPNWg1_4j6D0dgoTLpqCLVgRdqhp8m17qFovK4dovqTfsvmZUmxIdM
 
 Best,
 {sender}$nod$,
          5
-  where not exists (
-    select 1 from public.email_library e
-    where e.user_id = target_user and e.title = 'Intro - no time booked yet'
-  );
+  where not exists (select 1 from public.email_library e
+                    where e.user_id = target_user and e.title = 'Intro - no time booked yet');
   get diagnostics n = row_count;
-  raise notice 'added % intro email(s)', n;
+  raise notice 'step 3: added % intro email(s)', n;
 end $do$;
 
--- Should show 10 emails, no mangled characters anywhere.
-select
-  (select count(*) from public.email_library)                                            as total_emails,
-  (select count(*) from public.email_library
-     where title like '%' || chr(8218) || chr(196) || chr(238) || '%'
-        or body  like '%' || chr(8218) || chr(196) || chr(238) || '%')                   as still_mangled,
-  (select count(*) from public.email_library where body like '%{when}%')                 as emails_using_when;
+-- 4. The real scheduling link, everywhere one was waiting.
+do $do$
+declare
+  cal text := 'https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ15gdR6L_RxtIS4-qdyoUyPNWg1_4j6D0dgoTLpqCLVgRdqhp8m17qFovK4dovqTfsvmZUmxIdM';
+  n   int;
+begin
+  update public.email_library
+  set body = replace(replace(body, '[CALENDAR LINK]', cal), '[BOOKING LINK]', cal),
+      updated_at = now()
+  where body like '%[CALENDAR LINK]%' or body like '%[BOOKING LINK]%';
+  get diagnostics n = row_count;
+  raise notice 'step 4: put the scheduling link into % email(s)', n;
 
-select title, when_to_send from public.email_library order by sort_order;
+  -- The onboarding email asks them to pick an onboarding time but had no link.
+  update public.email_library
+  set body = replace(body,
+        'please pick the time that works best for our initial onboarding call.',
+        'please pick the time that works best for our initial onboarding call:' ||
+        chr(10) || chr(10) || cal),
+      updated_at = now()
+  where title like 'Onboarding%'
+    and body like '%initial onboarding call.%'
+    and body not like '%' || cal || '%';
+  get diagnostics n = row_count;
+  raise notice 'step 4: added the link to % onboarding email(s)', n;
+end $do$;
+
+-- What is left needing a human. Should be two: the package link (you are
+-- grabbing a fresh one) and the questionnaire (the document had two Airtable
+-- links and nothing said which).
+select title,
+       case when body like '%[%]%' then 'still has a placeholder' else 'ready to send' end as status
+from public.email_library
+order by sort_order;
