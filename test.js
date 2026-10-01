@@ -1750,6 +1750,26 @@ console.log('\n--- a message with no appointment on it still reads like English 
       'sanity: a dateless contact really does come due a welcome');
   });
 
+  test('{recap} carries what was actually said on the call', () => {
+    /* The post-call recap email was a generic list of what the service
+       includes. An email that says "here is what we discussed" and then
+       describes nothing in particular is worse than not sending one.
+
+       The Call recap field has existed on every contact all along and the AI
+       drafting already used it; templates could not reach it. */
+    const withRecap = mk({recap: 'Posting monthly, wants weekly. Budget ~800.'});
+    const out = GB.renderTemplate('We covered:\n\n{recap}', withRecap, 'Bob');
+    assert.ok(out.includes('Posting monthly, wants weekly'), out);
+  });
+
+  test('an empty recap shows a marker, not a gap', () => {
+    // Same reasoning as {link}: these open in Gmail and are read before they
+    // are sent, so an obvious gap gets filled and an empty space gets missed.
+    const out = GB.renderTemplate('We covered:\n\n{recap}', noDate, 'Bob');
+    assert.ok(/paste your call notes/i.test(out), out);
+    assert.ok(!/\{recap\}/.test(out), 'the placeholder itself must never ship');
+  });
+
   test('every built-in renders cleanly with no appointment at all', () => {
     const v = GB.buildDefaultVariants();
     const broken = [];

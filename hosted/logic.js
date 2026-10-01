@@ -1605,6 +1605,19 @@ function renderTemplate(template, client, senderName){
         : 'on ' + fmtDate(callDate, tz);
     })(),
     link: client.meetLink || '(no link on file — paste one before sending)',
+    /* What was actually said on the call, and what you know about them.
+
+       There is already a "Call recap" field on every contact, and the AI
+       drafting has always used it — but templates could not, so a post-call
+       recap email could only ever be generic. An email that says "here is
+       what we discussed" and then describes nothing in particular is worse
+       than not sending one.
+
+       The fallback is a visible marker rather than silence, following {link}:
+       these drafts open in Gmail and are read before they are sent, so an
+       obvious gap gets filled, whereas an empty space gets missed. */
+    recap: client.recap || '(paste your call notes here before sending)',
+    notes: client.notes || '',
     channel: extractChannelHandle(client.youtubeLink) || ''
   };
   /* Substitute, and when a value is empty take its preposition with it.
