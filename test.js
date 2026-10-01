@@ -1795,6 +1795,27 @@ console.log('\n--- a message with no appointment on it still reads like English 
       "You're locked in.");
   });
 
+  test('a word that merely ENDS in a preposition is not amputated', () => {
+    /* Found in a real send. "Excited to chat {date}" went out as "Excited to
+       ch" because the cleanup matched the "at" inside "ch|at" -- no word
+       boundary. Every word ending in at, on, for, in or by was exposed:
+       "great format {date}" became "great form."
+
+       A word boundary is the difference between removing a preposition and
+       amputating the end of a word, and the failure is invisible in the
+       template and only visible in the inbox. */
+    const cases = [
+      ['Excited to chat {date} - a few examples inside', 'Excited to chat - a few examples inside'],
+      ['We can chat {weekday}.', 'We can chat.'],
+      ['That is a great format {date}.', 'That is a great format.'],
+      ['Your platform {date} is ready.', 'Your platform is ready.'],
+      ['A carton {date}.', 'A carton.'],
+    ];
+    cases.forEach(([tpl, want]) => {
+      assert.strictEqual(GB.renderTemplate(tpl, noDate, 'Bob'), want);
+    });
+  });
+
   test('a preposition that belongs to the sentence is left alone', () => {
     /* The reason this is done at substitution time rather than on the
        finished string: afterwards "hopping on at ." and "locked in for ."

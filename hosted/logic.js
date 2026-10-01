@@ -1723,7 +1723,13 @@ function renderTemplate(template, client, senderName){
      An earlier version stripped prepositions from the finished string and
      turned "You're locked in for Oct 4" into "You're locked." */
   var out = String(template).replace(
-    /([ \t]*)((?:ahead of|prior to|in advance of|at|on|for|in|by)[ \t]+)?((?:this|next)[ \t]+)?\{(\w+)\}/gi,
+    /* The \b is load-bearing. Without it "chat {date}" matched the "at"
+       inside "ch|at", so an empty date turned "Excited to chat {date}" into
+       "Excited to ch" — and that went out to a real inbox. Any word ending in
+       at, on, for, in or by was exposed: "great format {date}" became "great
+       form." A word boundary is the difference between removing a preposition
+       and amputating the end of a word. */
+    /([ \t]*)(\b(?:ahead of|prior to|in advance of|at|on|for|in|by)[ \t]+)?((?:this|next)[ \t]+)?\{(\w+)\}/gi,
     function(m, space, prep, demo, key){
       if(!(key in vals)) return m;
       var val = vals[key];
