@@ -3777,11 +3777,45 @@ console.log('\n--- automatic email guardrails ---');
   });
 }
 
-test('turning email off also turns automatic sending off', () => {
+test('settings offers no switch for sending that no longer happens', () => {
+  /* This used to assert that turning email off also turned automatic sending
+     off — correct while both switches did something. Email is a library sent
+     by hand through the person's own Gmail now, and the unattended sender
+     refuses live runs, so both switches controlled nothing.
+
+     A control that does nothing is worse than a missing one: it tells someone
+     a thing is on when it is not, and they plan around it. */
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const block = app.slice(app.indexOf("case 'set-email-enabled':"), app.indexOf("case 'remove-step':"));
-  assert.ok(/if\(!target\.checked\) STATE\.autoSendEmail = false;/.test(block),
-    'otherwise the toggle looks like it stopped everything while a job keeps mailing');
+  ['set-email-enabled', 'set-auto-email'].forEach(action => {
+    assert.ok(!app.includes("data-action=\"" + action),
+      'settings still renders the dead ' + action + ' switch');
+    assert.ok(!app.includes("case '" + action + "'"),
+      'a handler for ' + action + ' survives with nothing to trigger it');
+  });
+  // The one email setting that does something must still be there.
+  assert.ok(app.includes('emailFromAddress'),
+    'the sending account is the one email setting that still has an effect');
+});
+
+test('the stored email settings are kept, so nothing is lost', () => {
+  // Removing the switches must not drop the columns or stop persisting them —
+  // a provider route may come back, and silently discarding a configured
+  // address would be a data loss nobody asked for.
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  ['email_enabled', 'auto_send_email', 'email_from_address', 'email_reply_to'].forEach(col => {
+    assert.ok(data.includes(col), 'data.js stopped persisting ' + col);
+  });
+});
+
+test('the unreachable provider composer is gone, not just hidden', () => {
+  // It was the other half of the stage-keyed model and nothing rendered a way
+  // in. Dead code that reads as a feature costs the next person real time.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(!/function openEmailComposer/.test(app));
+  assert.ok(!/function doSendEmail/.test(app));
+  // The Edge Function stays — it works, and it is the route back if wanted.
+  assert.ok(fs.existsSync(path.join(__dirname, 'supabase', 'functions', 'send-email', 'index.ts')),
+    'the send-email function should not have been deleted');
 });
 
 console.log('\n--- site routing ---');

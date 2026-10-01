@@ -2038,73 +2038,18 @@ function applyOnboarding(){
 }
 
 
-/* Email composer. Pre-filled from the stage's email template but fully
-   editable, because the whole point of a second channel is that it is used
-   where a text would not do — and those are exactly the messages worth
-   writing by hand. */
-function openEmailComposer(clientId, stage){
-  var c = STATE.clients[clientId];
-  if(!c) return;
-  if(!c.email){
-    showToast('No email address on file for ' + c.name + '.');
-    return;
-  }
-  if(!canEmail(c)){
-    showToast(c.name + '’s address ' + (c.emailStatus === 'complained'
-      ? 'reported a previous email as junk. Sending again risks the whole domain.'
-      : 'bounced. Fix the address on their record first.'));
-    return;
-  }
-  var draft = getEmailDraft(STATE, c, stage || 'welcome', STATE.senderName) ||
-    {variantId:'custom', subject:'', text:''};
-  openModalHtml(
-    '<div class="modal-head"><h2>Email ' + escapeHtml(c.name) + '</h2>' +
-      '<button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
-    '<div class="field-row"><label>To</label><div class="em-to">' + escapeHtml(c.email) + '</div></div>' +
-    '<div class="field-row"><label>Subject</label>' +
-      '<input type="text" id="em-subject" value="' + escapeHtml(draft.subject) + '"></div>' +
-    '<div class="field-row"><label>Message</label>' +
-      '<textarea id="em-body" rows="12">' + escapeHtml(draft.text) + '</textarea></div>' +
-    '<div class="field-row em-foot">' +
-      '<span class="em-note" id="em-note">Sent from GhostBuster and logged automatically.</span>' +
-      '<button class="btn btn-sm btn-ghost" data-action="close-modal">Cancel</button> ' +
-      '<button class="btn btn-sm btn-green" data-action="send-email" data-cid="' + c.id +
-        '" data-stage="' + escapeHtml(stage || 'custom') +
-        '" data-variant="' + escapeHtml(draft.variantId) + '">Send email</button>' +
-    '</div>', true);
-}
+/* The provider-route email composer used to live here.
 
-async function doSendEmail(cid, stage, variantId){
-  var subject = (el('em-subject') || {}).value || '';
-  var body = (el('em-body') || {}).value || '';
-  var note = el('em-note');
-  if(!subject.trim() || !body.trim()){
-    if(note){ note.textContent = 'A subject and a message are both required.'; note.className = 'em-note em-error'; }
-    return;
-  }
-  if(note){ note.textContent = 'Sending…'; note.className = 'em-note'; }
-  try{
-    var res = await window.GB_SUPABASE.functions.invoke('send-email', {
-      body: {clientId: cid, subject: subject, text: body, stage: stage, variantId: variantId}
-    });
-    if(res.error){
-      // The provider's own words are more useful than a generic failure, and
-      // the "not configured yet" case is a setup step rather than a bug.
-      var msg = (res.error && res.error.message) || 'Could not send.';
-      if(note){ note.textContent = msg; note.className = 'em-note em-error'; }
-      return;
-    }
-    closeModal();
-    // Reload so the sent message appears in the log and the timeline without
-    // us second-guessing what the function wrote.
-    STATE = await loadState();
-    renderAll();
-    showToast('Email sent to ' + (STATE.clients[cid] ? STATE.clients[cid].name : 'contact') + '.');
-  }catch(e){
-    if(note){ note.textContent = 'Could not reach the mail service.'; note.className = 'em-note em-error'; }
-  }
-}
+   It was the other half of the stage-keyed model: pick a touch, pre-fill that
+   touch's email template, send it through a provider. Email is a library now,
+   and the Email button on a contact opens Gmail with the chosen document
+   already filled in — so this had no way in. Nothing rendered a button that
+   reached it.
 
+   Removed rather than left hidden: dead code that still reads as a feature is
+   worse than no code, because the next person has to work out whether it
+   matters. The send-email Edge Function is untouched and still works if a
+   provider route is ever wanted again. */
 
 function openSettingsModal(){
   // Edited against a draft, not live state: a half-finished pipeline (a stage
@@ -2212,32 +2157,34 @@ function renderSettingsModal(){
       escapeHtml(((STATE.calendarFilter || {}).exclude || []).join(', ')) +
       '" placeholder="team meeting, lunch"></div></div>' +
     '</div>' +
+    /* Email settings are now one question: which Gmail do client emails open
+       from.
+
+       This section used to carry two switches — "allow sending email from
+       this account" and "send due follow-up emails automatically" — plus a
+       warning about verifying a sending domain. None of them did anything any
+       more. Email is a library you send by hand through your own Gmail, the
+       automatic sender refuses live runs, and the first switch gated nothing
+       except the display of the second. A control that does nothing is worse
+       than a missing one: it tells someone a thing is on when it is not.
+
+       The stored values are left in the database untouched, so nothing is
+       lost if a provider route comes back. They are just no longer presented
+       as choices that have an effect. */
     '<div class="set-section"><h3>Email</h3>' +
-    '<div class="hint">GhostBuster sends these itself, unlike texts, which it hands to your phone. That is also what lets it see replies.</div>' +
-    '<label class="set-toggle"><input type="checkbox" data-action="set-email-enabled"' +
-      (STATE.emailEnabled ? ' checked' : '') + '> Allow sending email from this account</label>' +
+    '<div class="hint">Your emails live in the Emails tab. The Email button on a ' +
+      escapeHtml(termLower('contact')) + ' opens Gmail with one of them already written, ' +
+      'so it sends from you and replies come back to you.</div>' +
     '<div class="term-grid" style="margin-top:8px;">' +
-      '<div><label>From name</label><input type="text" data-action="set-email-field" data-key="emailFromName" value="' +
-        escapeHtml(STATE.emailFromName || STATE.senderName || '') + '" placeholder="Johnny at MarketMaker"></div>' +
       '<div><label>Send client email from</label><input type="text" data-action="set-email-field" data-key="emailFromAddress" value="' +
         escapeHtml(STATE.emailFromAddress || '') + '" placeholder="' +
-        escapeHtml(businessEmailAccount(STATE) || 'johnny@yourdomain.com') + '"></div>' +
-      '<div><label>Replies go to</label><input type="text" data-action="set-email-field" data-key="emailReplyTo" value="' +
-        escapeHtml(STATE.emailReplyTo || '') + '" placeholder="optional"></div>' +
+        escapeHtml(businessEmailAccount(STATE) || 'you@yourdomain.com') + '"></div>' +
     '</div>' +
     (businessEmailAccount(STATE)
       ? '<div class="hint" style="margin-top:6px;">The Email button opens Gmail as <strong>' +
         escapeHtml(businessEmailAccount(STATE)) + '</strong>' +
         (STATE.emailFromAddress ? '.' : ', taken from your connected calendar. Set an address above to override it.') + '</div>'
       : '<div class="set-warn" style="margin-top:6px;">No business account known yet, so the Email button would open whichever Gmail you last used. Connect a calendar or set an address above.</div>') +
-    '<div class="set-warn" style="margin-top:8px;">For automatic sending, the address must also be on a domain verified with your email provider. That is separate from the Email button, which needs no setup.</div>' +
-    (STATE.emailEnabled
-      ? '<label class="set-toggle" style="margin-top:12px;"><input type="checkbox" data-action="set-auto-email"' +
-        (STATE.autoSendEmail ? ' checked' : '') + '> Send due follow-up emails automatically</label>' +
-        '<div class="hint" style="margin-top:4px;">Hourly, only during 8am–7pm where the ' + escapeHtml(termLower('contact')) +
-        ' is, never more than once a day per person, and never to someone who has replied recently. ' +
-        'Texts are always still yours to send.</div>'
-      : '') +
     '</div>' +
     '<div class="set-section"><h3>What you call things</h3>' +
     '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
@@ -2582,12 +2529,6 @@ document.addEventListener('click', function(ev){
       }
       break;
     }
-    case 'compose-email':
-      openEmailComposer(cid, target.getAttribute('data-stage'));
-      break;
-    case 'send-email':
-      doSendEmail(cid, target.getAttribute('data-stage'), target.getAttribute('data-variant'));
-      break;
     case 'open-settings':
       openSettingsModal();
       break;
@@ -2713,24 +2654,6 @@ document.addEventListener('click', function(ev){
       renderSettingsModal();
       break;
     }
-    case 'set-email-enabled':
-      STATE.emailEnabled = target.checked;
-      // Switching sending off must also stop the unattended sender, or the
-      // toggle would look like it had turned everything off while a scheduled
-      // job kept mailing people.
-      if(!target.checked) STATE.autoSendEmail = false;
-      saveState(STATE);
-      renderSettingsModal();
-      renderAll();
-      break;
-    case 'set-auto-email':
-      STATE.autoSendEmail = target.checked;
-      saveState(STATE);
-      showToast(target.checked
-        ? 'Automatic emails are on. They start at the next hourly run.'
-        : 'Automatic emails are off.');
-      renderAll();
-      break;
     case 'remove-step':
       SETTINGS_DRAFT.sequence.splice(parseInt(target.getAttribute('data-idx'),10), 1);
       renderSettingsModal();
