@@ -629,6 +629,10 @@ td.score-cell{width:1%;white-space:nowrap;}
    card so it reads as a tool rather than another library entry. */
 .np{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
   padding:14px;margin-bottom:22px;box-shadow:var(--shadow);}
+.np-head{display:flex;align-items:center;gap:10px;cursor:pointer;}
+.np-head:hover h3{color:var(--green);}
+.np-caret{margin-left:auto;font-size:11px;color:var(--ink-faint);}
+.np:not(.open){padding:11px 14px;margin-bottom:14px;}
 .np-head h3{margin:0 0 3px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;}
 .np-head .hint{font-size:11.5px;color:var(--ink-faint);display:block;line-height:1.5;max-width:62ch;}
 .np-select{width:100%;margin-top:11px;padding:8px 11px;border:1px solid var(--border);

@@ -1091,7 +1091,7 @@ function renderDeadTab(){
    keeping on the contact whether or not a draft gets written: they feed the
    recap email's {recap}, the AI text drafting, and the next person who opens
    that contact in six months. */
-var NOTES_PANEL = {cid: '', notes: '', draft: null, channel: 'email', busy: false};
+var NOTES_PANEL = {cid: '', notes: '', draft: null, channel: 'email', busy: false, open: false};
 
 function recentContactsForNotes(){
   // Whoever you have most likely just spoken to: calls nearest to now first,
@@ -1107,14 +1107,31 @@ function recentContactsForNotes(){
 }
 
 function renderNotesPanel(box){
-  var wrap = h('div',{class:'np'},[]);
+  /* Closed until wanted.
 
-  wrap.appendChild(h('div',{class:'np-head'},[
+     This is a tool, not the contents of the tab. Open by default it took a
+     third of the screen on every visit -- a form sitting between someone and
+     the emails they came to look at. It is used after a call, which is a
+     minority of visits.
+
+     A row rather than a button, so it reads as a section that opens rather
+     than an action that does something. */
+  var wrap = h('div',{class:'np' + (NOTES_PANEL.open ? ' open' : '')},[]);
+
+  var head = h('div',{class:'np-head','data-action':'np-toggle'},[
     h('h3',{},['Draft from your call notes']),
-    h('span',{class:'hint'},[
-      'Paste what came out of the call. It saves to the ' + termLower('contact') +
-      ' and writes a follow-up that actually mentions it.'
-    ])
+    h('span',{class:'np-caret'},[NOTES_PANEL.open ? '\u25BE' : '\u25B8'])
+  ]);
+  wrap.appendChild(head);
+
+  if(!NOTES_PANEL.open){
+    box.appendChild(wrap);
+    return;
+  }
+
+  wrap.appendChild(h('span',{class:'hint'},[
+    'Paste what came out of the call. It saves to the ' + termLower('contact') +
+    ' and writes a follow-up that actually mentions it.'
   ]));
 
   var picker = h('select',{class:'np-select','data-action':'np-client'},[]);
@@ -1355,9 +1372,10 @@ function renderEmailLibrary(){
           'Fills in: {name} {sender} {when} {date} {time} {link}'
         ]),
         h('div',{class:'lib-foot-actions'},[
-          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-download','data-id':d.id},['Download']),
-          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'up'},['↑']),
-          h('button',{class:'btn btn-sm btn-ghost','data-action':'email-doc-move','data-id':d.id,'data-dir':'down'},['↓']),
+          /* No per-email Download and no reorder arrows.
+             "Download all" covers the real case -- handing the set to someone
+             -- and four buttons where one is Delete made the destructive one
+             just another grey button in a row. */
           h('button',{class:'btn btn-sm btn-ghost danger','data-action':'email-doc-delete','data-id':d.id},['Delete'])
         ])
       ]));
@@ -2808,6 +2826,10 @@ document.addEventListener('click', function(ev){
     case 'reload-app':
       window.location.reload();
       break;
+    case 'np-toggle':
+      NOTES_PANEL.open = !NOTES_PANEL.open;
+      renderEmailLibrary();
+      break;
     case 'np-save': {
       var nsc = STATE.clients[NOTES_PANEL.cid];
       if(!nsc) break;
@@ -2884,23 +2906,6 @@ document.addEventListener('click', function(ev){
       renderEmailLibrary();
       break;
     }
-    case 'email-doc-move': {
-      // Reordering by swapping sortOrder with the neighbour, so only two rows
-      // change and the diff stays small.
-      var mid = target.getAttribute('data-id');
-      var dir = target.getAttribute('data-dir');
-      var list = emailLibrary(STATE);
-      var idx = -1;
-      list.forEach(function(x, i){ if(x.id === mid) idx = i; });
-      var swapWith = dir === 'up' ? idx - 1 : idx + 1;
-      if(idx === -1 || swapWith < 0 || swapWith >= list.length) break;
-      var a = findEmailDoc(list[idx].id), b = findEmailDoc(list[swapWith].id);
-      if(!a || !b) break;
-      var tmpOrder = a.sortOrder; a.sortOrder = b.sortOrder; b.sortOrder = tmpOrder;
-      saveState(STATE);
-      renderEmailLibrary();
-      break;
-    }
     case 'email-doc-delete': {
       var ddoc = findEmailDoc(target.getAttribute('data-id'));
       if(!ddoc) break;
@@ -2913,12 +2918,6 @@ document.addEventListener('click', function(ev){
       saveState(STATE);
       renderEmailLibrary();
       showToast('Deleted.');
-      break;
-    }
-    case 'email-doc-download': {
-      var dl = findEmailDoc(target.getAttribute('data-id'));
-      if(!dl) break;
-      downloadText(exportFilename(dl.title), exportEmailDoc(dl));
       break;
     }
     case 'email-lib-download': {
