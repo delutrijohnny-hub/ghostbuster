@@ -2057,6 +2057,33 @@ console.log('\n--- the morning list reads in an order ---');
     assert.ok(/stage-chip/.test(app), 'the review panel and focus mode still need it');
   });
 
+  test('the Today list renders filtered and unfiltered, and recovers from a stale filter', () => {
+    /* A filter pointing at a kind that is no longer due would show an empty
+       column with no way to tell why -- the cards are gone and the button
+       that hid them is gone too, because the bar is built from what is
+       actually in the list. It falls back to showing everything. */
+    const ctx = makeHostedCtx();
+    const soon = new Date(Date.now() + 5 * 86400000).toISOString();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      for (var i = 0; i < 4; i++) {
+        STATE.clients['c' + i] = sanitizeClient({id:'c' + i, name:'P' + i,
+          phone:'21355501' + i, timezone:'America/New_York', status:'Booked',
+          bookedDate: new Date(Date.now() - 20*86400000).toISOString(),
+          callDateTime: '${soon}'});
+      }
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderCallsBoard()', ctx), 'unfiltered');
+
+    vm.runInContext("UI.touchFilter = 'welcome';", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderCallsBoard()', ctx), 'filtered to a real kind');
+
+    vm.runInContext("UI.touchFilter = 'noshow';", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderCallsBoard()', ctx), 'filtered to a kind with nothing due');
+    assert.strictEqual(vm.runInContext('UI.touchFilter', ctx), '',
+      'a filter with nothing behind it must reset, or the column is empty with no way back');
+  });
+
   test('the real list comes out grouped, not interleaved', () => {
     // End to end through getTextTodayList, not just the comparator.
     const clients = {};

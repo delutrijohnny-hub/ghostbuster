@@ -58,7 +58,7 @@ function slimerSvg(size){
 
 var STATE = null;
 
-var UI = {tab:'calls', statsRange:'today', callsSearch:'', clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
+var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -567,29 +567,62 @@ function renderCallsBoard(){
   var todayCol = el('col-text-today');
   if(todayCol){
     todayCol.innerHTML = '';
-    if(!textToday.length){
-      todayCol.appendChild(UI.callsSearch.trim() ? h('div',{class:'empty-note'},['No matches for "' + UI.callsSearch.trim() + '".']) : buildBustedPanel());
-    }
-    /* A heading each time the kind of message changes.
 
-       Sorting alone groups them, but a run of cards with no divider still
-       reads as one undifferentiated pile — which is the complaint. The
-       heading says what the next few are and how many, so the list can be
-       worked a block at a time: four introductions, then the reminders, then
-       the chasing. */
+    /* Filter buttons across the top instead of headings down the middle.
+
+       Grouping the list fixed the order but the inline headings fought the
+       cards: a divider every few rows breaks the column up exactly where you
+       are trying to read down it. The same information works better as a row
+       of buttons — what kinds are waiting, how many of each, and one click to
+       see only those.
+
+       Built from what is actually in the list today, so a kind with nothing
+       due does not offer an empty button. */
+    var counts = {}, order = [];
+    textToday.forEach(function(it){
+      if(counts[it.stage] === undefined){ counts[it.stage] = 0; order.push(it.stage); }
+      counts[it.stage]++;
+    });
+
+    // A filter pointing at a kind that is no longer due would show an empty
+    // column with no way to tell why, so it falls back to showing everything.
+    if(UI.touchFilter && counts[UI.touchFilter] === undefined) UI.touchFilter = '';
+
+    if(order.length > 1){
+      var bar = h('div',{class:'touch-filter'},[]);
+      bar.appendChild(h('button',{
+        class:'tf-chip' + (UI.touchFilter ? '' : ' on'),
+        'data-action':'touch-filter','data-stage':''},
+        ['All', h('b',{},[String(textToday.length)])]));
+      order.forEach(function(st){
+        bar.appendChild(h('button',{
+          class:'tf-chip ' + st + (UI.touchFilter === st ? ' on' : ''),
+          'data-action':'touch-filter','data-stage':st},
+          [touchLabel(st), h('b',{},[String(counts[st])])]));
+      });
+      todayCol.appendChild(bar);
+    }
+
+    var shown = UI.touchFilter
+      ? textToday.filter(function(it){ return it.stage === UI.touchFilter; })
+      : textToday;
+
+    if(!shown.length){
+      todayCol.appendChild(UI.callsSearch.trim()
+        ? h('div',{class:'empty-note'},['No matches for "' + UI.callsSearch.trim() + '".'])
+        : buildBustedPanel());
+    }
+
     var lastStage = null;
-    textToday.forEach(function(it, i){
-      if(it.stage !== lastStage){
+    shown.forEach(function(it, i){
+      // With a filter on, every card is the same kind and the button above
+      // already says which, so a heading would only repeat it.
+      if(!UI.touchFilter && it.stage !== lastStage){
         var runLength = 0;
-        for(var j = i; j < textToday.length && textToday[j].stage === it.stage; j++) runLength++;
-        // Same pill language the cards already use, tinted by stage, so the
-        // heading reads as part of the existing vocabulary rather than a new
-        // one — and the colour says "these are the cold ones" before the
-        // words are read.
+        for(var j = i; j < shown.length && shown[j].stage === it.stage; j++) runLength++;
         todayCol.appendChild(h('div',{class:'touch-group'},[
           h('span',{class:'touch-group-chip ' + it.stage},[
-            touchLabel(it.stage),
-            h('b',{},[String(runLength)])
+            touchLabel(it.stage), h('b',{},[String(runLength)])
           ])
         ]));
         lastStage = it.stage;
@@ -2881,6 +2914,10 @@ document.addEventListener('click', function(ev){
     case 'np-discard':
       NOTES_PANEL.draft = null;
       renderEmailLibrary();
+      break;
+    case 'touch-filter':
+      UI.touchFilter = target.getAttribute('data-stage') || '';
+      renderCallsBoard();
       break;
     case 'pick-email': {
       var pc = STATE.clients[target.getAttribute('data-cid')];
