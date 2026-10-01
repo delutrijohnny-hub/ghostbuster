@@ -2284,6 +2284,52 @@ test('no source file names one customer\'s domain in its logic', () => {
     'codeOnly stripped too much — the guard would pass on anything');
 });
 
+test('rewriting a starter text gives it a new id, because pooling is keyed by id', () => {
+  /* builtin_variant_stats is keyed (stage, variant_key) GLOBALLY, across every
+     account. So if a starter text's wording changes but its id does not, an
+     account seeded today and one seeded last month both report into the same
+     row while sending materially different messages — and the bandit ranks
+     copy using numbers earned by copy that no longer exists.
+
+     This compares the current defaults against the version in git from before
+     the industry-neutral rewrite. Any id appearing in both with different text
+     is the bug. It is a cheap check and it is the kind of thing nobody
+     remembers at the moment they are editing copy. */
+  const { execSync } = require('child_process');
+  let previous;
+  try {
+    previous = execSync('git show 08ffce1~1:hosted/logic.js', {cwd: __dirname, encoding: 'utf8'});
+  } catch (e) {
+    console.log('     (skipped — git history not available here)');
+    return;
+  }
+  const ctx = {globalThis: {}, console};
+  vm.createContext(ctx);
+  vm.runInContext(previous, ctx);
+  const before = ctx.globalThis.GBLogic.buildDefaultVariants();
+  const after = GB.buildDefaultVariants();
+
+  const collisions = [];
+  Object.keys(after).forEach(stage => after[stage].forEach(v => {
+    const old = (before[stage] || []).find(x => x.id === v.id);
+    if (old && old.text !== v.text) collisions.push(stage + '/' + v.id);
+  }));
+  assert.deepStrictEqual(collisions, [],
+    'starter text(s) changed wording while keeping an id that already carries pooled ' +
+    'stats for the old wording: ' + collisions.join(', '));
+});
+
+test('no two starter variants share an id within a stage', () => {
+  // Re-keying by hand is exactly when a duplicate slips in, and a duplicate
+  // key would make two different texts indistinguishable to the bandit.
+  const v = GB.buildDefaultVariants();
+  Object.keys(v).forEach(stage => {
+    const ids = v[stage].map(x => x.id);
+    assert.strictEqual(new Set(ids).size, ids.length,
+      'duplicate variant id in ' + stage + ': ' + ids.join(', '));
+  });
+});
+
 test('the starter texts a new account gets work for any business', () => {
   /* 17 of the 28 default texts were written for one YouTube agency, and one
      introduced the sender as "with MarketMakerMGMT". Every new account is

@@ -388,28 +388,44 @@ function sameContact(a, b){
    mutated by a later merge (see spec trap #2).
    ============================================================ */
 
+/* Why some ids carry -v2.
+
+   The pooled learning table is keyed (stage, variant_key) GLOBALLY, across
+   every account. When these starter texts were rewritten to stop assuming one
+   industry, 18 of them changed wording while keeping their id — so an account
+   seeded today and an account seeded last month would both report into
+   (welcome, w1) while sending materially different messages, and the bandit
+   would rank copy using numbers earned by copy that no longer exists.
+
+   New wording is a new variant. The rewritten ones get new keys, so the old
+   accounts keep contributing to the old rows and new accounts start their own.
+   The ten that kept their exact text keep their keys, because for those the
+   history is genuinely about the same message.
+
+   Only pooled learning is affected either way: an account's own variant_stats
+   are per-account rows, and existing accounts are never reseeded. */
 function buildDefaultVariants(){
   return {
     welcome: [
-      {id:'w1', builtin:true, text:"Hey {name}, {sender} here. You're locked in for {date} at {time}. I'll come prepared with specifics for your situation rather than a general overview. Go ahead and block the time."},
-      {id:'w2', builtin:true, text:"Hi {name}, {sender} here. We're set for {date} at {time}. If there's something in particular you want covered, reply and I'll make sure we get to it."},
+      {id:'w1-v2', builtin:true, text:"Hey {name}, {sender} here. You're locked in for {date} at {time}. I'll come prepared with specifics for your situation rather than a general overview. Go ahead and block the time."},
+      {id:'w2-v2', builtin:true, text:"Hi {name}, {sender} here. We're set for {date} at {time}. If there's something in particular you want covered, reply and I'll make sure we get to it."},
       {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}, {sender} here. Got {channel} open and locked you in for {date} at {time}. Want to focus on the biggest leverage points for local search and discovery. Talk soon."}
     ],
     monday: [
-      {id:'m1', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Nothing needed from you beforehand — just keep it on the calendar."},
-      {id:'m2', builtin:true, text:"Hi {name}, hope the week's off to a good start. We're on for {weekday} at {time}. Say the word if the time stopped working and I'll move it."}
+      {id:'m1-v2', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Nothing needed from you beforehand — just keep it on the calendar."},
+      {id:'m2-v2', builtin:true, text:"Hi {name}, hope the week's off to a good start. We're on for {weekday} at {time}. Say the word if the time stopped working and I'll move it."}
     ],
     midcheckin: [
-      {id:'c1', builtin:true, text:"Hey {name}, checking in ahead of {date}. Still a good time on your end?"},
-      {id:'c2', builtin:true, text:"Hi {name}, touching base before {date}. Let me know if anything shifted on your schedule and we'll find another slot."},
+      {id:'c1-v2', builtin:true, text:"Hey {name}, checking in ahead of {date}. Still a good time on your end?"},
+      {id:'c2-v2', builtin:true, text:"Hi {name}, touching base before {date}. Let me know if anything shifted on your schedule and we'll find another slot."},
       {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, reviewing our plan for {channel} before {date}. Want to zone in on your local video packaging and CTR. Still all set?"},
       {id:'c4', builtin:true, text:"Hey {name}, quick schedule check for {date}. Drop a 👍 if that time still works and I'll see you then."}
     ],
     dayof: [
-      {id:'d1', builtin:true, text:"Hey {name}, hopping on at {time}. Here's the link: {link}"},
-      {id:'d2', builtin:true, text:"Hi {name}, ready for our call at {time}. Jump in here: {link}"},
-      {id:'d3', builtin:true, text:"Hey {name}, talk at {time}. Room link is here: {link}"},
-      {id:'d4', builtin:true, text:"Hi {name}, see you at {time}. Join here: {link}"}
+      {id:'d1-v2', builtin:true, text:"Hey {name}, hopping on at {time}. Here's the link: {link}"},
+      {id:'d2-v2', builtin:true, text:"Hi {name}, ready for our call at {time}. Jump in here: {link}"},
+      {id:'d3-v2', builtin:true, text:"Hey {name}, talk at {time}. Room link is here: {link}"},
+      {id:'d4-v2', builtin:true, text:"Hi {name}, see you at {time}. Join here: {link}"}
     ],
     // Fires ~1 hour out, after "dayof" has already gone in the morning. The
     // no-show data says most misses aren't people changing their mind, they're
@@ -421,12 +437,12 @@ function buildDefaultVariants(){
       {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"}
     ],
     recovery: [
-      {id:'r1', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to get this on the calendar? Let me know if I should drop a couple of new times."},
-      {id:'r2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to move ahead, send over a couple of open windows and I'll get us set."}
+      {id:'r1-v2', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to get this on the calendar? Let me know if I should drop a couple of new times."},
+      {id:'r2-v2', builtin:true, text:"Hi {name}, caught you at a busy stretch. If you still want to move ahead, send over a couple of open windows and I'll get us set."}
     ],
     noshow: [
       {id:'n1', builtin:true, text:"Hey {name}, missed you on {date}. No stress, it happens. What does later this week look like on your end?"},
-      {id:'n2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still happy to get you sorted — shoot me a time that works better and we can reset."},
+      {id:'n2-v2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still happy to get you sorted — shoot me a time that works better and we can reset."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
     /* The slow lane. Sent roughly monthly, indefinitely, to anyone who never
@@ -435,7 +451,7 @@ function buildDefaultVariants(){
        quiet, and it makes leaving easy — a nurture text that is hard to say no
        to stops being nurture and becomes harassment. */
     revival: [
-      {id:'v1', builtin:true, text:"Hey {name}, {sender} here. Been a while. If this is still on the list, happy to pick it back up. If not, no hard feelings and I'll leave you be."},
+      {id:'v1-v2', builtin:true, text:"Hey {name}, {sender} here. Been a while. If this is still on the list, happy to pick it back up. If not, no hard feelings and I'll leave you be."},
       {id:'v2', builtin:true, text:"Hi {name}, checking in after a while. Things change, so figured I'd ask: is this still something you're thinking about? A yes or a no both work."},
       {id:'v3', builtin:true, text:"Hey {name}, circling back one more time. If the timing is better now I can send over a couple of slots. If it's not, just say and I'll stop bugging you."}
     ],
@@ -445,16 +461,16 @@ function buildDefaultVariants(){
     // someone coming back around, not a stranger, so the tone skips the
     // introduction but still reads as a first real connection.
     rebooked: [
-      {id:'rb1', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Same plan as before — I'll come ready with specifics."},
-      {id:'rb2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen."}
+      {id:'rb1-v2', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Same plan as before — I'll come ready with specifics."},
+      {id:'rb2-v2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen."}
     ],
     // Fires instead of "rebooked" when the prior contact's last known status
     // was Completed — they already had a real call with John, this is a
     // genuine second call, and the copy should read that way (not like
     // they're a stranger or a no-show finally showing up).
     followup: [
-      {id:'f1', builtin:true, text:"Hey {name}, good to pick this back up on {date} at {time}. I'll carry on from where we finished rather than starting over."},
-      {id:'f2', builtin:true, text:"Hi {name}, {sender} here. Glad we're back on the calendar for {date} at {time}. Let's pick up where we left off."}
+      {id:'f1-v2', builtin:true, text:"Hey {name}, good to pick this back up on {date} at {time}. I'll carry on from where we finished rather than starting over."},
+      {id:'f2-v2', builtin:true, text:"Hi {name}, {sender} here. Glad we're back on the calendar for {date} at {time}. Let's pick up where we left off."}
     ]
   };
 }
