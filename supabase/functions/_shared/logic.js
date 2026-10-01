@@ -3465,6 +3465,27 @@ function cadenceProgress(client, now){
 var TOUCH_PICK_ORDER = ['hourbefore', 'dayof', 'noshow', 'recovery',
                         'welcome', 'rebooked', 'followup', 'monday', 'midcheckin'];
 
+/* Has a cadence text already gone to this person today, where they are?
+
+   Their timezone, not ours: "today" for someone in Hawaii is not today here,
+   and the whole point is how many messages THEY received.
+
+   Only sms. An email from the library is a different channel landing in a
+   different place, and the two together is a normal follow-up, not a pile-on. */
+function sentCadenceTouchToday(client, now){
+  var log = client.messageLog || [];
+  var tz = client.timezone || 'America/New_York';
+  var todayKey = tzDateKey(now, tz);
+  for(var i = 0; i < log.length; i++){
+    var m = log[i];
+    if((m.channel || 'sms') !== 'sms') continue;
+    if(m.stage === 'email') continue;
+    var t = safeDate(m.sentAt);
+    if(t && tzDateKey(t, tz) === todayKey) return true;
+  }
+  return false;
+}
+
 function pickTodaysTouch(due){
   for(var i = 0; i < TOUCH_PICK_ORDER.length; i++){
     if(due.indexOf(TOUCH_PICK_ORDER[i]) !== -1) return TOUCH_PICK_ORDER[i];
@@ -3530,6 +3551,29 @@ function getTextTodayList(state, now, searchQuery){
     // afternoon. Whatever isn't picked today stays due tomorrow, so the
     // cadence still delivers every touch, just spread out the way a person
     // would send them.
+    /* One relationship text per person per day, enforced on SENDS as well as
+       on the queue.
+
+       pickTodaysTouch already shows a single row per person when several
+       touches come due at once. It did not stop the NEXT one appearing the
+       moment the first was sent — so sending Caitlin her welcome text put her
+       straight back in the list with a midpoint text, and anyone working the
+       queue top to bottom would text the same person twice in an afternoon.
+       The comment above has always claimed whatever is not picked "stays due
+       tomorrow"; this is what makes that true.
+
+       Time-critical touches are exempt. If the day-of link becomes due an
+       hour after a welcome went out, it still goes out: missing a meeting
+       link to avoid a second message is a far worse trade.
+
+       Emails do not count. Sending the pre-call email and then the text is a
+       normal thing to do, and the two are different channels arriving in
+       different places. */
+    var alreadyTexted = sentCadenceTouchToday(c, now);
+    if(alreadyTexted){
+      due = due.filter(function(stage){ return STAGE_PRIORITY.indexOf(stage) !== -1; });
+      if(!due.length) return;
+    }
     items.push({client: c, stage: pickTodaysTouch(due)});
   });
 
@@ -4130,7 +4174,7 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultScoreWeights: buildDefaultScoreWeights, ghostScoreBand: ghostScoreBand,
   SCORE_GROUPS: SCORE_GROUPS, scoreGroupOf: scoreGroupOf,
   computeGhostScore: computeGhostScore, rankByGhostScore: rankByGhostScore,
-  pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
+  sentCadenceTouchToday: sentCadenceTouchToday,   pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,

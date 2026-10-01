@@ -699,6 +699,11 @@ td.score-cell{width:1%;white-space:nowrap;}
 .ce-btn{display:inline-block;padding:6px 11px;border:1px solid var(--border);
   border-radius:99px;background:var(--card);color:var(--ink);
   font-size:12px;font-weight:700;text-decoration:none;line-height:1.3;}
+/* On a Today card the row sits under the actions and stays quiet: these are
+   there when wanted, and the card's job is still the text. */
+.card-emails{flex:1 1 100%;margin-top:7px;padding-top:8px;border-top:1px dashed var(--border);}
+.card-emails .ce-btn{font-size:11px;padding:4px 9px;font-weight:600;color:var(--ink-soft);}
+.card-emails .ce-btn.ce-pinned{border-color:var(--green);color:var(--green);font-weight:800;}
 .ce-btn:hover{border-color:var(--green);background:var(--green-soft);color:var(--green);}
 @media (max-width:560px){ .ce-btn{flex:1 1 calc(50% - 3px);text-align:center;} }
 .pick-pin{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;

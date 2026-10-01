@@ -388,35 +388,33 @@ function buildTouchCard(client, stage, now){
      and the reply arrives where they already look. Offered whenever there is a
      usable address — unlike the provider route it does not depend on
      email_enabled, which is why email is usable today. */
+  /* The same row of email buttons that sits on the contact, on the card.
+
+     Asked for directly: the morning list is where the work happens, and
+     opening a contact to send an email is a detour from it.
+
+     A pinned email keeps its place first and marked, because for a touch that
+     has an obvious email that is the one being reached for; the rest follow
+     so a different choice is still one click rather than a modal. */
   if(canEmail(client) && emailLibrary(STATE).length){
-    /* One click when the answer is already known.
-
-       A text is one tap: the message is written, you press send. Email cost
-       two extra clicks because every send went through the picker — and in
-       practice the same email goes out for the same touch nearly every time.
-       Re-making a decision you have already made is the friction that stops
-       a channel getting used.
-
-       Pin an email to this touch in the Emails tab and the button becomes a
-       direct Gmail link, same as the text. Nothing pinned and it still opens
-       the picker, which is right for an email that goes out whenever it is
-       asked for rather than on a schedule. */
-    var pinned = emailForTouch(STATE, stage);
-    var pinnedDraft = pinned ? renderEmailDoc(STATE, pinned.id, client, STATE.senderName) : null;
-    if(pinnedDraft){
-      actions.appendChild(h('a',{class:'btn btn-sm', target:'_blank', rel:'noopener',
-        href: gmailComposeUrl(client.email, pinnedDraft.subject, pinnedDraft.text, businessEmailAccount(STATE)),
-        'data-action':'sent-by-email','data-cid':client.id,'data-doc':pinned.id,
-        title:'Opens Gmail with "' + pinned.title + '" written and ready'},['✉ Email']));
-      // Still reachable, for the day it is not the right one.
-      actions.appendChild(h('button',{class:'btn btn-sm btn-ghost',
-        'data-action':'pick-email','data-cid':client.id,
-        title:'Pick a different email'},['▾']));
-    } else {
-      actions.appendChild(h('button',{class:'btn btn-sm',
-        'data-action':'pick-email','data-cid':client.id,
-        title:'Pick one of your emails, filled in for ' + client.name},['✉ Email']));
+    var pinnedDoc = emailForTouch(STATE, stage);
+    var ordered = emailLibrary(STATE);
+    if(pinnedDoc){
+      ordered = [pinnedDoc].concat(ordered.filter(function(d){ return d.id !== pinnedDoc.id; }));
     }
+    var row = h('div',{class:'ce-btns card-emails'},[]);
+    ordered.forEach(function(d){
+      var r = renderEmailDoc(STATE, d.id, client, STATE.senderName);
+      if(!r) return;
+      var a = h('a',{class:'ce-btn' + (pinnedDoc && d.id === pinnedDoc.id ? ' ce-pinned' : ''),
+        target:'_blank', rel:'noopener',
+        href: gmailComposeUrl(client.email, r.subject, r.text, businessEmailAccount(STATE)),
+        'data-action':'sent-by-email','data-cid':client.id,'data-doc':d.id,
+        title: d.whenToSend ? 'Send ' + d.whenToSend : (d.subject || d.title)},
+        ['✉ ' + d.title]);
+      row.appendChild(a);
+    });
+    if(row.childNodes.length) actions.appendChild(row);
   }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'snooze-touch','data-cid':client.id,'data-stage':stage,title:'Push this to tomorrow'},['Not today']));

@@ -1875,6 +1875,63 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- one text a day, and an email does not use it up ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
+  const sms = (stage, when) => ({id: 'm' + stage, stage, variantId: 'v', text: 'x',
+    sentAt: when || new Date().toISOString(), responded: false, respondedAt: null,
+    reviewed: false, channel: 'sms'});
+  const email = () => ({id: 'me', stage: 'email', variantId: 'lib', text: 'x',
+    sentAt: new Date().toISOString(), responded: false, respondedAt: null,
+    reviewed: false, channel: 'email'});
+  const mk = (log, call) => GB.sanitizeClient({
+    id: 'c', name: 'Caitlin', phone: '2135550100', email: 'c@e.com',
+    timezone: 'America/New_York', status: 'Booked', bookedDate: ago(24 * 10),
+    callDateTime: call || new Date(Date.now() + 4 * 86400000).toISOString(),
+    messageLog: log || []});
+  const queued = (c) => GB.getTextTodayList({clients: {c}, variants: GB.buildDefaultVariants(),
+    variantStats: {}, todos: [], myCalendars: []}, new Date(), '').map(i => i.stage);
+
+  test('sending one text does not immediately queue the next one', () => {
+    /* pickTodaysTouch shows a single row per person when several touches come
+       due together, but nothing stopped the NEXT one appearing the moment the
+       first was sent. Sending Caitlin her welcome put her straight back in the
+       list with a midpoint text, so anyone working the queue top to bottom
+       texted the same person twice in an afternoon. */
+    assert.deepStrictEqual(queued(mk()), ['welcome']);
+    assert.deepStrictEqual(queued(mk([sms('welcome')])), [],
+      'a second text the same day is the thing being prevented');
+  });
+
+  test('an email does not use up the day allowance', () => {
+    // Different channel, lands somewhere else, and sending the pre-call email
+    // and then the text is a normal follow-up rather than a pile-on.
+    assert.deepStrictEqual(queued(mk([email()])), ['welcome']);
+  });
+
+  test('the day-of link still goes out even if a text already went this morning', () => {
+    // Missing a meeting link to avoid a second message is a far worse trade.
+    const todayCall = new Date(new Date().setHours(23, 0, 0, 0)).toISOString();
+    assert.deepStrictEqual(queued(mk([sms('welcome')], todayCall)), ['dayof']);
+  });
+
+  test('yesterday does not block today', () => {
+    assert.ok(queued(mk([sms('welcome', ago(26))])).length,
+      'the allowance is per day, not a rolling window');
+  });
+
+  test('it is their day that counts, not ours', () => {
+    /* "Today" for someone in Hawaii is not today here, and the whole point is
+       how many messages THEY received. */
+    const hawaii = GB.sanitizeClient({id: 'h', name: 'Keanu', phone: '8085550100',
+      timezone: 'Pacific/Honolulu', status: 'Booked', bookedDate: ago(24 * 10),
+      callDateTime: new Date(Date.now() + 4 * 86400000).toISOString(),
+      messageLog: [sms('welcome')]});
+    assert.strictEqual(typeof GB.sentCadenceTouchToday(hawaii, new Date()), 'boolean');
+  });
+}
+
 console.log('\n--- the morning list reads in an order ---');
 
 {
