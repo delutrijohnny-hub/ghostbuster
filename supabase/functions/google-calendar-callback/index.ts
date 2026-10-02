@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
   // person sees is an empty app, which reads as broken. Trigger one sync run
   // for just this user right away so bookings are already there when they
   // land back on GhostBuster. Best-effort: a failure here shouldn't block the
-  // "connected" response — the twice-daily cron and the "Sync now" button are
+  // "connected" response — the scheduled cron runs and the "Sync now" button are
   // still there as fallbacks.
   try {
     const syncFnUrl = `${SUPABASE_URL.replace('.supabase.co', '.functions.supabase.co')}/google-calendar-sync`;

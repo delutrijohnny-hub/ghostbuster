@@ -1,10 +1,16 @@
 // The actual calendar sync. Two callers:
 //  - The "Sync now" button in the app, which invokes this with the signed-in
 //    user's own JWT — syncs only that user's connected calendars.
-//  - The twice-daily cron schedule (see supabase/functions/README.md for the
-//    cron.schedule() call), which invokes this with the service_role key —
-//    no single-user JWT to resolve, so it syncs every user who has at least
-//    one connected calendar.
+//  - The cron schedule — three runs a day at 11:00, 16:00 and 21:00 UTC,
+//    which is 7am, noon and 5pm US Eastern during EDT. The cron.schedule()
+//    calls live in supabase/migrations — 20260803200000 for the first two,
+//    20261002120000 for the 7am run. (This used to point at a
+//    supabase/functions/README.md that has never existed.) This
+//    invokes with the service_role key: no single-user JWT to resolve, so
+//    it syncs every user who has at least one connected calendar. The 7am
+//    run exists because the morning queue used to be built from the
+//    previous day's 5pm sync, with nothing new arriving until noon — after
+//    the morning calls had already been worked.
 //
 // For each connected calendar (processed in priority order, lowest first —
 // see the plan's note on john@marketmakermgmt.com taking priority over the

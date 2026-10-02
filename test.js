@@ -3044,8 +3044,11 @@ console.log('\n--- a dead calendar connection says so ---');
   });
 
   test('a sync gap longer than the cron interval is a failure, not a quiet week', () => {
-    // The cron runs twice daily, so 36h+ means a sync FAILED rather than was
-    // not due. This is the gap that went unnoticed for days.
+    // The cron runs three times a day (11:00, 16:00 and 21:00 UTC), so the
+    // longest legitimate gap is overnight. 36h+ means a sync FAILED rather
+    // than was not due. This is the gap that went unnoticed for days.
+    // The threshold stays at 36h: it was already generous at two runs a day
+    // and a third only makes it safer, so tightening it would buy noise.
     assert.strictEqual(H([{calendarId:'a', lastSync: ago(20)}]).state, 'ok',
       'a normal overnight gap must not cry wolf');
     assert.strictEqual(H([{calendarId:'a', lastSync: ago(40)}]).state, 'stale');
@@ -6178,6 +6181,68 @@ console.log('\n--- a recurring series is one meeting, not hundreds ---');
     const kept = GB.collapseRecurringSeries(events, NOW);
     assert.strictEqual(kept.length, 2, '133 occurrences + 1 booking must become 1 + 1');
     assert.ok(kept.indexOf(realBooking) !== -1, 'the real booking must survive');
+  });
+}
+
+console.log('\n--- the sync schedule and the staleness warning agree ---');
+
+/* Two numbers that have to stay in step, in different files.
+
+   calendarHealth calls a calendar stale after STALE_AFTER_HOURS, and that is
+   only meaningful relative to how often the cron actually runs. If somebody
+   removes a run, or tightens the threshold below the real overnight gap, the
+   app either cries wolf on a healthy calendar or stays silent on a broken
+   one. The second is how Daniel went three days without syncing while nobody
+   noticed.
+
+   The schedules live in SQL migrations, so this reads them rather than
+   restating them. */
+{
+  const migDir = path.join(__dirname, 'supabase', 'migrations');
+  const hours = [];
+  fs.readdirSync(migDir).filter(f => f.endsWith('.sql')).forEach(f => {
+    const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
+    // cron.schedule('name', '0 16 * * *', $$ ... $$)
+    const re = /cron\.schedule\(\s*'([^']+)'\s*,\s*'(\d+)\s+(\d+)\s+\*\s+\*\s+\*'/g;
+    let m;
+    while ((m = re.exec(sql)) !== null) {
+      if (/calendar-sync/.test(m[1])) hours.push(Number(m[3]));
+    }
+  });
+
+  test('the migrations really do schedule the sync', () => {
+    // Guards the regex itself: if it stops matching, every assertion below
+    // would pass on an empty list.
+    assert.ok(hours.length >= 3,
+      'expected at least 3 scheduled calendar syncs, found ' + hours.length);
+  });
+
+  test('a morning run exists, so the 9am queue is not built from yesterday', () => {
+    /* The gap this closed: runs were 16:00 and 21:00 UTC only, so the list
+       somebody worked at 9am came from the previous day's 5pm sync and
+       nothing new arrived until noon. On 2026-10-02 John's first call was
+       11:00 ET, an hour before the day's first sync. */
+    const morning = hours.filter(h => h >= 9 && h <= 13);
+    assert.ok(morning.length >= 1,
+      'no sync scheduled in the UTC morning (09:00-13:00); got ' + JSON.stringify(hours.sort()));
+  });
+
+  test('no healthy schedule can trip the stale warning', () => {
+    const sorted = hours.slice().sort((a, b) => a - b);
+    let worst = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const next = (i + 1 < sorted.length) ? sorted[i + 1] : sorted[0] + 24;
+      worst = Math.max(worst, next - sorted[i]);
+    }
+    assert.ok(worst < GB.STALE_AFTER_HOURS,
+      'longest gap between syncs is ' + worst + 'h but a calendar is called '
+      + 'stale after ' + GB.STALE_AFTER_HOURS + 'h — a healthy calendar would '
+      + 'be reported broken');
+    // And the threshold must not be so loose that a real failure hides for
+    // days. Two missed runs in a row should surface.
+    assert.ok(GB.STALE_AFTER_HOURS <= worst * 3,
+      'the stale threshold (' + GB.STALE_AFTER_HOURS + 'h) is more than three '
+      + 'missed runs wide, which is how a broken sync goes unnoticed');
   });
 }
 
