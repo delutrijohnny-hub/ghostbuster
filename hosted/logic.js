@@ -3464,6 +3464,45 @@ function statusLabel(status){
 }
 
 
+/* What setup actually produced, in a sentence.
+
+   The brief's third onboarding step is "review the first follow-ups due", and
+   it was the missing one: you pressed Finish and landed in the app with no
+   statement of what had happened. That matters most in the case where nothing
+   happened -- a calendar connected but nothing imported looks identical to a
+   calendar that was never connected, and the person has no way to tell which
+   problem they have.
+
+   So it reports the three facts that distinguish those states: whether a
+   calendar is attached, how many contacts came in, and how many are owed a
+   message today. */
+function describeSetup(state, now){
+  now = now || new Date();
+  var connected = ((state && state.calendarConnections) || []).length > 0
+    || ((state && state.myCalendars) || []).length > 0;
+  var contacts = Object.keys((state && state.clients) || {}).length;
+  var due = 0;
+  try { due = getTextTodayList(state, now, '').length; } catch(e) { due = 0; }
+
+  var headline, detail;
+  if(!connected && !contacts){
+    headline = 'Nothing to follow up on yet';
+    detail = 'Connect a calendar, or add someone by hand, and they will appear here.';
+  } else if(connected && !contacts){
+    // The state that most needs explaining, and the one that looked like
+    // silence: three people sat in it for days this week.
+    headline = 'Calendar connected, nothing imported yet';
+    detail = 'The first sync runs shortly. If it stays empty, check which events count as bookings in Settings.';
+  } else if(!due){
+    headline = contacts + (contacts === 1 ? ' contact' : ' contacts') + ' ready';
+    detail = 'Nothing is due today. New bookings will appear here as they come in.';
+  } else {
+    headline = due + (due === 1 ? ' follow-up' : ' follow-ups') + ' due today';
+    detail = 'Out of ' + contacts + (contacts === 1 ? ' contact' : ' contacts') + '. Work down the list and you are done.';
+  }
+  return {connected: connected, contacts: contacts, due: due, headline: headline, detail: detail};
+}
+
 function computeHealthAlerts(state){
   var alerts = [];
   var now = new Date();
@@ -4354,7 +4393,7 @@ var __LOGIC_EXPORTS__ = {
   sentCadenceTouchToday: sentCadenceTouchToday,   pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
-  computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
+  describeSetup: describeSetup,   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
   isOthersLead: isOthersLead, canEmail: canEmail, gmailComposeUrl: gmailComposeUrl,

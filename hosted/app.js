@@ -2335,7 +2335,34 @@ function finishOnboarding(skipped){
   ONBOARDING = null;
   closeModal();
   renderAll();
-  if(!skipped) showToast('You’re set up. Connect a calendar any time from the Menu.');
+  if(skipped) return;
+
+  /* End on what setup actually produced, not on "you're set up".
+
+     The brief's third step is "review the first follow-ups due", and it was
+     the missing one -- Finish dropped you into the app with no statement of
+     what had happened. That matters most where nothing happened: a calendar
+     connected but nothing imported looks identical to a calendar never
+     connected, and three people sat in exactly that state for days this week
+     without being able to tell which problem they had.
+
+     A panel rather than a toast, because a toast disappears and this is the
+     one moment someone is deciding whether the thing works. */
+  var setup = describeSetup(STATE, new Date());
+  openModalHtml(
+    '<div class="modal-head"><h2>' + escapeHtml(setup.headline) + '</h2>' +
+    '<button class="btn-ghost btn" data-action="close-modal">\u2715</button></div>' +
+    '<p class="hint">' + escapeHtml(setup.detail) + '</p>' +
+    '<div class="ob-setup-rows">' +
+      '<div class="ob-setup-row"><span>Calendar</span><strong>' +
+        (setup.connected ? 'connected' : 'not connected yet') + '</strong></div>' +
+      '<div class="ob-setup-row"><span>' + escapeHtml(term('contactPlural')) + '</span><strong>' +
+        setup.contacts + '</strong></div>' +
+      '<div class="ob-setup-row"><span>Due today</span><strong>' + setup.due + '</strong></div>' +
+    '</div>' +
+    '<div class="modal-foot" style="text-align:right;margin-top:14px;">' +
+      '<button class="btn btn-green" data-action="close-modal">' +
+      (setup.due ? 'Start working the list' : 'Got it') + '</button></div>');
 }
 
 function renderOnboarding(){

@@ -311,6 +311,13 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    leaves the judgement call to memory. */
 /* Whether a human recorded a timeline entry or GhostBuster observed it.
    Quiet by design: it qualifies the line rather than competing with it. */
+/* The closing panel of setup: what it actually produced. */
+.ob-setup-rows{margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;}
+.ob-setup-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:9px 12px;font-size:13px;border-bottom:1px solid var(--border);}
+.ob-setup-row:last-child{border-bottom:0;}
+.ob-setup-row span{color:var(--ink-soft);}
+.ob-setup-row strong{font-weight:800;}
 .tl-by{display:inline-block;margin-left:7px;font-size:9.5px;font-weight:800;
   text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;border-radius:99px;
   background:var(--border);color:var(--ink-faint);vertical-align:middle;}

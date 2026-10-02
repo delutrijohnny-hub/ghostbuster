@@ -1920,6 +1920,62 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- setup ends by saying what it produced ---');
+
+{
+  const base = () => ({variants: GB.buildDefaultVariants(), variantStats: {}, todos: [], myCalendars: []});
+  const people = (n) => {
+    const c = {};
+    for (let i = 0; i < n; i++) {
+      c['c' + i] = GB.sanitizeClient({id: 'c' + i, name: 'P' + i, phone: '21355501' + i,
+        timezone: 'America/New_York', status: 'Booked',
+        bookedDate: new Date(Date.now() - 20 * 86400000).toISOString(),
+        callDateTime: new Date(Date.now() + 4 * 86400000).toISOString()});
+    }
+    return c;
+  };
+
+  test('a connected calendar with nothing imported is named, not left as silence', () => {
+    /* The state that most needed explaining and looked exactly like the state
+       of having done nothing. Three people sat in it for days this week
+       without being able to tell which problem they had. */
+    const d = GB.describeSetup(Object.assign(base(), {clients: {}, myCalendars: ['a@b.com']}), new Date());
+    assert.ok(/Calendar connected, nothing imported/.test(d.headline), d.headline);
+    assert.ok(/which events count as bookings/.test(d.detail),
+      'and it should point at the setting that fixes it: ' + d.detail);
+  });
+
+  test('an empty account is told how to start', () => {
+    const d = GB.describeSetup(Object.assign(base(), {clients: {}}), new Date());
+    assert.ok(/Nothing to follow up on yet/.test(d.headline));
+    assert.ok(/add someone by hand/.test(d.detail));
+    assert.strictEqual(d.connected, false);
+  });
+
+  test('a working account ends on the work, not on congratulations', () => {
+    const d = GB.describeSetup(Object.assign(base(), {clients: people(5), myCalendars: ['a@b.com']}), new Date());
+    assert.ok(/follow-ups due today/.test(d.headline), d.headline);
+    assert.strictEqual(d.contacts, 5);
+    assert.ok(d.due > 0);
+  });
+
+  test('it never throws on a half-built state', () => {
+    // It runs at the end of onboarding, which is exactly when state is least
+    // complete -- a crash there is the first thing a new user would ever see.
+    assert.doesNotThrow(() => GB.describeSetup({}, new Date()));
+    assert.doesNotThrow(() => GB.describeSetup({clients: {}}, new Date()));
+    assert.doesNotThrow(() => GB.describeSetup(null, new Date()));
+  });
+
+  test('the panel renders at the end of onboarding', () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext("STATE = buildDefaultState(); STATE.myCalendars = ['a@b.com'];", ctx);
+    assert.doesNotThrow(() => vm.runInContext('finishOnboarding(false)', ctx));
+    // Skipping setup must stay silent -- someone who skipped did not ask.
+    assert.doesNotThrow(() => vm.runInContext('finishOnboarding(true)', ctx));
+  });
+}
+
 console.log('\n--- the score explains itself ---');
 
 {
