@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GhostBuster — follow-up that never forgets a lead</title>
-<meta name="description" content="GhostBuster is the follow-up layer for sales teams: it tells you who to contact, when, how and what to say, so no opportunity gets forgotten.">
+<title>Ghost Recall — follow-up that never forgets a lead</title>
+<meta name="description" content="Ghost Recall is the follow-up layer for sales teams: it tells you who to contact, when, how and what to say, so no opportunity gets forgotten.">
 <meta name="theme-color" content="#14161f">
-<meta property="og:title" content="GhostBuster">
+<meta property="og:title" content="Ghost Recall">
 <meta property="og:description" content="Follow-up that never forgets a lead.">
 <meta property="og:type" content="website">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2317171a'/%3E%3Cpath d='M32 10c-10 0-17 7.5-17 17.5v16c0 1.7 2 2.5 3 1.2l3-3.7 3.5 3.5 3.5-3.5 4 3.5 4-3.5 3.5 3.5 3.5-3.5 3 3.7c1 1.3 3 .5 3-1.2v-16C45 17.5 42 10 32 10z' fill='%23fff'/%3E%3Cellipse cx='25' cy='27' rx='3.6' ry='4.4' fill='%2317171a'/%3E%3Cellipse cx='39' cy='27' rx='3.6' ry='4.4' fill='%2317171a'/%3E%3Cpath d='M6 16 L13 21 M58 16 L51 21' stroke='%23dc2f4a' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%2317171a%27%2F%3E%3Cg%20transform%3D%27translate%285%206%29%20scale%280.80%29%27%3E%3Cpath%20fill-rule%3D%27evenodd%27%20fill%3D%27%23ffffff%27%20d%3D%27M30%209c-10.5%200-18%207.4-18%2018v19.3c0%202.4%202.8%203.6%204.5%202l3.3-3.1%203.4%203.1c1%201%202.6%201%203.6%200l3.4-3.1%203.4%203.1c1%201%202.6%201%203.6%200l3.3-3.1%203.2%203c1.7%201.6%204.3.3%204.3-2V27c0-10.6-7.5-18-18-18zM24%2025a2.5%202.5%200%201%200%200%205%202.5%202.5%200%201%200%200-5zM36%2025a2.5%202.5%200%201%200%200%205%202.5%202.5%200%201%200%200-5z%27%2F%3E%3Cpath%20d%3D%27M53.5%2015.5a12%2012%200%200%201%203.2%209%27%20fill%3D%27none%27%20stroke%3D%27%23dc2f4a%27%20stroke-width%3D%274%27%20stroke-linecap%3D%27round%27%2F%3E%3Cpath%20d%3D%27M50%2023.2a5.5%205.5%200%200%201%201.5%204.1%27%20fill%3D%27none%27%20stroke%3D%27%23dc2f4a%27%20stroke-width%3D%273.6%27%20stroke-linecap%3D%27round%27%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
 <style>
 @font-face{
   font-family:'Anton';
@@ -309,7 +309,7 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 /* The one-line reason under a card's name. Quiet -- it is context for the
    message, not a heading -- but always present, because a card without it
    leaves the judgement call to memory. */
-/* Whether a human recorded a timeline entry or GhostBuster observed it.
+/* Whether a human recorded a timeline entry or Ghost Recall observed it.
    Quiet by design: it qualifies the line rather than competing with it. */
 /* The first screen a new account sees. Not a celebration -- a starting
    point, with the one action that matters on it. */
@@ -416,7 +416,7 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .recent-send-row .replied-label{display:flex;align-items:center;gap:5px;flex:0 0 auto;font-size:11.5px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;}
 .recent-sends-empty{padding:16px 14px;color:var(--ink-faint);font-size:13px;}
 
-/* GhostBuster Today — the work list. Ranked by Ghost Score, and every row
+/* Ghost Recall Today — the work list. Ranked by Ghost Score, and every row
    shows why it is there, because a priority nobody can explain is a priority
    nobody trusts. */
 .gt{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow);}
@@ -970,14 +970,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      viewport for the same reason - a landscape phone has very little height. -->
 <div id="signin-screen" style="min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:clamp(10px,3vh,18px);background:var(--black);color:#fff;text-align:center;padding:20px;box-sizing:border-box;">
   <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M32 6c-12 0-20 9-20 21v19c0 2 2 3 3.5 1.5L19 44l4 4 4-4 5 4 5-4 4 4 3.5-3.5C46 46 48 45 48 43V27C48 15 40 6 32 6z" fill="#fff"/>
-    <ellipse cx="24" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>
-    <ellipse cx="40" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>
-    <circle cx="25.3" cy="24.5" r="1.3" fill="#fff"/>
-    <circle cx="41.3" cy="24.5" r="1.3" fill="#fff"/>
-    <path d="M26 39q6 5 12 0" stroke="#17171a" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-  </svg>
-  <h1 style="font-family:'Anton',-apple-system,sans-serif;font-size:28px;letter-spacing:.3px;margin:0;">THE GHOSTBUSTER</h1>
+        <path fill-rule="evenodd" fill="currentColor" d="M30 9c-10.5 0-18 7.4-18 18v19.3c0 2.4 2.8 3.6 4.5 2l3.3-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.4-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.3-3.1 3.2 3c1.7 1.6 4.3.3 4.3-2V27c0-10.6-7.5-18-18-18zM24 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5zM36 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z"/>
+        <path d="M53.5 15.5a12 12 0 0 1 3.2 9" fill="none" stroke="#dc2f4a" stroke-width="4" stroke-linecap="round"/>
+        <path d="M50 23.2a5.5 5.5 0 0 1 1.5 4.1" fill="none" stroke="#dc2f4a" stroke-width="3.6" stroke-linecap="round"/>
+      </svg>
+  <h1 style="font-family:'Anton',-apple-system,sans-serif;font-size:28px;letter-spacing:.3px;margin:0;">GHOST RECALL</h1>
   <!-- What this is, before anyone has to sign in to find out. The display
        font is for the name; this is ordinary readable text, because it is a
        sentence to be read rather than branding to be recognised. -->
@@ -997,15 +994,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <header class="app-header">
   <div class="brand">
     <svg class="logo-mark" width="34" height="34" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <path d="M32 6c-12 0-20 9-20 21v19c0 2 2 3 3.5 1.5L19 44l4 4 4-4 5 4 5-4 4 4 3.5-3.5C46 46 48 45 48 43V27C48 15 40 6 32 6z" fill="#fff"/>
-      <ellipse cx="24" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>
-      <ellipse cx="40" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>
-      <circle cx="25.3" cy="24.5" r="1.3" fill="#fff"/>
-      <circle cx="41.3" cy="24.5" r="1.3" fill="#fff"/>
-      <path d="M26 39q6 5 12 0" stroke="#17171a" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-      <path d="M10 14 L18 20 M54 14 L46 20" stroke="#dc2f4a" stroke-width="3" stroke-linecap="round"/>
-    </svg>
-    <h1>The GhostBuster</h1>
+        <path fill-rule="evenodd" fill="currentColor" d="M30 9c-10.5 0-18 7.4-18 18v19.3c0 2.4 2.8 3.6 4.5 2l3.3-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.4-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.3-3.1 3.2 3c1.7 1.6 4.3.3 4.3-2V27c0-10.6-7.5-18-18-18zM24 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5zM36 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z"/>
+        <path d="M53.5 15.5a12 12 0 0 1 3.2 9" fill="none" stroke="#dc2f4a" stroke-width="4" stroke-linecap="round"/>
+        <path d="M50 23.2a5.5 5.5 0 0 1 1.5 4.1" fill="none" stroke="#dc2f4a" stroke-width="3.6" stroke-linecap="round"/>
+      </svg>
+    <h1>Ghost Recall</h1>
   </div>
   <button class="btn" data-action="end-of-day">End of day <span id="eod-count">(0)</span></button>
   <button class="btn btn-primary" data-action="add-client">+ Add <span data-term="contact">client</span></button>
@@ -1184,7 +1177,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <div id="toast-container"></div>
 
 <div id="print-sheet">
-  <h2>GhostBuster Call Sheet</h2>
+  <h2>Ghost Recall Call Sheet</h2>
   <div id="print-date"></div>
   <h3>Today's calls</h3>
   <table id="print-calls-table"><thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Outcome</th></tr></thead><tbody></tbody></table>

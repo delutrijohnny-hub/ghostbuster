@@ -1,5 +1,5 @@
 'use strict';
-/* GhostBuster — pure business logic, no DOM/browser dependencies.
+/* Ghost Recall — pure business logic, no DOM/browser dependencies.
    Loaded before app.js via <script src="logic.js"> in index.html (so its
    functions are plain globals app.js can call directly), required directly
    by test.js via require('./logic.js'), and reusable as-is by a future
@@ -9,7 +9,7 @@
    if you're about to add something here that needs any of those. */
 
 /* ============================================================
-   THE GHOSTBUSTER — single-file app
+   GHOST RECALL — single-file app
    Sections: 1) data model  2) date/time  3) computeDue  4) variants/bandit
    5) messaging & outcomes  6) import (.ics / bulk / manual)  7) stats/health
    8) UI render  9) events  10) digest/print  11) charts/insights  12) boot
@@ -20,7 +20,7 @@ var STORAGE_KEY = 'mm_followup_v1';
 /* ---- pipeline stages, as data ----
    Stages used to be a fixed list of seven strings, and the ~35 places that
    asked "is this one Completed?" hard-coded the name. That's what tied
-   GhostBuster to one company's sales process: an HVAC shop's equivalent of
+   Ghost Recall to one company's sales process: an HVAC shop's equivalent of
    Completed is "Job Booked", a recruiter's is "Placed".
 
    The fix isn't renaming — it's that almost none of those checks actually
@@ -57,7 +57,7 @@ function buildDefaultPipeline(){
 // hasn't called setPipeline() gets the defaults, so logic.js stays usable
 // standalone — which the tests and the Edge Functions both rely on.
 /* ---- industry templates ----
-   What a new company picks once, so GhostBuster arrives configured instead of
+   What a new company picks once, so Ghost Recall arrives configured instead of
    arriving empty. Each template is just the settings that already exist —
    terminology, pipeline, cadence — bundled into a sensible starting point.
 
@@ -292,8 +292,8 @@ var HOURBEFORE_FLOOR_MIN = 10;
    The pause expires rather than latching. Someone who replied and then went
    quiet again does need chasing, and a permanent pause would quietly turn
    every good conversation into a forgotten lead — the exact failure
-   GhostBuster exists to prevent. While paused the contact is not forgotten
-   either: replying raises their Ghost Score, so they surface in GhostBuster
+   Ghost Recall exists to prevent. While paused the contact is not forgotten
+   either: replying raises their Ghost Score, so they surface in Ghost Recall
    Today for a human to answer rather than for a template to fire. */
 // Long-term nurture cadence. A month is deliberate: frequent enough that a
 // lead who comes back around is caught within weeks, rare enough that it never
@@ -828,7 +828,7 @@ function exportEmailLibrary(state, opts){
   var who = (opts && opts.businessName) || '';
   var lines = [];
   lines.push(who ? (who + ' — email library') : 'Email library');
-  lines.push('Exported ' + (new Date()).toISOString().slice(0, 10) + ' from GhostBuster');
+  lines.push('Exported ' + (new Date()).toISOString().slice(0, 10) + ' from Ghost Recall');
   lines.push(docs.length === 1 ? '1 email' : (docs.length + ' emails'));
   lines.push('');
   lines.push('Placeholders are left as written: {name} {date} {time} {weekday} {link} {sender}');
@@ -866,10 +866,10 @@ function exportEmailDoc(doc){
 function exportFilename(base, when){
   var d = when ? new Date(when) : new Date();
   var stamp = isNaN(d.getTime()) ? 'undated' : d.toISOString().slice(0, 10);
-  var safe = String(base || 'ghostbuster')
+  var safe = String(base || 'ghost recall')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'ghostbuster';
+    .replace(/^-+|-+$/g, '') || 'ghost recall';
   return safe + '-' + stamp + '.txt';
 }
 
@@ -961,7 +961,7 @@ function describeCalendarHealth(health){
   return {
     severity: 'error',
     text: 'Your calendar has not synced' + ago + ', so new ' +
-          termLower('appointmentPlural') + ' are not reaching GhostBuster. ' +
+          termLower('appointmentPlural') + ' are not reaching Ghost Recall. ' +
           'Google disconnects calendars periodically — reconnecting takes a few seconds.',
     action: 'Reconnect calendar'
   };
@@ -1358,7 +1358,7 @@ function lastSentAtMs(client, stage){
 
 /* ---- the cadence, as data ----
    computeDue was eight hard-coded rules. A business could rename its stages
-   but not change WHEN GhostBuster follows up, which was the last assumption
+   but not change WHEN Ghost Recall follows up, which was the last assumption
    welding the engine to one company's process: an HVAC shop chasing an
    estimate does not want a "Monday of the call week" text, and a recruiter
    might want four touches in the first week rather than one.
@@ -2154,7 +2154,7 @@ function businessEmailAccount(state){
    sending a client email from a personal account by accident is exactly the
    kind of small embarrassment software should prevent.
 
-   The trade is that GhostBuster cannot see the reply, so for this route the
+   The trade is that Ghost Recall cannot see the reply, so for this route the
    reply still has to be logged by hand. Worth it: a channel that works today
    beats one that works after a DNS change. */
 function gmailComposeUrl(toAddress, subject, body, fromAccount){
@@ -2345,11 +2345,11 @@ function timelineEntry(at, kind, label, detail, source, by){
           detail: detail || '', source: source, by: by || null};
 }
 
-/* Did a person record this, or did GhostBuster see it?
+/* Did a person record this, or did Ghost Recall see it?
 
    A text is handed to the phone and marked sent optimistically. An email
    opens in Gmail and is marked the moment the button is clicked. Neither is
-   confirmed -- GhostBuster cannot see whether Send was ever pressed. Only a
+   confirmed -- Ghost Recall cannot see whether Send was ever pressed. Only a
    send that went out through an email provider has a provider id, and only
    those are observed rather than asserted.
 
@@ -2363,7 +2363,7 @@ function messageSource(m){
 
 /* A reply is observed only where something could have observed it.
 
-   GhostBuster never sees SMS -- those go through the salesperson's own phone
+   Ghost Recall never sees SMS -- those go through the salesperson's own phone
    -- so an SMS reply is always a human ticking a box. An email reply can be
    seen by the inbound webhook, but only for a message the provider sent and
    can therefore match. Everything else is someone's word for it, and should
@@ -2375,7 +2375,7 @@ function replySource(m){
 // EVENT_LABELS keeps the phrasing in one place so the timeline and any future
 // activity feed can't drift apart.
 var EVENT_LABELS = {
-  'contact.created':        'Added to GhostBuster',
+  'contact.created':        'Added to Ghost Recall',
   'contact.deleted':        'Deleted',
   'appointment.scheduled':  'Appointment scheduled',
   'appointment.rescheduled':'Appointment rescheduled',
@@ -2396,7 +2396,7 @@ function buildTimeline(client, events, now){
 
   // --- derived from stored records (the past) ---
   if(client.bookedDate){
-    out.push(timelineEntry(client.bookedDate, 'contact.created', 'Added to GhostBuster',
+    out.push(timelineEntry(client.bookedDate, 'contact.created', 'Added to Ghost Recall',
       client.manuallyAdded ? 'Added by hand' : 'From the calendar', 'derived'));
   }
   (client.messageLog || []).forEach(function(m){
@@ -2405,14 +2405,14 @@ function buildTimeline(client, events, now){
        The timeline had a source of 'derived' vs recorded, which is about
        where the entry was reconstructed from -- a different question from
        the one that matters when you are reading history: did a person say
-       this happened, or did GhostBuster see it happen?
+       this happened, or did Ghost Recall see it happen?
 
        Today the honest answer is almost always a person. A text is handed to
        your phone and marked sent optimistically; an email opens in Gmail and
        is marked the moment the button is clicked. Only a send that went
        through an email provider carries a provider_id, and only those can be
        confirmed. Showing "sent" with no qualifier implies a confirmation
-       GhostBuster does not have. */
+       Ghost Recall does not have. */
     out.push(timelineEntry(m.sentAt, 'message.sent', 'Message sent',
       m.stage + (m.variantId ? ' \u00b7 ' + m.variantId : ''), 'derived', messageSource(m)));
     // respondedAt is when the reply was LOGGED, which can be much later than
@@ -3601,11 +3601,11 @@ function statusLabel(status){
    So it reports the three facts that distinguish those states: whether a
    calendar is attached, how many contacts came in, and how many are owed a
    message today. */
-/* ---- how appointments get into GhostBuster ----
+/* ---- how appointments get into Ghost Recall ----
 
    Four genuinely different levels of connection, which the interface had
    collapsed into one question ("connect your calendar?"). They differ in what
-   GhostBuster can actually DO, and saying so is the difference between a
+   Ghost Recall can actually DO, and saying so is the difference between a
    person understanding why bookings are not appearing and assuming the
    product is broken:
 
@@ -3613,7 +3613,7 @@ function statusLabel(status){
      booking  detect bookings, cancellations and reschedules from a
               scheduling service -- strictly more than sync, because a
               cancellation is an event rather than an absence
-     link     hold a booking link and put it in messages; GhostBuster cannot
+     link     hold a booking link and put it in messages; Ghost Recall cannot
               see what gets booked
      manual   the person records the appointment and the outcome
 
@@ -3648,7 +3648,7 @@ var SCHEDULING_PROVIDERS = [
   {
     key: 'link', label: 'A booking link', level: 'link', available: true,
     blurb: 'Paste the link people book through. It goes into your messages with {bookinglink}.',
-    caveat: 'A saved link is not a connection. GhostBuster cannot see what gets booked through it, so those appointments still have to arrive by calendar sync or by hand.',
+    caveat: 'A saved link is not a connection. Ghost Recall cannot see what gets booked through it, so those appointments still have to arrive by calendar sync or by hand.',
     needs: null
   },
   {
@@ -4319,7 +4319,7 @@ function isoWeekLabel(dateISO){
 
 /* ============================================================
    CALENDAR TAB — a real month/week grid built entirely from
-   GhostBuster's own client data (not a live external embed: a
+   Ghost Recall's own client data (not a live external embed: a
    cross-origin Google Calendar iframe can't be read by our JS at
    all, so clicking into it could never open a client's info here —
    this way every event on the grid is fully clickable).
@@ -4501,7 +4501,7 @@ function buildWeeklyDigest(state, now){
   });
 
   var lines = [];
-  lines.push('GhostBuster Weekly Digest — week of ' + fmtDate(startOfLocalWeek(now),'UTC'));
+  lines.push('Ghost Recall Weekly Digest — week of ' + fmtDate(startOfLocalWeek(now),'UTC'));
   lines.push('');
   lines.push('Calls scheduled: ' + inWeek.length);
   lines.push('Showed: ' + showed.length + '  No-showed: ' + noshow.length + '  Ghosted: ' + ghosted.length + '  Rescheduled: ' + rescheduled.length);

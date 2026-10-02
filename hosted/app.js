@@ -1,5 +1,5 @@
 'use strict';
-/* GhostBuster (hosted build) — render layer, event handling, and app boot.
+/* Ghost Recall (hosted build) — render layer, event handling, and app boot.
    Loaded after logic.js AND data.js via <script src="app.js"> in index.html.
    loadState()/saveState() are NOT defined here — data.js provides
    Supabase-backed versions under those same names (loadState now returns a
@@ -409,7 +409,7 @@ function buildTouchCard(client, stage, now){
   var lastIdx = lastMessageIndex(client);
   if(lastIdx !== -1){
     // Was a "replied to last text" checkbox. The same question is now asked
-    // once, in GhostBuster Today, and only after the reply window has elapsed
+    // once, in Ghost Recall Today, and only after the reply window has elapsed
     // — asking it here as well made one interaction look like two chores.
     // What remains is a read-only statement of where the interaction stands.
     var inter = lastInteraction(client, now);
@@ -729,7 +729,7 @@ function renderCallsBoard(){
 // Two explicit buttons rather than a checkbox, because a checkbox left
 // unticked is ambiguous — and that ambiguity is exactly what broke the stats
 // in the first place.
-/* GhostBuster Today — the answer to "who should I contact?".
+/* Ghost Recall Today — the answer to "who should I contact?".
    Ranked by Ghost Score, and every row carries its reasons, because the whole
    value of a priority list is that the person working it believes the order.
    An unexplained ranking gets ignored, and an ignored list is worth nothing. */
@@ -797,7 +797,7 @@ function renderGhostToday(){
             : ranked.filter(function(r){ return r.band === filter; });
 
   var head = h('div',{class:'gt-head'},[
-    h('h3',{},['👻 GhostBuster Today']),
+    h('h3',{},['👻 Ghost Recall Today']),
     h('span',{class:'count'},[
       actionable.length
         ? (actionable.length + ' ' + (actionable.length === 1 ? termLower('contact') : termLower('contactPlural')) + ' need attention')
@@ -836,7 +836,7 @@ function renderGhostToday(){
     var rec = recommendNextAction(c, now);
 
     // One obvious primary action, with the rest demoted to secondary. A row of
-    // equally-weighted buttons makes the salesperson decide what GhostBuster
+    // equally-weighted buttons makes the salesperson decide what Ghost Recall
     // was supposed to have decided for them.
     var acts = h('span',{class:'gt-acts'},[]);
     var primary = null;
@@ -898,7 +898,7 @@ function renderGhostToday(){
       acts
     ]);
 
-    // The one manual control, and only when GhostBuster genuinely can't tell.
+    // The one manual control, and only when Ghost Recall genuinely can't tell.
     if(needsOutcome){
       var oc = h('div',{class:'gt-outcome'},[h('span',{class:'lbl'},['What happened?'])]);
       INTERACTION_OUTCOMES.forEach(function(o){
@@ -966,7 +966,7 @@ function renderRecentSends(){
   recent.forEach(function(it){
     var sentAt = safeDate(it.message.sentAt);
     var when = sentAt ? (fmtDate(sentAt, it.client.timezone) + ' ' + fmtTime(sentAt, it.client.timezone)) : '';
-    // History, not a form. The outcome is captured once in GhostBuster Today.
+    // History, not a form. The outcome is captured once in Ghost Recall Today.
     var label = h('span',{class:'replied-label'},[interactionLabel({
       state: messageState(it.message, now), hoursAgo: null, message: it.message
     })]);
@@ -1351,7 +1351,7 @@ function renderEmailLibrary(){
   // one, and worth saying plainly so nobody concludes their emails are gone.
   if(STATE.emailLibraryUnavailable){
     box.appendChild(h('div',{class:'lib-empty'},[
-      h('p',{},['Your emails could not be loaded just now. Nothing has been lost, and the rest of GhostBuster is working normally — everything you do is still being saved.']),
+      h('p',{},['Your emails could not be loaded just now. Nothing has been lost, and the rest of Ghost Recall is working normally — everything you do is still being saved.']),
       h('p',{},['If this does not clear up, the email library setup has not finished on the server yet.']),
       h('button',{class:'btn btn-sm','data-action':'reload-app'},['Try again'])
     ]));
@@ -1598,7 +1598,7 @@ function downloadText(filename, text){
     setTimeout(function(){ URL.revokeObjectURL(url); }, 0);
     return true;
   }catch(e){
-    console.error('GhostBuster: download failed', e);
+    console.error('Ghost Recall: download failed', e);
     showToast('Could not start the download.');
     return false;
   }
@@ -2233,7 +2233,7 @@ function openClientModal(clientId){
   var callVal = d ? formatDatetimeLocalInTZ(d, c.timezone || 'America/New_York') : '';
   // The message log is now one strand of the timeline rather than its own
   // list with its own reply checkbox — the reply question is asked once, in
-  // GhostBuster Today. Text bodies stay here because this is the one place
+  // Ghost Recall Today. Text bodies stay here because this is the one place
   // someone goes to read what was actually said.
   var msgLog = c.messageLog.map(function(m){
     return '<div class="msg-log-item"><div class="meta">' + escapeHtml(m.stage) + ' · ' + escapeHtml(m.variantId || '') + ' · ' +
@@ -2308,7 +2308,7 @@ function renderTimeline(client, events){
         h('div',{class:'tl-label'},[
           e.label + (e.detail ? '  ·  ' + e.detail : ''),
           /* Who recorded it. An unqualified "Message sent" claims a certainty
-             GhostBuster does not have -- a text is handed to your phone and an
+             Ghost Recall does not have -- a text is handed to your phone and an
              email opens in Gmail, and neither can be confirmed. The first time
              someone finds a message they never sent recorded as sent, they
              stop trusting the whole log. */
@@ -2322,7 +2322,7 @@ function renderTimeline(client, events){
 }
 
 
-/* Business settings — what makes GhostBuster fit a business other than this
+/* Business settings — what makes Ghost Recall fit a business other than this
    one. Stages, vocabulary and the Ghost Score weights all already persist per
    organization; until now they could only be changed in Postgres, which meant
    the multi-industry claim was true in the data model and false in practice.
@@ -2429,7 +2429,7 @@ function renderOnboarding(){
   } else {
     bodyHtml =
       '<h3>Where do your appointments come from?</h3>' +
-      '<p class="ob-sub">GhostBuster reads your calendar and starts the follow-up sequence automatically. ' +
+      '<p class="ob-sub">Ghost Recall reads your calendar and starts the follow-up sequence automatically. ' +
       'Without it you can still add people by hand.</p>' +
       '<div class="ob-connect">' +
       '<button class="btn btn-primary" data-action="connect-calendar" data-priority="0" data-label="Work">Connect Google Calendar</button>' +
@@ -2554,14 +2554,14 @@ function renderSettingsModal(){
   openModalHtml(
     '<div class="modal-head"><h2>Business settings</h2><button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
     '<div class="set-section"><h3>Pipeline stages</h3>' +
-    '<div class="hint">The role is what GhostBuster acts on, not the name — so an HVAC shop can call its won stage “Estimate Completed” and the cadence still stops there.</div>' +
+    '<div class="hint">The role is what Ghost Recall acts on, not the name — so an HVAC shop can call its won stage “Estimate Completed” and the cadence still stops there.</div>' +
     stageRows +
     '<button class="btn btn-sm" data-action="add-stage">+ Add stage</button>' +
     (removed.length ? '<div class="set-warn">⚠ ' + removed.map(function(k){ return counts[k] + ' contact(s) on “' + escapeHtml(k) + '”'; }).join(', ') +
       ' — removing a stage leaves them on it. Unrecognised stages behave as “open”, so they keep getting followed up rather than disappearing.</div>' : '') +
     '</div>' +
     '<div class="set-section"><h3>Follow-up cadence</h3>' +
-    '<div class="hint">When GhostBuster chases. Removing a step stops that touch firing; the message templates for it stay put, so nothing is lost if you add it back.</div>' +
+    '<div class="hint">When Ghost Recall chases. Removing a step stops that touch firing; the message templates for it stay put, so nothing is lost if you add it back.</div>' +
     SETTINGS_DRAFT.sequence.map(function(st, i){
       return '<div class="stage-row">' +
         '<span class="grip">' + (i+1) + '</span>' +
@@ -2578,7 +2578,7 @@ function renderSettingsModal(){
        The question was spread across a Connect button in the menu, a filter
        section here, and nothing at all about booking links. Worse, it was
        asked as one question -- connect your calendar? -- when there are four
-       genuinely different answers that differ in what GhostBuster can DO.
+       genuinely different answers that differ in what Ghost Recall can DO.
 
        Providers that do not work are listed and marked unavailable, with what
        they would need. Hiding them makes the product look incapable; showing
@@ -2699,7 +2699,7 @@ function saveSettingsDraft(){
     return;
   }
   if(!d.sequence.length){
-    showToast('A cadence needs at least one step, or GhostBuster will never follow up.');
+    showToast('A cadence needs at least one step, or Ghost Recall will never follow up.');
     return;
   }
   // Email fields were edited live in STATE; persist them with the rest.
@@ -2827,7 +2827,7 @@ document.addEventListener('click', function(ev){
         if(!cals.length){ showToast('No calendar connected yet — use "Connect calendar" first.'); return; }
         var msg = describeSyncResult(cals);
         showToast(msg.text);
-        if(msg.detail) console.error('GhostBuster: calendar sync — ' + msg.detail);
+        if(msg.detail) console.error('Ghost Recall: calendar sync — ' + msg.detail);
         if(msg.ok) init();
       });
       break;
@@ -2994,7 +2994,7 @@ document.addEventListener('click', function(ev){
       break;
     case 'sent-by-email': {
       // The link opens Gmail by itself; this records it. Optimistic, like the
-      // sms: path — GhostBuster cannot see whether Send was actually pressed,
+      // sms: path — Ghost Recall cannot see whether Send was actually pressed,
       // so it is logged and undoable rather than confirmed beforehand.
       var ec = STATE.clients[cid];
       if(!ec) break;
@@ -3149,7 +3149,7 @@ document.addEventListener('click', function(ev){
     }
     case 'email-lib-download': {
       var all = exportEmailLibrary(STATE, {businessName: STATE.senderName || ''});
-      var okDl = downloadText(exportFilename((STATE.senderName || 'ghostbuster') + ' emails'), all);
+      var okDl = downloadText(exportFilename((STATE.senderName || 'ghost recall') + ' emails'), all);
       if(okDl) showToast('Downloaded. Every email, with its timing note and placeholders intact.');
       break;
     }
@@ -3509,7 +3509,7 @@ document.addEventListener('change', function(ev){
         saveState(STATE);
         renderAll();
         showToast('Backup imported.');
-      }catch(e){ showToast('That file could not be read as a GhostBuster backup.'); }
+      }catch(e){ showToast('That file could not be read as a Ghost Recall backup.'); }
     };
     reader2.readAsText(t.files[0]);
     t.value = '';
@@ -3806,12 +3806,12 @@ function fallbackCopy(text){
 
 function exportBackup(){
   var data = JSON.stringify(STATE, null, 2);
-  downloadFile(data, 'ghostbuster-backup-' + new Date().toISOString().slice(0,10) + '.json', 'application/json');
+  downloadFile(data, 'ghost-recall-backup-' + new Date().toISOString().slice(0,10) + '.json', 'application/json');
 }
 
 function exportClientsCsv(){
   var csv = buildClientsCsv(STATE);
-  downloadFile(csv, 'ghostbuster-clients-' + new Date().toISOString().slice(0,10) + '.csv', 'text/csv');
+  downloadFile(csv, 'ghost-recall-clients-' + new Date().toISOString().slice(0,10) + '.csv', 'text/csv');
 }
 
 function downloadFile(content, filename, mimeType){
@@ -3845,7 +3845,7 @@ function downloadFile(content, filename, mimeType){
 
    This is the same work as one screen at a time: the message, the person, one
    button. Send opens Messages and marks it sent in the same click, then
-   advances. That is optimistic — GhostBuster cannot see whether the message
+   advances. That is optimistic — Ghost Recall cannot see whether the message
    actually left the phone — so every send is undoable from the toast rather
    than being confirmed in advance. Asking first would reintroduce the step
    this exists to remove, and a wrong "sent" costs one undo while the friction

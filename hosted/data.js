@@ -1,5 +1,5 @@
 'use strict';
-/* GhostBuster (hosted build) — Supabase-backed persistence.
+/* Ghost Recall (hosted build) — Supabase-backed persistence.
    Replaces the local build's localStorage loadState()/saveState() under the
    same names — that's the one seam every mutator in logic.js already calls
    through, per the rebuild plan. loadState() now returns a Promise (app.js's
@@ -64,7 +64,7 @@ async function loadState(){
      load above it, which is correct for tables that have existed for months
      and catastrophic for one added this morning. Deploy the code before the
      migration and loadState throws on a table that does not exist yet, so
-     nobody can open GhostBuster at all: not the Emails tab, the whole app.
+     nobody can open Ghost Recall at all: not the Emails tab, the whole app.
      Contacts, today's texts, everything, gone behind a blank screen because
      an email library could not be read.
 
@@ -72,7 +72,7 @@ async function loadState(){
   var libRes = await sb.from('email_library').select('*').eq('user_id', uid).order('sort_order');
   var libraryUnavailable = false;
   if(libRes.error){
-    console.error('GhostBuster: email library unavailable', libRes.error);
+    console.error('Ghost Recall: email library unavailable', libRes.error);
     // NOT reportSaveHealth. That channel renders a red bar reading "Your
     // changes aren't being saved. Anything you do now will be lost" — which
     // was a lie here, and a frightening one: saves were fine, one read had
@@ -227,7 +227,7 @@ async function loadState(){
     });
     if(missingRows.length){
       var backfillRes = await sb.from('variants').insert(missingRows);
-      if(backfillRes.error) console.error('GhostBuster: variant backfill failed', backfillRes.error);
+      if(backfillRes.error) console.error('Ghost Recall: variant backfill failed', backfillRes.error);
     }
   }
 
@@ -247,7 +247,7 @@ async function loadState(){
       });
       var libSeedRes = await sb.from('email_library').insert(seedRows).select('*');
       if(libSeedRes.error){
-        console.error('GhostBuster: email library seed failed', libSeedRes.error);
+        console.error('Ghost Recall: email library seed failed', libSeedRes.error);
       } else {
         state.emailLibrary = (libSeedRes.data || []).map(function(r){
           return {id: r.id, title: r.title, whenToSend: r.when_to_send || '',
@@ -493,12 +493,12 @@ async function fetchClientEvents(clientId){
   try{
     var res = await sb.from('events').select('kind, at, data')
       .eq('client_id', clientId).order('at', {ascending: true}).limit(200);
-    if(res.error){ console.error('GhostBuster: events fetch failed', res.error); return []; }
+    if(res.error){ console.error('Ghost Recall: events fetch failed', res.error); return []; }
     return res.data || [];
   }catch(e){
     // A timeline that cannot load is a degraded view, never a broken modal —
     // the derived history still renders from records already in memory.
-    console.error('GhostBuster: events fetch threw', e);
+    console.error('Ghost Recall: events fetch threw', e);
     return [];
   }
 }
@@ -593,7 +593,7 @@ async function saveState(state){
     if(failed.length){
       // Leave SYNCED where it is so the same diff is retried on the next save
       // rather than being silently forgotten.
-      console.error('GhostBuster: saveState partial failure', failed.map(function(r){ return r.error; }));
+      console.error('Ghost Recall: saveState partial failure', failed.map(function(r){ return r.error; }));
       reportSaveHealth(false, (failed[0].error && failed[0].error.message) || 'a write was rejected');
       return;
     }
@@ -604,7 +604,7 @@ async function saveState(state){
     if(ticket > SAVE_LANDED){ SAVE_LANDED = ticket; SYNCED = next; }
     reportSaveHealth(true);
   }catch(e){
-    console.error('GhostBuster: saveState failed', e);
+    console.error('Ghost Recall: saveState failed', e);
     reportSaveHealth(false, (e && e.message) || 'unexpected error while saving');
   }
 }

@@ -1,5 +1,5 @@
 'use strict';
-/* Test harness for The GhostBuster.
+/* Test harness for Ghost Recall.
    Most tests run against logic.js directly via plain require() — it has
    zero DOM dependency, so no stubbing needed.
    The handful of tests that exercise the render layer (renderAll,
@@ -175,7 +175,7 @@ const context = vm.createContext(sandbox);
 vm.runInContext(code, context, { filename: 'logic.js + app.js' });
 
 const GBFull = sandbox.GhostBuster;
-assert.ok(GBFull, 'GhostBuster test hook was not exposed on window');
+assert.ok(GBFull, 'Ghost Recall test hook was not exposed on window');
 
 let failures = 0;
 // Async tests are queued and awaited before the summary. Without this, an
@@ -2357,7 +2357,7 @@ test('a unique index closes the race the check cannot', () => {
     'the index must exclude null provider ids');
 });
 
-console.log('\n--- recorded by a person vs observed by GhostBuster ---');
+console.log('\n--- recorded by a person vs observed by Ghost Recall ---');
 
 {
   const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
@@ -2367,7 +2367,7 @@ console.log('\n--- recorded by a person vs observed by GhostBuster ---');
     bookedDate: ago(5), messageLog: log});
 
   test('a text is always marked by a person, because nothing else can see it', () => {
-    /* A text is handed to the salesperson's own phone. GhostBuster cannot
+    /* A text is handed to the salesperson's own phone. Ghost Recall cannot
        confirm Send was ever pressed, so an unqualified "sent" claims a
        certainty it does not have. */
     assert.strictEqual(GB.messageSource(msg({channel: 'sms'})), 'you');
@@ -2460,7 +2460,7 @@ console.log('\n--- Today answers who, why and what next ---');
     });
   });
 
-  test('the login screen says what GhostBuster is before you sign in', () => {
+  test('the login screen says what Ghost Recall is before you sign in', () => {
     const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
     const screen = html.slice(html.indexOf('id="signin-screen"'), html.indexOf('id="app-root"'));
     assert.ok(/Know who to follow up with/.test(screen), 'the value statement is missing');
@@ -3744,10 +3744,11 @@ test('a downloaded file has a name findable in a Downloads folder', () => {
   assert.strictEqual(n, 'marketmakermgmt-emails-2026-09-30.txt');
   // Nothing a filesystem will argue about.
   assert.ok(!/[^a-z0-9.-]/.test(GB.exportFilename('Pricing: 50% / “final”')));
-  assert.ok(GB.exportFilename('').startsWith('ghostbuster-'));
+  // Renamed with the product; the slug comes from the 'ghost recall' fallback.
+  assert.ok(GB.exportFilename('').startsWith('ghost-recall-'));
 });
 
-console.log('\n--- your emails, GhostBuster’s timing ---');
+console.log('\n--- your emails, Ghost Recall’s timing ---');
 
 test('the unattended sender will not mail a built-in template', () => {
   // A business should never discover that software has been sending its own
@@ -3861,7 +3862,7 @@ test('contacts default to emailable, so nothing existing is silently blocked', (
   });
 
   test('a reply marks the message reviewed, not just answered', () => {
-    // The whole point: a reply GhostBuster saw itself needs no human
+    // The whole point: a reply Ghost Recall saw itself needs no human
     // confirmation afterwards.
     assert.ok(/responded: true/.test(hook) && /reviewed: true/.test(hook));
   });
@@ -5461,7 +5462,7 @@ console.log('\n--- hosted render smoke test ---');
 
 /* The hosted build had never actually been rendered by a test — only parsed,
    and checked for orphaned functions and undefined calls. That gap shipped a
-   real bug to production: inside the GhostBuster Today row loop a local named
+   real bug to production: inside the Ghost Recall Today row loop a local named
    `body` (the SMS message text) hoisted over the panel's own `body` container,
    so body.appendChild(row) became a call on a string and the whole panel threw.
    It parsed fine, every function it called existed, and every test passed.
@@ -5493,7 +5494,7 @@ function makeHostedCtx(){
   return ctx;
 }
 
-test('every GhostBuster Today row shape renders without throwing', () => {
+test('every Ghost Recall Today row shape renders without throwing', () => {
   const ctx = makeHostedCtx();
   // One contact per branch the row builder can take: a due text, a call
   // recommendation, a waiting send, an unanswered one, and a reply.
