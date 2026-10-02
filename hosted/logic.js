@@ -779,6 +779,115 @@ function seedEmailLibrary(emailVariants){
   return out.filter(Boolean);
 }
 
+/* Starter emails, for a library that has nothing in it.
+
+   seedEmailLibrary only carries across emails somebody already wrote against
+   the old touches. A business signing up today has written none, so it opens
+   the Emails tab, finds it completely empty, and has to work out both what
+   belongs there and how to write it before the tab does anything at all. That
+   is the single worst moment in the app for somebody new.
+
+   These are deliberately DRAFTS, not finished copy. Every one has a
+   [BRACKETED] gap that only the business can fill, and the preview already
+   highlights those as "Still unfilled", so nobody can send one untouched
+   without being told first.
+
+   The brackets are UPPERCASE on purpose. The preview's leftover check is
+   /\{\w+\}|\[[A-Z][^\]]*\]/ - it only catches a capitalised placeholder, so
+   lowercase gaps would have rendered looking finished and the whole guarantee
+   above would have been worthless. Caught by a test that ran the real check
+   rather than restating the rule.
+
+   They also have to survive a contact with NO call booked, which is a real
+   case: an introduction email often goes out before any date is set. {date}
+   renders as nothing at all there, so "Ahead of {date}" collapsed to an empty
+   subject line, and {when} falls back to "soon", which turned "we had {when}
+   in the diary" into "we had soon in the diary". The copy below therefore
+   uses {when} only where "soon" also reads correctly, and keeps every subject
+   line free of dates. They are written for any business that books
+   appointments - no industry, no company name, no pricing.
+
+   Nothing here can go out on its own. None is pinned to a touch, so none is
+   attached to the one-click send on a Today card until the business picks it,
+   and the unattended sender reads the variants table rather than the library,
+   so these words can never be mailed without a person pressing send. */
+function starterEmailLibrary(){
+  var starters = [
+    {
+      title: 'Before the call',
+      whenToSend: 'the day before, once the time is set',
+      subject: 'Ahead of our call',
+      body: 'Hi {name},\n\n' +
+        'Looking forward to speaking {when}. So you know what to expect, we will cover:\n\n' +
+        '- [THE FIRST THING YOU ALWAYS COVER]\n' +
+        '- [THE SECOND THING]\n' +
+        '- what it would look like for you specifically\n\n' +
+        'Nothing to prepare. If anything has changed, just reply and we will move it.\n\n' +
+        '{sender}'
+    },
+    {
+      title: 'Recap after the call',
+      whenToSend: 'same day, while it is still fresh',
+      subject: 'Recap of our call',
+      body: 'Hi {name},\n\n' +
+        'Good speaking with you. The short version of what we covered:\n\n' +
+        '{recap}\n\n' +
+        'The next step is [WHAT HAPPENS NEXT], and I will [WHAT YOU WILL DO] by ' +
+        '[WHEN YOU WILL DO IT].\n\n' +
+        'Anything I have missed, tell me and I will correct it.\n\n' +
+        '{sender}'
+    },
+    {
+      title: 'What it costs',
+      whenToSend: 'when they ask about price',
+      subject: 'The numbers, in writing',
+      body: 'Hi {name},\n\n' +
+        'Putting this in writing so you can look at it properly rather than ' +
+        'remember it from a call.\n\n' +
+        '[OPTION ONE] - [PRICE]. [WHO THIS IS RIGHT FOR.]\n' +
+        '[OPTION TWO] - [PRICE]. [WHO THIS IS RIGHT FOR.]\n\n' +
+        'What is included either way: [THE THINGS THAT DO NOT CHANGE].\n\n' +
+        'Happy to go through any of it. If you want to get started, here is the ' +
+        'link: [YOUR PAYMENT OR BOOKING LINK]\n\n' +
+        '{sender}'
+    },
+    {
+      title: 'They did not show',
+      whenToSend: 'an hour or two after a missed appointment',
+      subject: 'Sorry we missed each other',
+      body: 'Hi {name},\n\n' +
+        'We had time set aside and I did not manage to reach you - no problem ' +
+        'at all, these things happen.\n\n' +
+        'If you still want to look at [THE THING THEY CAME FOR], pick any time ' +
+        'that suits: {bookinglink}\n\n' +
+        'And if the timing is wrong at the moment, say so and I will stop ' +
+        'chasing you.\n\n' +
+        '{sender}'
+    },
+    {
+      title: 'Checking back in later',
+      whenToSend: 'weeks or months after it went quiet',
+      subject: 'Still thinking about [THE THING]?',
+      body: 'Hi {name},\n\n' +
+        'It has been a while since we spoke about [WHAT THEY WERE CONSIDERING]. ' +
+        'Not chasing - just [A REASON THIS IS WORTH A SECOND LOOK NOW].\n\n' +
+        'If it is still on your list, here is a time: {bookinglink}\n\n' +
+        'If it is not, reply "not now" and I will leave you be.\n\n' +
+        '{sender}'
+    }
+  ];
+  return starters.map(function(d, i){
+    return sanitizeEmailDoc({
+      id: 'starter-' + (i + 1),
+      title: d.title,
+      whenToSend: d.whenToSend,
+      subject: d.subject,
+      body: d.body,
+      sortOrder: i * 10
+    });
+  }).filter(Boolean);
+}
+
 /* The email pinned to a touch, if there is one.
 
    First match in library order, so if two are pinned to the same touch the
@@ -4560,6 +4669,7 @@ var __LOGIC_EXPORTS__ = {
   buildNotesPrompt: buildNotesPrompt, splitDraftedEmail: splitDraftedEmail,
   touchLabel: touchLabel,
   sanitizeEmailDoc: sanitizeEmailDoc, emailLibrary: emailLibrary, seedEmailLibrary: seedEmailLibrary,
+  starterEmailLibrary: starterEmailLibrary,
   emailForTouch: emailForTouch,   renderEmailDoc: renderEmailDoc, exportEmailLibrary: exportEmailLibrary, exportEmailDoc: exportEmailDoc,
   exportFilename: exportFilename,
   buildDefaultState: buildDefaultState,

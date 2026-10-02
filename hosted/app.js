@@ -1370,6 +1370,22 @@ function renderEmailLibrary(){
         h('button',{class:'btn btn-sm','data-action':'email-lib-import'},['Import my old emails'])
       ]));
     }
+
+    /* An empty tab used to end here, which is the worst moment in the app for
+       somebody new: nothing to read, nothing to copy, and no indication of
+       what a good entry even looks like. The starters are drafts with gaps
+       left in them on purpose, so they teach the shape without pretending to
+       be anyone's finished words. */
+    box.appendChild(h('div',{class:'lib-empty'},[
+      h('p',{},['This is where the long emails live - the ones too big to text. ' +
+                'You pick one when you want it. Nothing in here sends on its own.']),
+      h('p',{},['If you have not written any yet, start from five common ones and ' +
+                'edit them into your own words. Each has gaps in [brackets] only ' +
+                'you can fill, and the preview flags them until you do.']),
+      h('button',{class:'btn btn-sm btn-green','data-action':'email-lib-starters'},
+        ['Start from five common emails']),
+      h('div',{class:'lib-hint'},['Or press "+ Add an email" above and write your own from scratch.'])
+    ]));
     return;
   }
 
@@ -3125,6 +3141,30 @@ document.addEventListener('click', function(ev){
       STATE.emailLibrary.push(fresh);
       LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
       renderEmailLibrary();
+      break;
+    }
+    case 'email-lib-starters': {
+      /* Added as ordinary entries the moment they arrive: editable, deletable,
+         and saved like anything else. They are given fresh ids rather than the
+         'starter-N' ones so two people adding them never collide, and they go
+         after whatever is already there rather than on top of it. */
+      if(!STATE.emailLibrary) STATE.emailLibrary = [];
+      var base = 0;
+      STATE.emailLibrary.forEach(function(x){ if(x.sortOrder > base) base = x.sortOrder; });
+      var added = starterEmailLibrary().map(function(d, i){
+        return {
+          id: uuid(), title: d.title, whenToSend: d.whenToSend,
+          subject: d.subject, body: d.body, touch: '',
+          sortOrder: base + (i + 1) * 10, archived: false,
+          updatedAt: new Date().toISOString()
+        };
+      });
+      if(!added.length) break;
+      added.forEach(function(d){ STATE.emailLibrary.push(d); });
+      LIB_OPEN = added[0].id;    // open the first one, so the next step is obvious
+      renderEmailLibrary();
+      saveState(STATE);
+      showToast(added.length + ' drafts added - edit them into your own words.');
       break;
     }
     case 'email-doc-toggle': {

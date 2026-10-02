@@ -6247,6 +6247,130 @@ console.log('\n--- the sync schedule and the staleness warning agree ---');
   });
 }
 
+console.log('\n--- starter emails for an empty library ---');
+
+/* The worst moment in the app for somebody new.
+
+   seedEmailLibrary only carries across emails the business already wrote, so
+   an account created today opens the Emails tab and finds nothing at all: no
+   example, no shape, and no way to tell what belongs there. The starters fix
+   that, but they introduce a risk the codebase has already drawn a hard line
+   on once -- "a business should never discover that software has been sending
+   its own words to its customers" -- so most of what follows guards that line
+   rather than the copy. */
+{
+  const starters = GB.starterEmailLibrary();
+
+  test('a new library has something to start from', () => {
+    assert.ok(starters.length >= 3, 'expected several starters, got ' + starters.length);
+    starters.forEach(d => {
+      assert.ok((d.title || '').trim(), 'a starter needs a name');
+      assert.ok((d.body || '').trim(), 'a starter needs a body');
+      assert.ok((d.whenToSend || '').trim(),
+        d.title + ' has no timing note, which is the one thing that says when to reach for it');
+    });
+  });
+
+  test('every starter is visibly unfinished', () => {
+    /* The honesty guard. A starter that reads as finished copy is one somebody
+       sends verbatim, and then the business has mailed a customer words it
+       never wrote. Each one keeps a [BRACKETED] gap, which is exactly what the
+       preview already reports as "Still unfilled". */
+    starters.forEach(d => {
+      // Capitalised specifically: the preview's leftover check only catches
+      // [A-Z] placeholders, so a lowercase gap would render looking finished.
+      assert.ok(/\[[A-Z][^\]]*\]/.test(d.body + ' ' + d.subject),
+        d.title + ' has no [UPPERCASE] gap, so the preview would not flag it');
+    });
+  });
+
+  test('the preview flags a starter as unfilled, using the real check', () => {
+    // Not a restatement of the rule: this runs the same expression the preview
+    // uses, so if that detection changes the guarantee above is re-tested.
+    const c = GB.sanitizeClient({id:'c', name:'Dana', phone:'2125550100',
+      status:'Booked', callDateTime:'2026-11-05T15:00:00Z'});
+    const state = {emailLibrary: starters, clients:{c}, emailVariants:{}};
+    starters.forEach(d => {
+      const r = GB.renderEmailDoc(state, d.id, c, 'Johnny');
+      assert.ok(r, d.title + ' did not render');
+      const leftovers = (r.text + ' ' + r.subject).match(/\{\w+\}|\[[A-Z][^\]]*\]/g);
+      assert.ok(leftovers && leftovers.length,
+        d.title + ' rendered with nothing left to fill — it would look ready to send');
+    });
+  });
+
+  test('no starter is wired to send by itself', () => {
+    // Pinning a doc to a touch is what puts it behind the one-click send on a
+    // Today card. A starter arriving pre-pinned would be the app choosing to
+    // put its own words one button away from a customer.
+    starters.forEach(d => assert.strictEqual(d.touch || '', '',
+      d.title + ' is pinned to a touch and would be offered for sending unedited'));
+    const state = {emailLibrary: starters};
+    GB.TOUCH_LIST_ORDER.forEach(stage => {
+      assert.strictEqual(GB.emailForTouch(state, stage), null,
+        'a starter answered emailForTouch for ' + stage);
+    });
+  });
+
+  test('the unattended sender still cannot reach the library at all', () => {
+    /* The separate, stronger guarantee: automatic email reads authored
+       variants, never the library. So even a starter somebody pins by hand
+       cannot be mailed without a person pressing send. */
+    const c = GB.sanitizeClient({id:'c', name:'Dana', phone:'2125550100', status:'Booked'});
+    assert.strictEqual(
+      GB.getAuthoredEmailDraft({emailLibrary: starters, emailVariants:{}}, c, 'welcome', 'Johnny'),
+      null, 'the unattended sender drew copy out of the library');
+  });
+
+  test('a starter belongs to no particular trade', () => {
+    // These ship to every account, so anything industry-specific is wrong for
+    // most of them — and a customer's name in there would be worse.
+    const all = starters.map(d => [d.title, d.subject, d.body, d.whenToSend].join(' ')).join(' ');
+    ['marketmaker', 'realtor', 'youtube', 'plumb', 'hvac', 'ghost recall', 'ghostbuster']
+      .forEach(w => assert.ok(all.toLowerCase().indexOf(w) === -1,
+        'a starter mentions "' + w + '", which is not true of every business'));
+  });
+
+  test('a starter still reads correctly with no call booked', () => {
+    /* A real case, and one Johnny asked for by name: an introduction email
+       often goes out before any date is set. {date} renders as NOTHING there,
+       so the first draft of these had the subject "Ahead of {date}", which
+       collapsed to an empty subject line. {when} falls back to "soon", which
+       turned "we had {when} in the diary" into "we had soon in the diary".
+
+       Both only showed up by rendering them against an undated contact. */
+    const undated = GB.sanitizeClient({id:'n', name:'Pat', phone:'2125550100', status:'Booked'});
+    const dated = GB.sanitizeClient({id:'c', name:'Dana', phone:'2125550100', status:'Booked',
+      callDateTime:'2026-11-05T15:00:00Z', timezone:'America/New_York'});
+    const state = {emailLibrary: starters};
+
+    [undated, dated].forEach(who => {
+      starters.forEach(d => {
+        const r = GB.renderEmailDoc(state, d.id, who, 'Johnny');
+        const where = d.title + ' (' + (who.callDateTime ? 'dated' : 'no date') + ')';
+        assert.ok((r.subject || '').trim(), where + ' rendered an empty subject line');
+        const all = r.subject + '\n' + r.text;
+        assert.ok(!/\bsoon\b[^.\n]*\b(in the diary|at \d)/.test(all),
+          where + ' reads as though "soon" were a date');
+        assert.ok(!/\s{2,}/.test(r.subject), where + ' has a gap in the subject where a date was');
+        assert.ok(!/[-:,]\s*$/.test(r.subject.trim()),
+          where + ' subject ends on dangling punctuation left by an empty placeholder');
+        assert.ok(!/\b(on|at|for|by|ahead of)\s+(on|at)\b/i.test(all),
+          where + ' doubled a preposition, e.g. "ahead of on Nov 5"');
+      });
+    });
+  });
+
+  test('the empty library actually offers them', () => {
+    // Written, tested, never called is this repo's recurring failure. The
+    // button and its handler both have to exist.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(/'email-lib-starters'/.test(app), 'nothing offers the starters');
+    assert.ok(/case 'email-lib-starters'/.test(app), 'the starters button has no handler');
+    assert.ok(/starterEmailLibrary\(\)/.test(app), 'the handler never builds them');
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
