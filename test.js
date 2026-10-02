@@ -1682,6 +1682,30 @@ console.log('\n--- drafting from the notes of a call that just happened ---');
   const client = GB.sanitizeClient({id: 'c', name: 'Dana Reed', phone: '2135550100'});
   const notes = 'Posting monthly, wants weekly. Budget ~800. Decides Friday.';
 
+  test('both drafters forbid speculation, bad grammar and essays', () => {
+    /* From a text that actually went out: "I heard you mention you volunteer.
+       I am assuming this is with an organization within your town you work
+       with id love to hear more and answer your question based on that."
+
+       Three faults in one message -- a guess stated as fact, two sentences
+       run together with "id" for "I'd", and sixty words on a lock screen.
+       The notes drafter forbade the first from the start; the older one that
+       sits on the Today cards never did. Both are checked here so they cannot
+       drift apart again. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const older = app.slice(app.indexOf('function buildAIPrompt'), app.indexOf('function callGemini'));
+
+    assert.ok(/do not speculate/i.test(older), 'the card drafter must forbid speculation');
+    assert.ok(/I am assuming/i.test(older), 'and name the phrasing that went out');
+    assert.ok(/apostrophes/i.test(older), 'and require real punctuation');
+    assert.ok(/lock screen/i.test(older), 'and cap the length');
+
+    const notes = GB.buildNotesPrompt({client: GB.sanitizeClient({id:'c', name:'Dana', phone:'2135550100'}),
+      notes: 'x', channel: 'sms', senderName: 'Bob'});
+    assert.ok(/do not invent/i.test(notes), 'the notes drafter must forbid invention');
+    assert.ok(/lock screen/i.test(notes), 'and keep a text short');
+  });
+
   test('the notes are the source, and the model is told not to go beyond them', () => {
     /* Notes are shorthand. A model filling gaps in shorthand produces
        confident sentences about things that were never said — which the
@@ -2968,6 +2992,36 @@ test('the preview warns about anything still unfilled', () => {
   const leftovers = (r.text + ' ' + r.subject).match(/\{\w+\}|\[[A-Z][^\]]*\]/g);
   assert.deepStrictEqual(leftovers, ['[PASTE THE RIGHT PACKAGE LINK HERE]'],
     'the placeholder must be detectable: ' + r.text);
+});
+
+test('the alert summary names the issue instead of counting it', () => {
+  /* "1 data issue worth a look" is a number and a shrug. It gives no way to
+     judge whether to open the panel, so after the second day it stops being
+     read -- which is how a real problem ends up sitting in the interface for
+     a week looking like furniture. */
+  const ctx = makeHostedCtx();
+  vm.runInContext("STATE = buildDefaultState();", ctx);
+  const say = (alerts) => vm.runInContext(
+    'describeAlerts(' + JSON.stringify(alerts) + ', ' + alerts.length + ')', ctx);
+
+  assert.ok(/no phone number/.test(say([{type: 'no-phone', clients: [{id: 'a'}]}])),
+    'got: ' + say([{type: 'no-phone', clients: [{id: 'a'}]}]));
+  assert.ok(/before a single text/.test(say([{type: 'never-texted', clients: [{id: 'a'}, {id: 'b'}]}])));
+  assert.ok(/within 48 hours/.test(say([{type: 'imminent-untexted', clients: [{id: 'a'}]}])));
+  assert.ok(/duplicate booking/.test(say([{type: 'duplicate', groups: [[{}, {}]]}])));
+
+  // Several still collapse to a count: a list inside a one-line summary is
+  // just the panel again.
+  assert.ok(/2 things/.test(say([{type: 'no-phone', clients: [{id: 'a'}]},
+                                 {type: 'duplicate', groups: [[{}, {}]]}])));
+
+  // Singular and plural both read correctly, since this line is always on screen.
+  assert.ok(/1 upcoming/.test(say([{type: 'no-phone', clients: [{id: 'a'}]}])));
+  assert.ok(/3 upcoming/.test(say([{type: 'no-phone', clients: [{id: 'a'}, {id: 'b'}, {id: 'c'}]}])));
+
+  // An unrecognised type must still produce a sentence rather than "undefined".
+  assert.ok(say([{type: 'something-new'}]).length > 0);
+  assert.ok(!/undefined/.test(say([{type: 'something-new'}])));
 });
 
 test('the contact modal offers one button per email, each a real Gmail link', () => {

@@ -231,11 +231,44 @@ function renderHealthAlerts(){
   if(wrap && summary){
     var n = box.children.length;
     wrap.classList.toggle('has-issues', n > 0);
-    summary.textContent = n
-      ? n + ' data issue' + (n === 1 ? '' : 's') + ' worth a look'
-      : 'Everything looks healthy';
+    /* Say WHICH issue, not how many.
+
+       "1 data issue worth a look" is a number and a shrug: it gives no way to
+       judge whether to open it, so after the second day it stops being read
+       at all. Naming it means the decision can be made from the closed state,
+       which for most of these is "that one is fine, leave it".
+
+       Several issues still collapse to a count, because a list in a one-line
+       summary is just the panel again. */
+    summary.textContent = n ? describeAlerts(alerts, n) : 'Everything looks healthy';
     if(!n) wrap.removeAttribute('open');
   }
+}
+
+function describeAlerts(alerts, n){
+  if(n > 1) return n + ' things worth a look';
+  var a = alerts[0];
+  if(!a) return '1 thing worth a look';
+  var count;
+  if(a.type === 'no-phone'){
+    count = a.clients.length;
+    return count + ' upcoming ' + (count === 1 ? termLower('contact') : termLower('contactPlural')) +
+      ' with no phone number';
+  }
+  if(a.type === 'never-texted'){
+    count = a.clients.length;
+    return count + ' ' + (count === 1 ? termLower('contact') : termLower('contactPlural')) +
+      ' closed out before a single text went';
+  }
+  if(a.type === 'imminent-untexted'){
+    count = a.clients.length;
+    return count + ' call' + (count === 1 ? '' : 's') + ' within 48 hours, nothing sent yet';
+  }
+  if(a.type === 'duplicate'){
+    count = a.groups.length;
+    return count + ' possible duplicate booking' + (count === 1 ? '' : 's');
+  }
+  return '1 thing worth a look';
 }
 
 
@@ -1986,6 +2019,24 @@ function buildAIPrompt(client, stage){
   if(callDate) lines.push('Their call is on ' + fmtDate(callDate, tz) + ' at ' + fmtTime(callDate, tz) + '.');
   if(client.notes) lines.push('Notes ' + sender + ' has on this ' + termLower('contact') + ': ' + client.notes);
   if(client.recap) lines.push('Recap from a prior call with them: ' + client.recap);
+
+  /* Three rules the drafts kept breaking, each taken from a real one.
+
+     A text that went out read: "I heard you mention you volunteer. I am
+     assuming this is with an organization within your town you work with id
+     love to hear more and answer your question based on that."
+
+     Three faults in one message. It SPECULATED — "I am assuming this is with
+     an organization within your town" is invented from a one-line note, and a
+     guess stated as fact is read by the customer as a claim. It ran two
+     sentences together with no full stop and wrote "id" for "I'd". And it was
+     sixty words, which is an email arriving on a lock screen.
+
+     The notes-based drafting added the first of these when it was written;
+     this one never had it. */
+  lines.push('Use only what the notes actually say. Do not speculate about them, do not guess at what they meant, and never write a sentence beginning "I am assuming" or "it sounds like" — a guess stated as fact reads to them as a claim. If the notes are thin, write less.');
+  lines.push('Complete sentences with full stops and apostrophes. Not "id" or "ill" or "wont".');
+  lines.push('Under 45 words. It is read on a lock screen.');
   lines.push('Write ONE replacement text message personalized using those notes/recap where it naturally fits. Output ONLY the message text itself — no quotes, no preamble, no explanation.');
   return lines.join('\n\n');
 }
