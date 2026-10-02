@@ -304,9 +304,25 @@ function renderStats(){
     ['Show-up rate', s.showUpRate, prev ? prev.showUpRate : null,
       {note: s.unloggedCalls ? s.unloggedCalls + ' unlogged' : null}],
     ['Close rate', s.closeRate, prev ? prev.closeRate : null, {}],
-    ['Text response rate', s.responseRate, prev ? prev.responseRate : null, {}],
+    /* The denominator travels with the rate, for the same reason the unlogged
+       count travels with the show rate: a percentage with an invisible
+       denominator is a claim nobody can check. "30% of 10 texts" and "30% of
+       400" are different facts wearing the same number. */
+    ['Text response rate', s.responseRate, prev ? prev.responseRate : null,
+      {note: s.textsSent ? 'of ' + s.textsSent + ' texts' : 'no texts sent'}],
     ['Reschedule rate', s.rescheduleRate, prev ? prev.rescheduleRate : null, {lowerIsBetter:true}],
-    ['Calls tracked', s.callsTracked, prev ? prev.callsTracked : null, {isCount:true, neutral:true}]
+    ['Calls tracked', s.callsTracked, prev ? prev.callsTracked : null, {isCount:true, neutral:true}],
+    /* Emails are a count, not a rate, and that is the honest shape.
+
+       They used to be folded into the text response rate, where each one
+       joined a denominator it could never join the numerator of -- an email
+       opened in Gmail has nothing watching for its reply. On a book where 3
+       of 10 texts were answered, one email each took the rate from 30% to
+       15%, with nobody replying any less. A rate here would be a number that
+       only ever falls. */
+    ['Emails sent', s.emailsSent, prev ? prev.emailsSent : null,
+      {isCount:true, neutral:true,
+       note: s.emailReplies ? s.emailReplies + ' replied' : 'replies not tracked'}]
   ];
   box.innerHTML = '';
   cards.forEach(function(c){

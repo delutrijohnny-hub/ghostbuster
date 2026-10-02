@@ -1920,6 +1920,86 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- the numbers mean what they say ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const book = (withEmails) => {
+    const clients = {};
+    for (let i = 0; i < 10; i++) {
+      const log = [{id: 't' + i, stage: 'welcome', variantId: 'w1', text: 'x', sentAt: ago(2),
+        responded: i < 3, respondedAt: i < 3 ? ago(1) : null, reviewed: true, channel: 'sms'}];
+      if (withEmails) log.push({id: 'e' + i, stage: 'email', variantId: 'lib', text: 'x',
+        sentAt: ago(2), responded: false, respondedAt: null, reviewed: false, channel: 'email'});
+      clients['c' + i] = GB.sanitizeClient({id: 'c' + i, name: 'P' + i, phone: '21355501' + i,
+        timezone: 'America/New_York', status: 'Completed', bookedDate: ago(20),
+        callDateTime: ago(1), messageLog: log});
+    }
+    return {clients, variants: GB.buildDefaultVariants(), variantStats: {}, todos: []};
+  };
+
+  test('sending emails does not drag down the text reply rate', () => {
+    /* Every message used to count. The moment library emails were logged,
+       each joined a denominator it could never join the numerator of -- an
+       email opened in Gmail has nothing watching for its reply. On a book
+       where 3 of 10 texts were answered, one email each took the rate from
+       30% to 15%. Nobody replied less; the number stopped meaning anything,
+       in the direction that looks like the product failing. */
+    const now = new Date();
+    const without = GB.computeStats(book(false), 'month', now);
+    const with_ = GB.computeStats(book(true), 'month', now);
+    assert.strictEqual(Math.round(without.responseRate * 100), 30);
+    assert.strictEqual(without.responseRate, with_.responseRate,
+      'the text reply rate must not move because an email was sent');
+    assert.strictEqual(with_.textsSent, 10, 'texts counted once, not once per channel');
+    assert.strictEqual(with_.emailsSent, 10, 'and emails counted as emails');
+  });
+
+  test('a message keeps its channel through sanitising', () => {
+    /* It did not, and that is what caused the above: an email came out
+       indistinguishable from a text. The worst version was never reached --
+       any path that sanitised before saving would have written every email
+       back to the database as a text. */
+    const c = GB.sanitizeClient({id: 'c', name: 'D', phone: '2135550100', messageLog: [
+      {id: 'a', stage: 'email', text: 'x', sentAt: ago(1), channel: 'email', providerId: 're_1'},
+      {id: 'b', stage: 'welcome', text: 'x', sentAt: ago(1), channel: 'sms'},
+    ]});
+    assert.strictEqual(c.messageLog[0].channel, 'email');
+    assert.strictEqual(c.messageLog[0].providerId, 're_1');
+    assert.strictEqual(c.messageLog[1].channel, 'sms');
+    // History predating the email channel is a text, which is what it was.
+    const old = GB.sanitizeClient({id: 'c', name: 'D', phone: '2135550100',
+      messageLog: [{id: 'a', stage: 'welcome', text: 'x', sentAt: ago(400)}]});
+    assert.strictEqual(old.messageLog[0].channel, 'sms');
+    assert.strictEqual(old.messageLog[0].providerId, null);
+  });
+
+  test('a rate is never shown without the count it is computed over', () => {
+    // "30% of 10 texts" and "30% of 400" are different facts wearing the same
+    // number, and a percentage with an invisible denominator cannot be checked.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    // Slice forward from the card list, not to the first box.innerHTML --
+    // that appears earlier in the file, so the slice came out negative and
+    // the assertions passed over an empty string.
+    const start = app.indexOf('var cards = [');
+    const cards = app.slice(start, app.indexOf('box.innerHTML', start));
+    assert.ok(cards.length > 100, 'the card list slice came out empty');
+    assert.ok(/of ' \+ s\.textsSent \+ ' texts/.test(cards),
+      'the reply rate must state how many texts it covers');
+    assert.ok(/unlogged/.test(cards), 'the show rate must still state what it excludes');
+  });
+
+  test('emails are reported as a count, because a rate would only ever fall', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const start2 = app.indexOf('var cards = [');
+    const cards = app.slice(start2, app.indexOf('box.innerHTML', start2));
+    assert.ok(cards.length > 100, 'the card list slice came out empty');
+    assert.ok(/'Emails sent', s\.emailsSent/.test(cards));
+    assert.ok(/replies not tracked/.test(cards),
+      'and it must say that email replies are not observed');
+  });
+}
+
 console.log('\n--- a retried webhook must not be processed twice ---');
 
 test('the webhook short-circuits an event it has already handled', () => {

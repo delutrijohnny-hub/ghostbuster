@@ -1054,7 +1054,24 @@ function sanitizeClient(raw, fallbackId){
       // reviewed message. A responded:false with no flag is genuinely unknown
       // — nobody ever answered the question — so it stays unreviewed and gets
       // surfaced for review rather than silently counting as a rejection.
-      reviewed: (typeof m.reviewed === 'boolean') ? m.reviewed : !!m.responded
+      reviewed: (typeof m.reviewed === 'boolean') ? m.reviewed : !!m.responded,
+      /* Channel and provider id survive sanitising.
+
+         They did not, and the consequences spread further than they look. An
+         email came out the other side indistinguishable from a text, so the
+         reply rate counted it in a denominator it could never join -- on a
+         book where 3 of 10 texts were answered, one library email each took
+         the rate from 30% to 15%, with nobody replying any less. The
+         manual-versus-observed labelling could never report "confirmed",
+         because the provider id it reads was already gone. And any path that
+         sanitised before saving would have written every email back as a
+         text, which is the version of this bug that destroys records rather
+         than just miscounting them.
+
+         Defaulting channel to 'sms' is right for history: every message
+         predating the email channel was a text. */
+      channel: (m.channel === 'email' || m.channel === 'sms') ? m.channel : 'sms',
+      providerId: typeof m.providerId === 'string' ? m.providerId : null
     };
   }) : [];
   return {
@@ -3378,10 +3395,37 @@ function computeStats(state, range, now){
   var closeRate = (closed+notClosed) > 0 ? closed/(closed+notClosed) : null;
   var rescheduledAtLeastOnce = inCallWindow.filter(function(c){ return c.rescheduleCount > 0; }).length;
   var rescheduleRate = inCallWindow.length > 0 ? rescheduledAtLeastOnce/inCallWindow.length : null;
-  var sends=0, responses=0;
-  clients.forEach(function(c){ c.messageLog.forEach(function(m){ if(inRange(m.sentAt, range, now)){ sends++; if(m.responded) responses++; } }); });
+  /* Reply rate is a TEXT rate, and mixing channels destroyed it.
+
+     Every message in range used to count. The moment library emails started
+     being logged, each one joined the denominator while essentially never
+     joining the numerator -- an email sent through Gmail has nothing watching
+     for its reply, so it can only ever be marked by hand and almost never is.
+     On a book where 3 of 10 texts got answered, sending each contact one
+     email took the reply rate from 30% to 15%. Nobody replied less. The
+     number simply stopped meaning anything, in the direction that looks like
+     the product is failing.
+
+     So the rate is computed over the channel that actually has reply data,
+     which is also the channel it has always described -- every historical
+     number was SMS. Emails are reported separately as a count, because a
+     count is honest and a rate would not be. */
+  var sends=0, responses=0, emailsSent=0, emailReplies=0;
+  clients.forEach(function(c){ c.messageLog.forEach(function(m){
+    if(!inRange(m.sentAt, range, now)) return;
+    if((m.channel || 'sms') === 'email'){
+      emailsSent++;
+      if(m.responded) emailReplies++;
+      return;
+    }
+    sends++;
+    if(m.responded) responses++;
+  }); });
   var responseRate = sends > 0 ? responses/sends : null;
-  return {showUpRate:showUpRate, closeRate:closeRate, rescheduleRate:rescheduleRate, callsTracked:inCallWindow.length, responseRate:responseRate, unloggedCalls:unlogged};
+  return {showUpRate:showUpRate, closeRate:closeRate, rescheduleRate:rescheduleRate,
+          callsTracked:inCallWindow.length, responseRate:responseRate, unloggedCalls:unlogged,
+          // Named so nothing can quietly fold them back into the rate above.
+          textsSent:sends, textReplies:responses, emailsSent:emailsSent, emailReplies:emailReplies};
 }
 
 function pct(v){ return v===null || v===undefined || isNaN(v) ? '—' : Math.round(v*100) + '%'; }
