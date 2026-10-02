@@ -18,7 +18,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')!;
 const GEMINI_MODEL = 'gemini-flash-latest';
 
 // Called from the browser via supabase-js, which is a cross-origin fetch
-// (app runs on ghostbustercrm.com, function on *.functions.supabase.co) —
+// (the app runs on its own domain, the function on *.functions.supabase.co) —
 // the browser sends a CORS preflight OPTIONS request first and silently
 // blocks the real request if these headers aren't present on both the
 // preflight response AND the real response.
