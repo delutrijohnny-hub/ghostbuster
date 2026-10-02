@@ -216,6 +216,66 @@ function renderTeamTab(){
   }
 }
 
+/* The owner view: every account on Ghost Recall, for support.
+
+   Deliberately NOT the team view with a wider WHERE clause. The team view is a
+   sales manager looking at his own staff - same company, same customers, full
+   detail is fine. This is the product owner looking at other businesses, which
+   stops being an internal screen the day an outside customer signs up. It shows
+   what is broken and what to tell them, out of account-level facts only, and
+   logic.js has a test asserting it cannot grow a contact-shaped field. */
+function renderOwnerTab(){
+  var box = el('owner-view');
+  var btn = el('tab-btn-owner');
+  if(!box) return;
+
+  var rows = STATE && STATE.platform;
+  if(!rows || !rows.length){
+    if(btn) btn.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  if(btn) btn.classList.remove('hidden');
+
+  var o = platformOverview(rows, new Date());
+  box.innerHTML = '';
+  box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['All accounts']) ]));
+  box.appendChild(h('p',{class:'team-lead', html:
+    o.needHelp
+      ? '<strong>' + o.needHelp + '</strong> of ' + o.total + ' need help. ' +
+        o.neverUsed + ' have never sent a message.'
+      : 'All ' + o.total + ' accounts healthy.'}));
+
+  o.accounts.forEach(function(a){
+    var meta = [];
+    if(a.signedUpDays !== null) meta.push('signed up ' + a.signedUpDays + 'd ago');
+    if(a.lastSignInDays !== null) meta.push('last in ' + a.lastSignInDays + 'd ago');
+    box.appendChild(h('div',{class:'acct-row' + (a.healthy ? ' is-ok' : '')},[
+      h('div',{},[
+        h('div',{class:'acct-name'},[a.name]),
+        h('div',{class:'acct-meta'},[meta.join(' \u00b7 ')])
+      ]),
+      h('div',{},[
+        a.problem
+          ? h('div',{class:'acct-problem'},[a.problem])
+          : h('div',{class:'acct-ok'},['Working normally']),
+        a.fix ? h('div',{class:'acct-fix'},[a.fix]) : ''
+      ]),
+      h('div',{class:'acct-nums'},[
+        h('div',{},[h('b',{},[String(a.contacts)]), 'contacts']),
+        h('div',{},[h('b',{},[String(a.upcoming)]), 'booked']),
+        h('div',{},[h('b',{},[String(a.sentEver)]), 'sent'])
+      ])
+    ]));
+  });
+
+  box.appendChild(h('div',{class:'owner-note'},[
+    'Account health only. This view never shows another business\u2019s contacts, ' +
+    'messages or notes \u2014 opening someone\u2019s actual book to debug something ' +
+    'should be a deliberate, consented step, not a screen that is always on.'
+  ]));
+}
+
 function renderAll(){
   if(!STATE) return;
   applyTerminology();
@@ -240,6 +300,7 @@ function renderAll(){
   renderWeeklyTab();
   renderCalendarTab();
   renderTeamTab();
+  renderOwnerTab();
   renderClosedTab();
   renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;

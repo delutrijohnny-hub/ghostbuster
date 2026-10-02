@@ -3932,6 +3932,104 @@ function teamOverview(rows, now){
   };
 }
 
+/* ============================================================
+   OWNER VIEW — every account on Ghost Recall, for support
+   ============================================================
+
+   Separate from the team view on purpose, and deliberately narrower.
+
+   The team view is a sales manager looking at his own staff: same company,
+   same customers, full detail is appropriate. This one is the owner of the
+   product looking at OTHER businesses, and the day outside customers sign up
+   it stops being an internal screen. So it answers "what is broken for them
+   and what do I tell them" out of account-level facts, and never reaches a
+   contact's name, number or messages. Reading a customer's actual book to
+   debug something should be a deliberate, consented act, not a tab that is
+   always on.
+
+   It is also the honest version of what support needs. Every problem found by
+   hand on this book so far - a filter importing nothing, a revoked calendar
+   token, somebody who signed up and never came back - is visible from these
+   fields alone. */
+
+function accountDiagnosis(a, now){
+  var at = now ? now.getTime() : Date.now();
+  var days = function(iso){
+    var t = iso ? Date.parse(iso) : NaN;
+    return isNaN(t) ? null : Math.floor((at - t) / 86400000);
+  };
+  var contacts = Number(a.contacts) || 0;
+  var sentEver = Number(a.sentEver) || 0;
+  var sinceSignIn = days(a.lastSignIn);
+  var syncDays = days(a.lastSync);
+  var cals = Number(a.connectedCalendars) || 0;
+
+  /* Ordered by what is actually blocking them, most upstream first: you
+     cannot work a list you never received, and you cannot receive bookings
+     from a calendar that is not connected. */
+  var problem = null, fix = null;
+
+  if(!cals){
+    problem = 'No calendar connected';
+    fix = sinceSignIn === null || sinceSignIn > 2
+      ? 'Signed up but never finished setup. Needs walking through connecting a calendar.'
+      : 'Still setting up - give it a day before chasing.';
+  } else if(a.lastSync === null || a.lastSync === undefined){
+    problem = 'Calendar connected but never synced';
+    fix = 'First sync has not run or is failing. Check the connection was completed.';
+  } else if(syncDays !== null && syncDays >= 2){
+    problem = 'Sync stopped ' + syncDays + ' days ago';
+    fix = 'Google has almost certainly revoked the token. They need to press Reconnect; nobody can do it for them.';
+  } else if(!contacts){
+    problem = 'Syncing, but importing nothing';
+    fix = 'Their calendar filter is excluding everything. Check it is not still set to someone else\'s event titles.';
+  } else if(!sentEver){
+    problem = 'Never sent a message';
+    fix = contacts + ' contacts loaded and nothing sent. This is an onboarding problem, not a technical one.';
+  } else if(a.idleDays !== undefined && a.idleDays !== null && a.idleDays >= TEAM_IDLE_DAYS){
+    problem = 'Stopped using it ' + a.idleDays + ' days ago';
+    fix = 'Was working it and stopped. Worth asking what changed.';
+  }
+
+  return {
+    name: a.name || a.email || 'Unknown',
+    signedUpDays: days(a.signedUp),
+    lastSignInDays: sinceSignIn,
+    contacts: contacts,
+    upcoming: Number(a.upcoming) || 0,
+    sentEver: sentEver,
+    calendars: cals,
+    syncDays: syncDays,
+    healthy: problem === null,
+    problem: problem,
+    fix: fix
+  };
+}
+
+function platformOverview(rows, now){
+  var accounts = (rows || []).map(function(a){ return accountDiagnosis(a, now); });
+
+  // Broken first, then not-started, then healthy - and within each, the
+  // account with the most booked work riding on it.
+  accounts.sort(function(a, b){
+    if(a.healthy !== b.healthy) return a.healthy ? 1 : -1;
+    if(b.upcoming !== a.upcoming) return b.upcoming - a.upcoming;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  var broken = accounts.filter(function(a){ return !a.healthy; });
+  return {
+    accounts: accounts,
+    total: accounts.length,
+    healthy: accounts.length - broken.length,
+    needHelp: broken.length,
+    // Everyone who has an account but has never sent anything: the number
+    // that says whether the product is being adopted or merely installed.
+    neverUsed: accounts.filter(function(a){ return !a.sentEver; }).length,
+    strandedUpcoming: broken.reduce(function(n, a){ return n + a.upcoming; }, 0)
+  };
+}
+
 function describeSetup(state, now){
   now = now || new Date();
   var connected = ((state && state.calendarConnections) || []).length > 0
@@ -4840,6 +4938,7 @@ var __LOGIC_EXPORTS__ = {
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
   teamOverview: teamOverview, teamMemberState: teamMemberState, teamReplyRate: teamReplyRate,
+  platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
   TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,

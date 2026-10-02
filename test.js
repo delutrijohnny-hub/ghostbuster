@@ -6539,6 +6539,121 @@ console.log('\n--- the team view ---');
   });
 }
 
+console.log('\n--- the owner view, across every account ---');
+
+/* Different job from the team view, and deliberately narrower.
+
+   The team view is a sales manager looking at his own staff. This is the owner
+   of the product looking at OTHER businesses, which the day an outside
+   customer signs up stops being an internal screen. It answers "what is broken
+   for them and what do I tell them" and must not become a window into their
+   customers. */
+{
+  const now = new Date('2026-10-02T16:30:00Z');
+  const acct = (over) => Object.assign({
+    name:'someone', signedUp:'2026-08-01', lastSignIn:'2026-10-02',
+    contacts:40, upcoming:5, sentEver:100, idleDays:0,
+    connectedCalendars:1, lastSync:'2026-10-02T16:00:00Z'}, over);
+
+  test('it never carries a single thing about a contact', () => {
+    /* The privacy guarantee, asserted on the shape rather than trusted to the
+       renderer. Anything added here later that names, numbers or quotes
+       somebody's customer fails this. */
+    const d = GB.accountDiagnosis(acct({}), now);
+    const allowed = new Set(['name','signedUpDays','lastSignInDays','contacts','upcoming',
+                             'sentEver','calendars','syncDays','healthy','problem','fix']);
+    Object.keys(d).forEach(k => assert.ok(allowed.has(k),
+      'the owner view grew a field the owner should not see: ' + k));
+    const blob = JSON.stringify(d).toLowerCase();
+    ['email','phone','message','client','recap','note','@']
+      .forEach(w => assert.ok(blob.indexOf(w) === -1,
+        'the diagnosis leaked something contact-shaped: ' + w));
+  });
+
+  test('the most upstream blocker is the one reported', () => {
+    // You cannot work a list you never received. An account with no calendar
+    // AND no messages sent is a setup problem, not an onboarding one.
+    assert.strictEqual(
+      GB.accountDiagnosis(acct({connectedCalendars:0, lastSync:null, contacts:0, sentEver:0}), now).problem,
+      'No calendar connected');
+    assert.strictEqual(
+      GB.accountDiagnosis(acct({contacts:0, sentEver:0}), now).problem,
+      'Syncing, but importing nothing');
+    assert.strictEqual(
+      GB.accountDiagnosis(acct({sentEver:0}), now).problem,
+      'Never sent a message');
+  });
+
+  test('each problem comes with something you could actually say to them', () => {
+    [{connectedCalendars:0, lastSync:null, contacts:0, sentEver:0},
+     {lastSync:'2026-09-29T16:00:00Z'},
+     {contacts:0, sentEver:0},
+     {sentEver:0},
+     {sentEver:50, idleDays:21}].forEach(over => {
+      const d = GB.accountDiagnosis(acct(over), now);
+      assert.ok(d.problem, 'expected a problem for ' + JSON.stringify(over));
+      assert.ok(d.fix && d.fix.length > 20,
+        d.problem + ' has no useful next step: ' + d.fix);
+    });
+  });
+
+  test('a revoked token says plainly that only they can fix it', () => {
+    // Three days of silence on this book was a revoked Google token, and the
+    // one thing support must not do is promise to fix it from their end.
+    const d = GB.accountDiagnosis(acct({lastSync:'2026-09-29T16:00:00Z'}), now);
+    assert.ok(/Reconnect/.test(d.fix), d.fix);
+    assert.ok(/nobody can do it for them/.test(d.fix), d.fix);
+  });
+
+  test('a healthy account reports no problem at all', () => {
+    const d = GB.accountDiagnosis(acct({}), now);
+    assert.strictEqual(d.healthy, true);
+    assert.strictEqual(d.problem, null);
+  });
+
+  test('broken accounts sort above healthy ones, worst-funded first', () => {
+    const o = GB.platformOverview([
+      acct({name:'fine'}),
+      acct({name:'small-broken', sentEver:0, upcoming:2}),
+      acct({name:'big-broken', sentEver:0, upcoming:137}),
+    ], now);
+    assert.deepStrictEqual(o.accounts.map(a => a.name),
+      ['big-broken', 'small-broken', 'fine']);
+    assert.strictEqual(o.needHelp, 2);
+    assert.strictEqual(o.healthy, 1);
+    assert.strictEqual(o.neverUsed, 2);
+    assert.strictEqual(o.strandedUpcoming, 139);
+  });
+
+  test('the owner tab hides itself, is wired in, and keeps its promise', () => {
+    // Source level: the DOM stub cannot see appended trees or class changes,
+    // which was established earlier by deleting the hide and watching an
+    // innerHTML assertion still pass.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderOwnerTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderOwnerTab()') + 10));
+    const guard = fn.slice(0, fn.indexOf('platformOverview('));
+    assert.ok(/if\(!rows \|\| !rows\.length\)/.test(guard), 'nothing short-circuits on no accounts');
+    assert.ok(/classList\.add\('hidden'\)/.test(guard), 'the empty case does not hide the tab');
+    assert.ok(/classList\.remove\('hidden'\)/.test(fn), 'the tab is never shown to an owner who has accounts');
+
+    // It must build its rows from the diagnosis, never from raw client rows.
+    assert.ok(/platformOverview\(/.test(fn), 'the tab does not go through the diagnosis');
+    assert.ok(!/\.clients\b/.test(fn), 'the owner tab reaches into client records');
+    assert.ok(/never shows another business/.test(fn),
+      'the note telling the owner what this view deliberately excludes is gone');
+
+    const renderAll = app.slice(app.indexOf('function renderAll()'),
+                                app.indexOf('\n}', app.indexOf('function renderAll()')));
+    assert.ok(/renderOwnerTab\(\)/.test(renderAll), 'renderAll never calls renderOwnerTab');
+  });
+
+  test('an empty platform does not throw', () => {
+    assert.strictEqual(GB.platformOverview([], now).total, 0);
+    assert.strictEqual(GB.platformOverview(null, now).needHelp, 0);
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
