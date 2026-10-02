@@ -2426,6 +2426,64 @@ function lastInteraction(client, now){
 
 // Human phrasing for the lifecycle, used in both the queue and the timeline so
 // the vocabulary stays consistent across surfaces.
+/* Why this person is on today's list, in a sentence.
+
+   The card showed a name, a progress chip and a timezone. It never said what
+   had happened or why this was due now, so the only way to judge whether a
+   message was the right thing to send was to open the contact and read the
+   history. On a list of fourteen that is fourteen detours.
+
+   Two clauses, because there are two questions: what happened last, and what
+   is owed now. "No reply in 4 days - mid-point check-in due today."
+
+   Built from real records only. Nothing here is inferred or scored; it is a
+   restatement of what the log already says, which is the only kind of
+   explanation worth putting in front of someone who can check it. */
+function explainDue(client, stage, now){
+  now = now || new Date();
+  var inter = lastInteraction(client, now);
+  var what = [];
+
+  // What happened last.
+  if(!inter || inter.state === 'none'){
+    var booked = safeDate(client.bookedDate);
+    var days = booked ? Math.floor((now.getTime() - booked.getTime()) / 86400000) : null;
+    what.push(days === null ? 'Nothing sent yet'
+      : days < 1 ? 'Came in today, nothing sent yet'
+      : 'Nothing sent yet, booked ' + days + (days === 1 ? ' day ago' : ' days ago'));
+  } else if(inter.state === 'replied'){
+    what.push('They replied' + (inter.hoursAgo !== null && inter.hoursAgo >= 24
+      ? ' ' + Math.round(inter.hoursAgo / 24) + 'd ago' : ''));
+  } else {
+    var h = inter.hoursAgo;
+    what.push(h === null ? 'Already contacted'
+      : h < 24 ? 'No reply yet, sent ' + Math.max(1, Math.round(h)) + 'h ago'
+      : 'No reply in ' + Math.round(h / 24) + (Math.round(h / 24) === 1 ? ' day' : ' days'));
+  }
+
+  // Why this particular touch is owed now.
+  var call = safeDate(client.callDateTime);
+  var hrsToCall = call ? (call.getTime() - now.getTime()) / 3600000 : null;
+  if(stage === 'hourbefore' && hrsToCall !== null){
+    what.push('call in under an hour');
+  } else if(stage === 'dayof'){
+    what.push('call is today');
+  } else if(stage === 'noshow'){
+    what.push('they missed the call');
+  } else if(stage === 'recovery'){
+    what.push('gone quiet, worth another try');
+  } else if(stage === 'revival'){
+    what.push('long-term check-in, roughly monthly');
+  } else if(hrsToCall !== null && hrsToCall > 0){
+    var d = Math.round(hrsToCall / 24);
+    what.push(touchLabel(stage).toLowerCase() + ' due, call in ' + (d < 1 ? 'under a day' : d + (d === 1 ? ' day' : ' days')));
+  } else {
+    what.push(touchLabel(stage).toLowerCase() + ' due today');
+  }
+
+  return what.join(' \u2014 ');
+}
+
 function interactionLabel(inter){
   if(!inter || inter.state === 'none') return 'No messages yet';
   // A replied-to contact whose cadence is held should say so: "Replied" alone
@@ -4163,7 +4221,7 @@ var __LOGIC_EXPORTS__ = {
   computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
-  interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
+  explainDue: explainDue,   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
   stageWithRole: stageWithRole, recordInteractionOutcome: recordInteractionOutcome,
   HOURBEFORE_LEAD_MIN: HOURBEFORE_LEAD_MIN, HOURBEFORE_FLOOR_MIN: HOURBEFORE_FLOOR_MIN,
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,

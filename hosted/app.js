@@ -374,7 +374,17 @@ function buildTouchCard(client, stage, now){
     ['Touch ' + (prog.done + 1) + ' of ' + prog.total]);
   var tzChip = h('span',{class:'tz-chip' + (tzInfo.warn?' tz-warn':'')},[tzInfo.timeLabel + ' their time']);
   top.appendChild(nameEl); top.appendChild(progChip); top.appendChild(tzChip);
+  /* Why this person, why now -- on the card rather than behind it.
+
+     The card showed a name, a progress chip and a timezone. Judging whether a
+     message was the right thing to send meant opening the contact and reading
+     the history, and on a list of fourteen that is fourteen detours.
+
+     It is a restatement of the log, not a score or an inference: "No reply in
+     4 days - mid-point check-in due, call in 4 days." Everything in it can be
+     checked against the timeline below it. */
   card.appendChild(top);
+  card.appendChild(h('div',{class:'why'},[explainDue(client, stage, now)]));
 
   if(tzInfo.warn){
     card.appendChild(h('div',{class:'tz-warn-text'},['⚠ It\'s outside normal hours for ' + client.name + ' right now.']));

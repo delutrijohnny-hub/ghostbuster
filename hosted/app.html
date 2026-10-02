@@ -306,6 +306,10 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .card .tz-chip.tz-warn{background:var(--red-soft);color:var(--red-dark);}
 .card textarea{width:100%;min-height:76px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;font-size:12.5px;resize:vertical;}
 .card .tz-warn-text{color:var(--red-dark);font-size:11px;margin-top:4px;}
+/* The one-line reason under a card's name. Quiet -- it is context for the
+   message, not a heading -- but always present, because a card without it
+   leaves the judgement call to memory. */
+.card .why{font-size:11.5px;color:var(--ink-soft);line-height:1.45;margin:-2px 0 8px;}
 .card .card-actions{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;}
 .card .card-actions .sent-label{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:5px;}
 .card .edited-note{font-size:11px;color:var(--ink-faint);}
@@ -918,7 +922,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 </head>
 <body>
 
-<div id="signin-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;background:var(--black);color:#fff;text-align:center;padding:20px;">
+<!-- 100dvh, not 100vh: on mobile Safari the browser chrome is counted in vh,
+     so a screen sized to it is taller than the space actually available and
+     scrolls by exactly the height of the toolbar. gap shrinks with the
+     viewport for the same reason - a landscape phone has very little height. -->
+<div id="signin-screen" style="min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:clamp(10px,3vh,18px);background:var(--black);color:#fff;text-align:center;padding:20px;box-sizing:border-box;">
   <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path d="M32 6c-12 0-20 9-20 21v19c0 2 2 3 3.5 1.5L19 44l4 4 4-4 5 4 5-4 4 4 3.5-3.5C46 46 48 45 48 43V27C48 15 40 6 32 6z" fill="#fff"/>
     <ellipse cx="24" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>
@@ -927,7 +935,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <circle cx="41.3" cy="24.5" r="1.3" fill="#fff"/>
     <path d="M26 39q6 5 12 0" stroke="#17171a" stroke-width="2.4" stroke-linecap="round" fill="none"/>
   </svg>
-  <h1 style="font-family:'Anton',-apple-system,sans-serif;font-size:28px;letter-spacing:.3px;">THE GHOSTBUSTER</h1>
+  <h1 style="font-family:'Anton',-apple-system,sans-serif;font-size:28px;letter-spacing:.3px;margin:0;">THE GHOSTBUSTER</h1>
+  <!-- What this is, before anyone has to sign in to find out. The display
+       font is for the name; this is ordinary readable text, because it is a
+       sentence to be read rather than branding to be recognised. -->
+  <p style="font-size:15px;line-height:1.5;color:rgba(255,255,255,.82);max-width:30ch;margin:0;">Know who to follow up with&mdash;and what to say.</p>
   <button id="google-signin-btn" class="btn btn-primary" style="font-size:15px;padding:12px 24px;">Sign in with Google</button>
   <p id="signin-error" style="color:var(--red-soft);font-size:13px;max-width:360px;"></p>
 </div>

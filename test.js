@@ -1920,6 +1920,70 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- Today answers who, why and what next ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const sms = (when, responded) => ({id: 'm', stage: 'welcome', variantId: 'v', text: 'x',
+    sentAt: when, responded: !!responded, respondedAt: responded ? when : null,
+    reviewed: true, channel: 'sms'});
+  const mk = (over) => GB.sanitizeClient(Object.assign({id: 'c', name: 'Dana',
+    phone: '2135550100', timezone: 'America/New_York', status: 'Booked',
+    bookedDate: ago(9)}, over));
+  const soon = new Date(Date.now() + 4 * 86400000).toISOString();
+
+  test('a card says what happened and why it is due, in plain words', () => {
+    /* The card showed a name, a progress chip and a timezone. Judging whether
+       a message was the right thing to send meant opening the contact and
+       reading the history -- on a list of fourteen, fourteen detours. */
+    const out = GB.explainDue(mk({callDateTime: soon, messageLog: [sms(ago(4))]}),
+      'midcheckin', new Date());
+    assert.ok(/No reply in 4 days/.test(out), out);
+    assert.ok(/mid-point check-in due/i.test(out), out);
+  });
+
+  test('it distinguishes never-contacted from waiting', () => {
+    const fresh = GB.explainDue(mk({callDateTime: soon}), 'welcome', new Date());
+    assert.ok(/Nothing sent yet/.test(fresh), fresh);
+    const waiting = GB.explainDue(mk({callDateTime: soon, messageLog: [sms(ago(2))]}),
+      'midcheckin', new Date());
+    assert.ok(/No reply in 2 days/.test(waiting), waiting);
+  });
+
+  test('a reply is stated as a reply, not as silence', () => {
+    const out = GB.explainDue(mk({callDateTime: soon, messageLog: [sms(ago(1), true)]}),
+      'midcheckin', new Date());
+    assert.ok(/They replied/.test(out), out);
+    assert.ok(!/No reply/.test(out), 'a replied contact must never read as unanswered: ' + out);
+  });
+
+  test('the urgent stages say what makes them urgent', () => {
+    const now = new Date();
+    assert.ok(/call is today/.test(GB.explainDue(mk({callDateTime: now.toISOString()}), 'dayof', now)));
+    assert.ok(/missed the call/.test(GB.explainDue(mk({callDateTime: ago(2), status: 'No-show'}), 'noshow', now)));
+    assert.ok(/gone quiet/.test(GB.explainDue(mk({callDateTime: ago(30), status: 'Ghosted'}), 'recovery', now)));
+  });
+
+  test('it is a restatement of the log, never an unfilled template', () => {
+    // Everything in it has to be checkable against the timeline below it.
+    const now = new Date();
+    GB.TOUCH_LIST_ORDER.forEach(stage => {
+      const out = GB.explainDue(mk({callDateTime: soon, messageLog: [sms(ago(3))]}), stage, now);
+      assert.ok(out.length > 10, stage + ' produced nothing: ' + out);
+      assert.ok(!/\{|\bundefined\b|NaN/.test(out), stage + ' leaked a placeholder: ' + out);
+    });
+  });
+
+  test('the login screen says what GhostBuster is before you sign in', () => {
+    const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+    const screen = html.slice(html.indexOf('id="signin-screen"'), html.indexOf('id="app-root"'));
+    assert.ok(/Know who to follow up with/.test(screen), 'the value statement is missing');
+    // 100dvh, not just 100vh: mobile Safari counts browser chrome in vh, so a
+    // screen sized to it scrolls by exactly the height of the toolbar.
+    assert.ok(/100dvh/.test(screen), 'the sign-in screen should not scroll on a phone');
+  });
+}
+
 console.log('\n--- one text a day, and an email does not use it up ---');
 
 {
@@ -1935,8 +1999,14 @@ console.log('\n--- one text a day, and an email does not use it up ---');
     timezone: 'America/New_York', status: 'Booked', bookedDate: ago(24 * 10),
     callDateTime: call || new Date(Date.now() + 4 * 86400000).toISOString(),
     messageLog: log || []});
+  /* A fixed morning "now", for the same reason the day-of tests upstream use
+     one: an assertion that depends on the wall clock passes in the morning and
+     fails in the evening. This one was written at midday and failed at 21:54,
+     when a call set for 23:00 stopped being "today" and became "within the
+     hour". Fourth test of that shape found today. */
+  const NOW = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })();
   const queued = (c) => GB.getTextTodayList({clients: {c}, variants: GB.buildDefaultVariants(),
-    variantStats: {}, todos: [], myCalendars: []}, new Date(), '').map(i => i.stage);
+    variantStats: {}, todos: [], myCalendars: []}, NOW, '').map(i => i.stage);
 
   test('sending one text does not immediately queue the next one', () => {
     /* pickTodaysTouch shows a single row per person when several touches come
@@ -1957,8 +2027,10 @@ console.log('\n--- one text a day, and an email does not use it up ---');
 
   test('the day-of link still goes out even if a text already went this morning', () => {
     // Missing a meeting link to avoid a second message is a far worse trade.
-    const todayCall = new Date(new Date().setHours(23, 0, 0, 0)).toISOString();
-    assert.deepStrictEqual(queued(mk([sms('welcome')], todayCall)), ['dayof']);
+    // 16:00 against a 09:00 now: same day, comfortably outside the hour-before
+    // window, so the assertion is about the rule and not about the clock.
+    const todayCall = (() => { const d = new Date(NOW); d.setHours(16, 0, 0, 0); return d.toISOString(); })();
+    assert.deepStrictEqual(queued(mk([sms('welcome', NOW.toISOString())], todayCall)), ['dayof']);
   });
 
   test('yesterday does not block today', () => {
