@@ -140,6 +140,34 @@ function domainOf(email?: string): string {
   return at === -1 ? '' : (email || '').slice(at + 1).toLowerCase();
 }
 
+/* Mirrors SHARED_MAIL_DOMAINS in logic.js — see the long comment there.
+
+   Both rules below ask "is this guest one of my colleagues?" by comparing
+   their domain to the organizer's. Right for a business with its own domain,
+   catastrophically wrong for a solo operator on a personal Gmail: their client
+   is also on gmail.com, so the client reads as a colleague, the booking reads
+   as an internal meeting, and nothing imports at all — the LEGACY filter
+   disaster a second time, landing on exactly the people the general default
+   exists to serve. */
+const SHARED_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'rocketmail.com',
+  'hotmail.com', 'outlook.com', 'live.com', 'msn.com', 'aol.com',
+  'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com',
+  'gmx.com', 'gmx.net', 'mail.com', 'zoho.com', 'yandex.com',
+  'comcast.net', 'verizon.net', 'att.net', 'sbcglobal.net', 'bellsouth.net',
+  'cox.net', 'charter.net', 'earthlink.net', 'optonline.net', 'frontier.com',
+]);
+
+export function isSharedMailDomain(domain?: string): boolean {
+  return SHARED_MAIL_DOMAINS.has(String(domain || '').toLowerCase());
+}
+
+// The organizer's domain, but only when it actually identifies a company.
+function internalDomain(email?: string): string {
+  const d = domainOf(email);
+  return !d || isSharedMailDomain(d) ? '' : d;
+}
+
 /* Does this calendar event represent someone worth following up with?
 
    'attendees' is the default for anyone new because it needs no setup to be
@@ -161,7 +189,9 @@ export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): b
   if (f.mode === 'all') return true;
 
   if (f.mode === 'attendees') {
-    const organizer = domainOf((ev as any).organizer?.email);
+    // internalDomain, not domainOf: a personal-inbox organizer has no
+    // colleagues to exclude, so every named guest is an outside guest.
+    const organizer = internalDomain((ev as any).organizer?.email);
     const guests = ((ev as any).attendees || []) as Array<{ email?: string; self?: boolean; resource?: boolean }>;
     for (const g of guests) {
       if (g.self || g.resource) continue;          // you, and meeting rooms
@@ -273,11 +303,16 @@ export function clientFromGCalEvent(ev: GCalEvent, filter?: CalendarFilter): Par
      Whose domain is "internal" is knowable per event: the organizer's. That
      is the same rule attendees mode already uses to decide what counts as a
      booking, so the two now agree. */
-  const organizerDomain = domainOf(ev.organizer?.email);
+  const organizerSelf = (ev.organizer?.email || '').toLowerCase();
+  const organizerDomain = internalDomain(ev.organizer?.email);
   const emails = (ev.attendees || [])
     .filter((a) => !(a as { self?: boolean }).self && !(a as { resource?: boolean }).resource)
     .map((a) => (a.email || '').toLowerCase())
-    .filter((e) => e && (!organizerDomain || domainOf(e) !== organizerDomain));
+    // The organizer is never the customer, whatever their domain. On a
+    // personal inbox the domain comparison does nothing, which would leave the
+    // organizer first in the list and save their address as the client's.
+    .filter((e) => e && e !== organizerSelf)
+    .filter((e) => !organizerDomain || domainOf(e) !== organizerDomain);
 
   return {
     googleEventId: ev.id,

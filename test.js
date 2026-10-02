@@ -6010,6 +6010,86 @@ test('events are appended, never rewritten', async () => {
   assert.deepStrictEqual(d.calls.filter(c => c.table === 'events'), [], 'drained events must not be written twice');
 });
 
+console.log('\n--- a personal inbox has no colleagues ---');
+
+/* Caught while about to deploy, not in production — but only just.
+
+   The general default is attendees mode, which decides a booking by looking
+   for a guest from outside the organizer's domain. For a business with its own
+   domain that is exactly right. For a realtor working alone out of a personal
+   Gmail it is inverted: the client is on gmail.com too, so the client counts
+   as a colleague, the booking counts as an internal meeting, and the app
+   imports nothing and says nothing.
+
+   That is the LEGACY_FILTER failure a second time, by a different route, and
+   it would have landed on precisely the solo operators the general default was
+   written for. */
+{
+  const booking = (organizer, guest) => ({
+    id: 'evt', summary: 'Listing consult - Dana Reyes',
+    description: 'Booked via the website',
+    organizer: {email: organizer},
+    attendees: [{email: organizer, self: true}, {email: guest}],
+    start: {dateTime: '2026-10-09T15:00:00Z'},
+  });
+
+  test('a solo operator on Gmail imports their Gmail client', () => {
+    assert.strictEqual(
+      GB.matchesCalendarFilter(booking('jane.realtor@gmail.com', 'dana.reyes@gmail.com'), undefined),
+      true, 'a personal-inbox booking must import with no configuration at all');
+  });
+
+  test('every common personal inbox, not just Gmail', () => {
+    ['outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'aol.com', 'proton.me']
+      .forEach(d => assert.strictEqual(
+        GB.matchesCalendarFilter(booking('jane@' + d, 'client@' + d), undefined), true,
+        d + ' is a mail host, not a company'));
+  });
+
+  test('a real company domain still excludes real colleagues', () => {
+    // The guard must not swing the other way and turn standups into contacts.
+    assert.strictEqual(
+      GB.matchesCalendarFilter(booking('bob@acmeplumbing.com', 'jim@acmeplumbing.com'), undefined),
+      false, 'a same-domain colleague is still a colleague');
+    assert.strictEqual(
+      GB.matchesCalendarFilter(booking('bob@acmeplumbing.com', 'cust@gmail.com'), undefined),
+      true, 'and an outside guest is still a booking');
+  });
+
+  test('the contact email is the client, not the organizer', () => {
+    /* The same comparison runs again when picking WHICH attendee is the
+       customer. On a personal inbox it stripped every guest sharing the host,
+       so the booking imported with no email address on it and nothing to send
+       to. */
+    const ics = 'BEGIN:VEVENT\r\n' +
+      'DTSTART:20261009T150000Z\r\n' +
+      'SUMMARY:Listing consult (Dana Reyes)\r\n' +
+      // No email in the description, so the attendee list is the only source.
+      'DESCRIPTION:Booked by Dana Reyes\r\n' +
+      'ORGANIZER;CN=Jane:mailto:jane.realtor@gmail.com\r\n' +
+      'ATTENDEE;CN=Jane:mailto:jane.realtor@gmail.com\r\n' +
+      'ATTENDEE;CN=Dana:mailto:dana.reyes@gmail.com\r\n' +
+      'END:VEVENT';
+    const parsed = GB.clientFromICSEvent(GB.parseICS(ics)[0]);
+    assert.ok(parsed, 'the booking must parse at all');
+    assert.strictEqual(parsed.email, 'dana.reyes@gmail.com',
+      'a shared mail host must not make the client look like the organizer');
+  });
+
+  test('both copies of the rule agree', () => {
+    const ts = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+      '_shared', 'parse.ts'), 'utf8');
+    ['SHARED_MAIL_DOMAINS', 'isSharedMailDomain', 'internalDomain']
+      .forEach(t => assert.ok(ts.includes(t), 'parse.ts is missing ' + t));
+    // The Edge Function is the path that actually runs for Google Calendar,
+    // so it is the one that must not compare against a raw organizer domain.
+    assert.ok(!/const organizer = domainOf\(/.test(ts),
+      'attendees mode must use internalDomain, not the raw organizer domain');
+    assert.ok(!/const organizerDomain = domainOf\(/.test(ts),
+      'attendee extraction must use internalDomain too');
+  });
+}
+
 console.log('\n--- a recurring series is one meeting, not hundreds ---');
 
 /* Found by auditing live accounts, not by a bug report.

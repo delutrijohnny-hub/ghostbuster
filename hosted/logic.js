@@ -2936,6 +2936,38 @@ function emailDomain(email){
   return at === -1 ? '' : String(email).slice(at + 1).toLowerCase();
 }
 
+/* Domains that mean "a person", never "a company".
+
+   Both rules below ask "is this guest one of my colleagues?" and answer it by
+   comparing their domain to the organizer's. That is right for a business with
+   its own domain and catastrophically wrong for a solo operator on a personal
+   Gmail: their client is also on gmail.com, so the client reads as a colleague
+   and the booking reads as an internal meeting. Nothing imports at all.
+
+   That is the LEGACY filter disaster a second time — an empty app with no
+   explanation — and it would land on exactly the people the general default
+   exists to serve, since a realtor working alone books out of a personal
+   inbox. A shared mail host tells you nothing about who is internal, so it is
+   never treated as a company domain. */
+var SHARED_MAIL_DOMAINS = {
+  'gmail.com':1, 'googlemail.com':1, 'yahoo.com':1, 'ymail.com':1, 'rocketmail.com':1,
+  'hotmail.com':1, 'outlook.com':1, 'live.com':1, 'msn.com':1, 'aol.com':1,
+  'icloud.com':1, 'me.com':1, 'mac.com':1, 'proton.me':1, 'protonmail.com':1,
+  'gmx.com':1, 'gmx.net':1, 'mail.com':1, 'zoho.com':1, 'yandex.com':1,
+  'comcast.net':1, 'verizon.net':1, 'att.net':1, 'sbcglobal.net':1, 'bellsouth.net':1,
+  'cox.net':1, 'charter.net':1, 'earthlink.net':1, 'optonline.net':1, 'frontier.com':1
+};
+
+function isSharedMailDomain(domain){
+  return !!SHARED_MAIL_DOMAINS[String(domain || '').toLowerCase()];
+}
+
+// The organizer's domain, but only when it actually identifies a company.
+function internalDomain(email){
+  var d = emailDomain(email);
+  return (!d || isSharedMailDomain(d)) ? '' : d;
+}
+
 function matchesCalendarFilter(ev, filter){
   var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
   var title = (ev.summary || '').toLowerCase();
@@ -2952,7 +2984,9 @@ function matchesCalendarFilter(ev, filter){
   if(f.mode === 'all') return true;
 
   if(f.mode === 'attendees'){
-    var organizer = emailDomain(ev.organizer && ev.organizer.email);
+    // internalDomain, not emailDomain: a personal-inbox organizer has no
+    // colleagues to exclude, so every named guest is an outside guest.
+    var organizer = internalDomain(ev.organizer && ev.organizer.email);
     var guests = ev.attendees || [];
     for(i = 0; i < guests.length; i++){
       var g = guests[i];
@@ -3091,8 +3125,14 @@ function clientFromICSEvent(ev){
        follow-up goes to the colleague. Whose domain is internal is knowable
        per event — the organizer's — and it is the same rule the calendar
        filter uses to decide what counts as a booking. */
-    var organizerDomain = emailDomain(ev.organizerEmail || ev.organizer);
+    var organizerSelf = String(ev.organizerEmail || ev.organizer || '').toLowerCase();
+    var organizerDomain = internalDomain(ev.organizerEmail || ev.organizer);
     var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){
+      // The organizer is never the customer, whatever their domain. Dropping
+      // only the domain comparison was not enough: on a personal inbox it
+      // leaves the organizer first in the list, so the booking imports with
+      // the agent's own address as the client's.
+      if(organizerSelf && e === organizerSelf) return false;
       return !organizerDomain || emailDomain(e) !== organizerDomain;
     });
     email = emails[0] || '';
@@ -4556,6 +4596,7 @@ var __LOGIC_EXPORTS__ = {
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
   matchesCalendarFilter: matchesCalendarFilter,
+  isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
   recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,
   DEFAULT_CALENDAR_FILTER: DEFAULT_CALENDAR_FILTER, LEGACY_CALENDAR_FILTER: LEGACY_CALENDAR_FILTER,
   parseICSDate: parseICSDate, extractAttendeeEmails: extractAttendeeEmails, clientFromICSEvent: clientFromICSEvent,
