@@ -524,18 +524,31 @@ function buildTouchCard(client, stage, now){
    but recognisable as exactly the thing the rename exists to get clear of -
    and it sat on the one screen people most want to screenshot and share.
 
-   No circle, no slash, no burst. The ghost is the same silhouette as the
-   brandmark and the hand is the one accent, so clearing your queue is the
-   ghost approving rather than the ghost being destroyed. */
+   No circle, no slash, no burst. The hand is the one accent, so clearing your
+   queue reads as the ghost approving rather than the ghost being destroyed.
+
+   This face is warmer than the brandmark's on purpose. The mark in the header
+   is calm and small - at 16px a smile is a smudge - but this one is 110px and
+   only ever appears at the single good moment in the day's work, so it gets a
+   rounder body, a smile and a slight happy lean. Still a dark silhouette
+   rather than the red filled body with large oval eyes that made the old mark
+   read as the Pac-Man ghost, and the red stays on the hand alone - rosy
+   cheeks were tried and dropped, they tipped it into a cartoon.
+
+   The eyes and smile are holes cut with evenodd, so they show the panel
+   behind rather than being painted a colour that would be wrong if the panel
+   ever changed. */
 function allClearBadgeHtml(){
   return '<div class="allclear-badge">' +
       '<svg class="allclear-ghost" width="110" height="110" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-        '<path fill-rule="evenodd" fill="currentColor" d="M26 10c-9.8 0-17 6.9-17 17v18.1c0 2.3 2.6 3.4 4.2 1.9l3.1-2.9 3.2 2.9c.9.9 2.4.9 3.3 0l3.2-2.9 3.2 2.9c.9.9 2.4.9 3.3 0l3.1-2.9 3 2.8c1.6 1.5 4-.3 4-1.9V27c0-10.1-7.2-17-17-17zM21 25.5a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 1 0 0-4.8zM32 25.5a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 1 0 0-4.8z"/>' +
+        '<g transform="rotate(-7 26 30)">' +
+          '<path fill-rule="evenodd" fill="currentColor" d="M26 9c-10.2 0-17.5 7.4-17.5 17.8v18c0 2.4 2.8 3.5 4.4 1.9l3-3 3.1 3c1 1 2.6 1 3.6 0l3.1-3 3.1 3c1 1 2.6 1 3.6 0l3-3 2.9 2.9c1.6 1.6 4.2.4 4.2-1.9V26.8C43.5 16.4 36.2 9 26 9zM20.6 24.6a3 3 0 1 0 0 6 3 3 0 1 0 0-6zM32.4 24.6a3 3 0 1 0 0 6 3 3 0 1 0 0-6zM20.5 34.5Q26.5 41 32.5 34.5Q26.5 37.8 20.5 34.5Z"/>' +
+        '</g>' +
         '<g transform="translate(39 22)">' +
           '<g class="allclear-thumb">' +
-          '<path d="M1.6 11.4h4.6v11.1H1.6a1.9 1.9 0 0 1-1.9-1.9v-7.3a1.9 1.9 0 0 1 1.9-1.9z" fill="#dc2f4a"/>' +
-          '<path d="M8.1 11.1 12.7 2.6a2.5 2.5 0 0 1 4.6 1.8l-1 5.1h4.4a2.4 2.4 0 0 1 2.3 3l-2.3 8.5a2.5 2.5 0 0 1-2.4 1.8H8.1z" fill="#dc2f4a"/>' +
-        '</g>' +
+            '<path d="M1.6 11.4h4.6v11.1H1.6a1.9 1.9 0 0 1-1.9-1.9v-7.3a1.9 1.9 0 0 1 1.9-1.9z" fill="#dc2f4a"/>' +
+            '<path d="M8.1 11.1 12.7 2.6a2.5 2.5 0 0 1 4.6 1.8l-1 5.1h4.4a2.4 2.4 0 0 1 2.3 3l-2.3 8.5a2.5 2.5 0 0 1-2.4 1.8H8.1z" fill="#dc2f4a"/>' +
+          '</g>' +
         '</g>' +
       '</svg>' +
     '</div>';
