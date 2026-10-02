@@ -858,7 +858,10 @@ function renderGhostToday(){
     if(rec.why) main.appendChild(h('div',{class:'gt-rec'},['→ ' + rec.why]));
 
     var row = h('div',{class:'gt-row' + (needsOutcome ? ' needs-outcome' : '')},[
-      h('span',{class:'gt-score ' + r.band, title:'Ghost Score ' + r.score + ' — ' + r.band},[String(r.score)]),
+      // The full working on hover: the row shows what lifted them, the tooltip
+      // shows what held them down too, so the number reconciles with the
+      // reasons printed beside it instead of looking like bad arithmetic.
+      h('span',{class:'gt-score ' + r.band, title: describeScore(r)},[String(r.score)]),
       main,
       acts
     ]);

@@ -3340,6 +3340,33 @@ function computeGhostScore(client, now, weights, state){
 // Everyone worth looking at today, hottest first. Archived contacts and the
 // Graveyard are excluded — this list is meant to be worked top to bottom, so
 // anything on it has to be actionable.
+/* The whole working, in words, for a tooltip.
+
+   The row shows what lifted someone up, which is what you act on. It does not
+   show what held them down, and leaving that out means the number cannot be
+   reconciled with the reasons beside it -- a score of 41 next to two positive
+   reasons adding to 60 reads as broken arithmetic.
+
+   And it says what the number IS. "72 - hot" does not tell anyone whether
+   that is a probability, a percentage or a rank. It is none of those: it is a
+   priority ordering built by adding up rules you can read and change, and
+   calling it anything more certain would be dressing a heuristic as a
+   prediction. */
+function describeScore(g){
+  if(!g) return '';
+  var lines = ['Ghost Score ' + g.score + ' (' + g.band + ')'];
+  lines.push('A priority ordering from your own records, not a prediction.');
+  var ups = [], downs = [];
+  (g.reasons || []).forEach(function(r){
+    if(r.label === 'Baseline') return;
+    (r.points > 0 ? ups : downs).push(r.label + ' ' + (r.points > 0 ? '+' : '') + r.points);
+  });
+  if(ups.length) lines.push('Raised by: ' + ups.join(', '));
+  if(downs.length) lines.push('Lowered by: ' + downs.join(', '));
+  if(!ups.length && !downs.length) lines.push('Nothing has moved it from the baseline yet.');
+  return lines.join('\n');
+}
+
 function rankByGhostScore(state, now, opts){
   now = now || new Date();
   opts = opts || {};
@@ -4323,7 +4350,7 @@ var __LOGIC_EXPORTS__ = {
   commitImportedClients: commitImportedClients, addManualClient: addManualClient, deleteClient: deleteClient,
   buildDefaultScoreWeights: buildDefaultScoreWeights, ghostScoreBand: ghostScoreBand,
   SCORE_GROUPS: SCORE_GROUPS, scoreGroupOf: scoreGroupOf,
-  computeGhostScore: computeGhostScore, rankByGhostScore: rankByGhostScore,
+  computeGhostScore: computeGhostScore, describeScore: describeScore, rankByGhostScore: rankByGhostScore,
   sentCadenceTouchToday: sentCadenceTouchToday,   pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,

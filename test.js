@@ -1920,6 +1920,64 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- the score explains itself ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const c = GB.sanitizeClient({id: 'c', name: 'Dana', phone: '2135550100',
+    timezone: 'America/New_York', status: 'Booked', bookedDate: ago(20),
+    callDateTime: new Date(Date.now() + 86400000).toISOString(),
+    messageLog: [{id: 'm', stage: 'welcome', variantId: 'w1', text: 'x', sentAt: ago(5),
+      responded: false, respondedAt: null, reviewed: true, channel: 'sms'}]});
+
+  test('it says what the number is, rather than letting it look like a prediction', () => {
+    /* "72 - hot" does not tell anyone whether that is a probability, a
+       percentage or a rank. It is none of those: it is a priority ordering
+       built by adding up rules you can read and change, and calling it
+       anything more certain would be dressing a heuristic as a prediction. */
+    const out = GB.describeScore(GB.computeGhostScore(c, new Date()));
+    assert.ok(/not a prediction/i.test(out), out);
+    assert.ok(/priority ordering/i.test(out), out);
+  });
+
+  test('it shows what lowered the score, not only what raised it', () => {
+    /* The row shows only the positives, which is what you act on. Leaving the
+       negatives out of the explanation entirely means the number cannot be
+       reconciled with the reasons beside it -- 41 next to two reasons adding
+       to 60 reads as broken arithmetic. */
+    const g = {score: 41, band: 'neutral', reasons: [
+      {label: 'Baseline', points: 20},
+      {label: 'Appointment soon', points: 38},
+      {label: 'Three unanswered sends', points: -17},
+    ]};
+    const out = GB.describeScore(g);
+    assert.ok(/Raised by: Appointment soon \+38/.test(out), out);
+    assert.ok(/Lowered by: Three unanswered sends -17/.test(out), out);
+    assert.ok(!/Baseline/.test(out), 'the baseline is not a reason, it is the starting point');
+  });
+
+  test('a contact nothing has happened to still gets a sentence', () => {
+    const out = GB.describeScore({score: 20, band: 'neutral', reasons: [{label: 'Baseline', points: 20}]});
+    assert.ok(/Nothing has moved it/.test(out), out);
+    assert.ok(!/undefined/.test(out));
+    assert.strictEqual(GB.describeScore(null), '');
+  });
+
+  test('the ranked queue uses it, and still renders', () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Booked', bookedDate:'${ago(20)}',
+        callDateTime: new Date(Date.now() + 86400000).toISOString()});
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderGhostToday()', ctx));
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(/title: describeScore\(r\)/.test(app),
+      'the score tooltip should carry the full working');
+  });
+}
+
 console.log('\n--- the numbers mean what they say ---');
 
 {
