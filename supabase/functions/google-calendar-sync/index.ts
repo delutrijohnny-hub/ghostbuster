@@ -173,17 +173,6 @@ async function syncOneCalendar(
     if (!parsed) { filteredOut++; continue; }
 
     const existingByEvent = byEventId.get(parsed.googleEventId);
-
-    /* One row per series. A different occurrence of a series we already hold
-       is not a new booking, so it never becomes a new contact. The row stays
-       on the occurrence it was created for rather than advancing — a standing
-       meeting showing a slightly stale date is a far better outcome than a
-       hundred of them, and a real rebooking is a separate event with its own
-       series key, so repeat business is untouched. */
-    if (!existingByEvent) {
-      const series = recurringSeriesKey(ev);
-      if (series && storedSeries.has(series)) { collapsedRecurring++; continue; }
-    }
     if (existingByEvent) {
       const patch: Record<string, unknown> = {
         name: parsed.name || existingByEvent.name,
@@ -218,6 +207,16 @@ async function syncOneCalendar(
       continue;
     }
 
+    /* One row per series. Past this point we are about to create a contact,
+       and a different occurrence of a series we already hold is not a new
+       booking. The existing row stays on the occurrence it was created for
+       rather than advancing — a standing meeting showing a slightly stale
+       date is a far better outcome than a hundred of them. A real rebooking
+       is a separate event with its own series key, so repeat business is
+       untouched. */
+    const series = recurringSeriesKey(ev);
+    if (series && storedSeries.has(series)) { collapsedRecurring++; continue; }
+
     // Cross-calendar dedup: same person, same call time, already imported
     // from a higher-priority calendar this run — don't create a duplicate.
     const emailTimeKey = parsed.email ? `${parsed.email.toLowerCase()}|${parsed.callDateTime}` : null;
@@ -246,8 +245,7 @@ async function syncOneCalendar(
     const [inserted] = await insertRes.json();
     byEventId.set(parsed.googleEventId, inserted);
     if (emailTimeKey) byEmailTime.set(emailTimeKey, inserted);
-    const newSeries = recurringSeriesKey(ev);
-    if (newSeries) storedSeries.add(newSeries);
+    if (series) storedSeries.add(series);
     added++;
   }
 
@@ -273,14 +271,16 @@ async function syncUserCalendars(userId: string) {
   );
 
   // Which events count as bookings is per-organization. Loaded once per user
-  // rather than per calendar, and left undefined when unset so parse.ts falls
-  // back to the legacy rule instead of silently syncing nothing.
+  // rather than per calendar, and left undefined when unset so parse.ts
+  // applies its general default. It used to say "falls back to the legacy
+  // rule" — one customer's event titles — which is what made three new
+  // accounts in a row import nothing at all.
   let calendarFilter: CalendarFilter | undefined;
   try {
     const sres = await db(`/app_settings?user_id=eq.${userId}&select=calendar_filter`);
     const srow = (await sres.json())?.[0];
     if (srow?.calendar_filter) calendarFilter = srow.calendar_filter as CalendarFilter;
-  } catch (_e) { /* fall back to the legacy rule rather than failing the sync */ }
+  } catch (_e) { /* use the general default rather than failing the sync */ }
 
   const perCalendar = [];
   for (const conn of connections) {
