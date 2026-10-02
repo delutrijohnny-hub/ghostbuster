@@ -6393,6 +6393,152 @@ console.log('\n--- starter emails for an empty library ---');
   });
 }
 
+console.log('\n--- the team view ---');
+
+/* Built from what the live book actually said.
+
+   Eight accounts were syncing perfectly and six had never sent a single text,
+   four of those with appointments already booked. "Everyone is running clean"
+   was true of the plumbing and false of the work, and no screen in the app
+   said so. */
+{
+  const now = new Date('2026-10-02T15:00:00Z');
+  const ok = '2026-10-01T21:01:00Z';
+  const row = (over) => Object.assign({
+    name:'someone', contacts:10, upcoming:3, sent7d:5, sentEver:50,
+    replies:0, repliesMeasured:false, completed:1, noshows:0, rescheduled:0,
+    connectedCalendars:1, lastSync: ok}, over);
+
+  test('a green calendar and no work done is not "fine"', () => {
+    const m = GB.teamMemberState(row({sent7d:0, sentEver:0, upcoming:135}), now);
+    assert.strictEqual(m.calendar, 'ok', 'the plumbing really is healthy');
+    assert.strictEqual(m.state, 'never started');
+    assert.ok(m.needsAttention, 'a full queue nobody has touched must be flagged');
+    assert.ok(/135/.test(m.why), 'the reason should name the cost: ' + m.why);
+  });
+
+  test('somebody who was working and stopped is distinguished from one who never began', () => {
+    // Different conversations: one needs onboarding, the other needs asking
+    // what happened.
+    assert.strictEqual(GB.teamMemberState(row({sent7d:0, sentEver:0}), now).state, 'never started');
+    assert.strictEqual(GB.teamMemberState(row({sent7d:0, sentEver:63}), now).state, 'gone quiet');
+  });
+
+  test('a broken calendar outranks a quiet week', () => {
+    const stale = GB.teamMemberState(row({lastSync:'2026-09-29T16:00:00Z', sent7d:0, sentEver:63}), now);
+    assert.strictEqual(stale.state, 'sync broken',
+      'a sync that stopped is why they went quiet, and is the thing to fix');
+    const none = GB.teamMemberState(row({connectedCalendars:0, lastSync:null, contacts:0, upcoming:0}), now);
+    assert.strictEqual(none.state, 'not set up');
+  });
+
+  test('the worst problem is listed first, measured by booked work going cold', () => {
+    const o = GB.teamOverview([
+      row({name:'works',  sent7d:18, sentEver:19, upcoming:26}),
+      row({name:'small',  sent7d:0, sentEver:0, upcoming:4}),
+      row({name:'big',    sent7d:0, sentEver:0, upcoming:135}),
+    ], now);
+    assert.deepStrictEqual(o.members.map(m => m.name), ['big', 'small', 'works']);
+    assert.strictEqual(o.working, 1);
+    assert.strictEqual(o.needsAttention, 2);
+    // The number worth putting at the top of the tab.
+    assert.strictEqual(o.strandedUpcoming, 139, 'booked work belonging to nobody working it');
+  });
+
+  test('a reply rate nobody measured is reported as unknown, never as zero', () => {
+    /* The trap this exists to stop. Replies are only reconciled for one
+       account, from that person's own Messages database. Everyone else has
+       zero recorded replies because nobody ever looked — not because nobody
+       ever answered. Rendering that as "0%" tells a manager that someone's
+       messages do not work: confident, specific, and wrong in a direction
+       they would act on. */
+    const unmeasured = GB.teamMemberState(row({sentEver:19, replies:0, repliesMeasured:false}), now);
+    assert.strictEqual(unmeasured.replyRate, null,
+      'an unmeasured account must not report a rate at all');
+
+    const measured = GB.teamMemberState(row({sentEver:100, replies:11, repliesMeasured:true}), now);
+    assert.strictEqual(measured.replyRate, 11);
+
+    // A measured account with genuinely no replies is a real zero and must
+    // still be reported, or the guard would hide real bad news.
+    const realZero = GB.teamMemberState(row({sentEver:40, replies:0, repliesMeasured:true}), now);
+    assert.strictEqual(realZero.replyRate, 0);
+
+    // And nobody can be given a rate from no sends at all.
+    assert.strictEqual(GB.teamMemberState(row({sentEver:0, repliesMeasured:true}), now).replyRate, null);
+  });
+
+  test('the overview says how many people the reply rate is even knowable for', () => {
+    // So the tab can caption it honestly rather than averaging a number that
+    // means different things per row.
+    const o = GB.teamOverview([
+      row({name:'a', repliesMeasured:true, sentEver:100, replies:11}),
+      row({name:'b', repliesMeasured:false, sentEver:19}),
+      row({name:'c', repliesMeasured:false, sentEver:0}),
+    ], now);
+    assert.strictEqual(o.replyRateMeasuredFor, 1);
+    assert.strictEqual(o.total, 3);
+  });
+
+  test('rendering a team view does not throw, for a team and for none', () => {
+    /* What the DOM stub CAN prove: the render path runs. It cannot prove what
+       was rendered - className comes back as a proxy whose .includes() is
+       truthy whatever the code did, so an assertion on tab visibility here
+       passes even with the hiding removed. That was checked by deleting the
+       hide and watching the test still pass, so it is asserted at source
+       level below instead of pretended at here. */
+    const ctx = makeHostedCtx();
+    vm.runInContext('STATE = buildDefaultState(); renderTeamTab();', ctx);
+    vm.runInContext(`STATE.team = [
+      {name:'zachary.l', contacts:153, upcoming:135, sent7d:0, sentEver:0,
+       repliesMeasured:false, connectedCalendars:1, lastSync:new Date().toISOString()},
+      {name:'johnny', contacts:169, upcoming:21, sent7d:121, sentEver:889, replies:98,
+       repliesMeasured:true, connectedCalendars:1, lastSync:new Date().toISOString()}
+    ]; renderTeamTab();`, ctx);
+  });
+
+  test('the tab hides itself when there is no team', () => {
+    // Source level, because the stub cannot see it. A manager tab that appears
+    // for everybody and renders an empty table reads as "your team has no
+    // activity" rather than "this is not for you".
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    const guard = fn.slice(0, fn.indexOf('teamOverview('));
+    assert.ok(/if\(!rows \|\| !rows\.length\)/.test(guard),
+      'nothing short-circuits on an empty team');
+    assert.ok(/classList\.add\('hidden'\)/.test(guard),
+      'the empty case does not hide the tab button');
+    assert.ok(/classList\.remove\('hidden'\)/.test(fn),
+      'the tab is never un-hidden for a manager who does have a team');
+  });
+
+  test('the rendered reply column cannot quietly become a zero', () => {
+    // The view model returns null for an unmeasured account; this pins that
+    // the renderer still SAYS so rather than printing it as a number.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    assert.ok(/replyRate === null/.test(fn), 'the renderer does not special-case an unknown rate');
+    assert.ok(/not measured/.test(fn), 'nothing tells the manager the rate is unknown');
+    assert.ok(/not a zero/.test(fn), 'the tooltip explaining it is not a zero is gone');
+  });
+
+  test('the team view is actually called by renderAll', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderAll()'),
+                         app.indexOf('\n}', app.indexOf('function renderAll()')));
+    assert.ok(/renderTeamTab\(\)/.test(fn), 'renderAll never calls renderTeamTab');
+  });
+
+  test('an empty team does not throw', () => {
+    const o = GB.teamOverview([], now);
+    assert.deepStrictEqual(o.members, []);
+    assert.strictEqual(o.strandedUpcoming, 0);
+    assert.strictEqual(GB.teamOverview(null, now).total, 0);
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

@@ -139,6 +139,83 @@ window.GB_ON_SAVE_HEALTH = function(health){
 };
 
 
+var TEAM_STATE_CLASS = {
+  'never started':'s-never', 'gone quiet':'s-quiet', 'sync broken':'s-sync',
+  'needs calendar':'s-sync', 'not set up':'s-setup', 'working':'s-ok'
+};
+
+/* The team view.
+
+   Renders nothing and hides its own tab unless STATE.team actually holds
+   rows. A manager tab that appears for everybody and shows an empty table is
+   worse than no tab: it reads as "your team has no activity" rather than
+   "this is not for you". */
+function renderTeamTab(){
+  var box = el('team-view');
+  var btn = el('tab-btn-team');
+  if(!box) return;
+
+  var rows = STATE && STATE.team;
+  if(!rows || !rows.length){
+    if(btn) btn.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  if(btn) btn.classList.remove('hidden');
+
+  var o = teamOverview(rows, new Date());
+  box.innerHTML = '';
+
+  box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['Your team']) ]));
+
+  /* The lead line is the one sentence a manager wants: how much booked work
+     belongs to somebody who is not following anyone up. Phrased as the cost,
+     not as a count of people, because people are not the problem - unworked
+     appointments are. */
+  var lead;
+  if(!o.needsAttention){
+    lead = h('p',{class:'team-lead'},['All ' + o.working + ' working their lists. ' +
+      o.sent7d + ' messages sent across the team this week.']);
+  } else {
+    lead = h('p',{class:'team-lead', html:
+      '<strong>' + o.strandedUpcoming + '</strong> booked ' +
+      (o.strandedUpcoming === 1 ? termLower('appointment') : termLower('appointmentPlural')) +
+      ' belong to someone who is not following anyone up. ' +
+      o.working + ' of ' + o.total + ' are working their lists.'});
+  }
+  box.appendChild(lead);
+
+  o.members.forEach(function(m){
+    var nums = [
+      h('div',{},[h('b',{},[String(m.upcoming)]), 'booked']),
+      h('div',{},[h('b',{},[String(m.sent7d)]), 'sent 7d']),
+      h('div',{},[h('b',{},[String(m.completed)]), 'completed']),
+      h('div',{},[
+        m.replyRate === null
+          ? h('span',{class:'unknown', title:'Replies are only recorded for accounts where they are reconciled. This is not a zero.'},['not measured'])
+          : h('b',{},[m.replyRate + '%']),
+        m.replyRate === null ? '' : 'replies'
+      ])
+    ];
+    box.appendChild(h('div',{class:'team-row' + (m.needsAttention ? '' : ' is-ok')},[
+      h('div',{class:'team-who'},[
+        h('span',{class:'team-name'},[m.name]),
+        h('span',{class:'team-why'},[m.why])
+      ]),
+      h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
+      h('div',{class:'team-nums'}, nums)
+    ]));
+  });
+
+  if(o.replyRateMeasuredFor < o.total){
+    box.appendChild(h('div',{class:'team-note'},[
+      'Reply rate is only shown for the ' + o.replyRateMeasuredFor + ' of ' + o.total +
+      ' accounts where replies are actually reconciled. For everyone else it is ' +
+      'unknown rather than zero \u2014 nobody has looked, which is not the same as nobody answering.'
+    ]));
+  }
+}
+
 function renderAll(){
   if(!STATE) return;
   applyTerminology();
@@ -162,6 +239,7 @@ function renderAll(){
   renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
+  renderTeamTab();
   renderClosedTab();
   renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;

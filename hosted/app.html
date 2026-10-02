@@ -322,6 +322,30 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .inline-mark{vertical-align:-3px;margin-right:6px;flex:0 0 auto;}
 .gt-head h3{display:flex;align-items:center;}
 
+/* team view */
+.team-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+.team-head h3{margin:0;}
+.team-lead{font-size:13px;color:var(--ink-faint);margin:0 0 14px;}
+.team-lead strong{color:var(--red);}
+.team-row{display:grid;grid-template-columns:1.4fr auto 1fr;gap:12px;align-items:center;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
+  padding:11px 13px;margin-bottom:8px;}
+.team-row.is-ok{opacity:.72;}
+.team-who{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.team-name{font-weight:600;}
+.team-why{font-size:12px;color:var(--ink-faint);}
+.team-state{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:3px 9px;border-radius:20px;white-space:nowrap;}
+.team-state.s-never{background:var(--red-soft);color:var(--red-dark);}
+.team-state.s-quiet{background:var(--amber-soft);color:var(--amber);}
+.team-state.s-sync{background:var(--amber-soft);color:var(--amber);}
+.team-state.s-setup{background:var(--border);color:var(--ink-faint);}
+.team-state.s-ok{background:var(--green-soft);color:var(--green);}
+.team-nums{display:flex;gap:16px;justify-content:flex-end;font-size:12px;color:var(--ink-faint);}
+.team-nums b{display:block;font-size:15px;color:var(--ink);font-weight:600;}
+.team-nums .unknown{font-size:12px;color:var(--ink-faint);font-weight:400;font-style:italic;}
+.team-note{font-size:12px;color:var(--ink-faint);margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}
+@media (max-width:640px){ .team-row{grid-template-columns:1fr auto;} .team-nums{grid-column:1/-1;justify-content:flex-start;} }
 .empty-note{color:var(--ink-faint);font-size:12px;padding:10px 0;}
 
 /* touch card */
@@ -1062,6 +1086,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
   <button class="tab-btn" data-action="tab" data-tab="closed">Closed <span id="closed-count"></span></button>
   <button class="tab-btn" data-action="tab" data-tab="dead"><span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
+  <!-- Only shown to an account that actually manages other people. Hidden
+       entirely rather than shown empty, so nobody sees a tab promising a team
+       view that has no team behind it. -->
+  <button class="tab-btn hidden" id="tab-btn-team" data-action="tab" data-tab="team">Team</button>
 </nav>
 
 <div class="container">
@@ -1188,6 +1216,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
       <thead><tr><th>Name</th><th>Call</th><th>Closed on</th><th>Touches</th><th>Phone</th></tr></thead>
       <tbody id="closed-table-body"></tbody>
     </table>
+  </div>
+
+  <div class="tab-panel" id="tab-team">
+    <div id="team-view"></div>
   </div>
 
   <div class="tab-panel" id="tab-dead">

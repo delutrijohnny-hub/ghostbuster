@@ -3798,6 +3798,140 @@ function schedulingStatus(state){
   };
 }
 
+/* ============================================================
+   TEAM VIEW — what a manager needs to know about the people
+   ============================================================
+
+   Pure, and deliberately separated from how the rows are fetched: the access
+   question (whose data a manager may read) is a security decision made in the
+   database, not here. This takes whatever per-person rows it is handed and
+   decides what they MEAN.
+
+   What the live book said when this was written, and what shaped it: eight
+   accounts were syncing perfectly and six had never sent a single text, four
+   of those with appointments already in the queue. "Everyone is running
+   clean" was true of the plumbing and false of the work. So the first thing
+   this sorts on is whether somebody is actually working their list, not
+   whether their calendar is green. */
+
+var TEAM_IDLE_DAYS = 7;          // no send in this long, having sent before
+var TEAM_BACKLOG_UPCOMING = 5;   // enough booked work that silence is notable
+
+/* Reply rate is NOT computed per person, and that is the point.
+
+   The number is only knowable for an account whose replies are actually
+   reconciled - on this book that is one person, from their own Mac Messages
+   database. Everybody else shows zero replies because nobody ever looked, not
+   because nobody ever answered. Rendering that as "0%" would tell a manager
+   that someone's messages do not work, which is a claim the data cannot
+   support and the worst kind of wrong number: confident, specific, and
+   actionable in the wrong direction.
+
+   So a member reports a reply rate only when its source says replies are
+   measured for them, and otherwise reports null, which the UI shows as "not
+   measured" rather than a zero. */
+function teamReplyRate(m){
+  if(!m || !m.repliesMeasured) return null;
+  var sent = Number(m.sentEver) || 0;
+  if(!sent) return null;
+  return Math.round(100 * (Number(m.replies) || 0) / sent);
+}
+
+function teamMemberState(m, now){
+  var at = now ? now.getTime() : Date.now();
+  var contacts = Number(m.contacts) || 0;
+  var upcoming = Number(m.upcoming) || 0;
+  var sentEver = Number(m.sentEver) || 0;
+  var sent7d = Number(m.sent7d) || 0;
+
+  var cal = 'ok';
+  if(!m.connectedCalendars) cal = 'none';
+  else {
+    var last = m.lastSync ? Date.parse(m.lastSync) : NaN;
+    if(isNaN(last)) cal = 'never';
+    else if((at - last) / 3600000 > STALE_AFTER_HOURS) cal = 'stale';
+  }
+
+  /* Ordered by how much it costs the business, not by severity of the
+     plumbing. Someone sitting on booked appointments having never sent
+     anything is losing deals right now; a disconnected calendar on an empty
+     account is not. */
+  var state, why;
+  if(cal === 'none' && !contacts){
+    state = 'not set up';
+    why = 'No calendar connected, so nothing can reach them.';
+  } else if(cal === 'none' || cal === 'never'){
+    state = 'needs calendar';
+    why = 'Their calendar is not connected, so new bookings never arrive.';
+  } else if(cal === 'stale'){
+    state = 'sync broken';
+    why = 'Their calendar stopped syncing, so new bookings are not arriving.';
+  } else if(!sentEver && upcoming >= TEAM_BACKLOG_UPCOMING){
+    state = 'never started';
+    why = upcoming + ' booked and not one message sent.';
+  } else if(!sentEver){
+    state = 'never started';
+    why = 'No messages sent yet.';
+  } else if(!sent7d && upcoming >= TEAM_BACKLOG_UPCOMING){
+    state = 'gone quiet';
+    why = 'Nothing sent in ' + TEAM_IDLE_DAYS + ' days, with ' + upcoming + ' booked.';
+  } else if(!sent7d){
+    state = 'gone quiet';
+    why = 'Nothing sent in the last ' + TEAM_IDLE_DAYS + ' days.';
+  } else {
+    state = 'working';
+    why = sent7d + ' sent in the last ' + TEAM_IDLE_DAYS + ' days.';
+  }
+
+  return {
+    id: m.id || null,
+    name: m.name || m.email || 'Unknown',
+    contacts: contacts,
+    upcoming: upcoming,
+    sent7d: sent7d,
+    sentEver: sentEver,
+    completed: Number(m.completed) || 0,
+    noshows: Number(m.noshows) || 0,
+    rescheduled: Number(m.rescheduled) || 0,
+    calendar: cal,
+    state: state,
+    why: why,
+    replyRate: teamReplyRate(m),
+    needsAttention: state !== 'working'
+  };
+}
+
+var TEAM_STATE_ORDER = ['never started', 'sync broken', 'gone quiet',
+                        'needs calendar', 'not set up', 'working'];
+
+function teamOverview(rows, now){
+  var members = (rows || []).map(function(m){ return teamMemberState(m, now); });
+
+  members.sort(function(a, b){
+    var ra = TEAM_STATE_ORDER.indexOf(a.state), rb = TEAM_STATE_ORDER.indexOf(b.state);
+    if(ra !== rb) return ra - rb;
+    // Within a state, whoever has the most booked work is the most expensive.
+    if(b.upcoming !== a.upcoming) return b.upcoming - a.upcoming;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  var working = members.filter(function(m){ return m.state === 'working'; });
+  var idle = members.filter(function(m){ return m.needsAttention; });
+  var strandedWork = idle.reduce(function(n, m){ return n + m.upcoming; }, 0);
+
+  return {
+    members: members,
+    total: members.length,
+    working: working.length,
+    needsAttention: idle.length,
+    // The headline number: booked appointments belonging to somebody who is
+    // not currently following anyone up.
+    strandedUpcoming: strandedWork,
+    sent7d: members.reduce(function(n, m){ return n + m.sent7d; }, 0),
+    replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length
+  };
+}
+
 function describeSetup(state, now){
   now = now || new Date();
   var connected = ((state && state.calendarConnections) || []).length > 0
@@ -4705,6 +4839,8 @@ var __LOGIC_EXPORTS__ = {
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
+  teamOverview: teamOverview, teamMemberState: teamMemberState, teamReplyRate: teamReplyRate,
+  TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
   recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,
