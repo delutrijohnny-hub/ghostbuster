@@ -15,6 +15,55 @@ const assert = require('assert');
 
 const GB = require('./logic.js');
 
+/* "h o'clock today, in the timezone the fixture's client actually lives in."
+
+   Every clock flake this suite has had shares one cause: an anchor built with
+   new Date().setHours(h), which is h o'clock on the MACHINE, while the client
+   in the fixture sits in America/New_York. Run the suite from Tokyo and
+   "08:00 today" is already the previous day in New York, so "is the call later
+   today" and "did a text go out today" both answer for the wrong date. The
+   suite passed in two timezones and failed in four.
+
+   The product is right to judge the day in the client's zone — it is their
+   day that matters. So the tests have to name their anchors in that zone too,
+   which is what this does: find the UTC instant whose wall clock in `tz`
+   reads h:00 on tz's own current date. */
+function zoneShiftMs(instant, tz) {
+  const parts = new Intl.DateTimeFormat('en-CA', {timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'}).format(instant);
+  const m = parts.match(/(\d{4})-(\d{2})-(\d{2})\D+(\d{2}):(\d{2}):(\d{2})/);
+  const wallAsUTC = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] % 24, +m[5], +m[6]);
+  return wallAsUTC - instant.getTime();
+}
+
+function atHourInZone(hour, tz, base) {
+  tz = tz || 'America/New_York';
+  const from = base ? new Date(base) : new Date();
+  const key = new Intl.DateTimeFormat('en-CA', {timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit'}).format(from);
+  const p = key.split('-').map(Number);
+  const wall = Date.UTC(p[0], p[1] - 1, p[2], hour);
+  // Resolve twice: the shift at `from` can differ from the shift at the
+  // answer across a DST boundary.
+  let out = wall - zoneShiftMs(from, tz);
+  out = wall - zoneShiftMs(new Date(out), tz);
+  return new Date(out);
+}
+
+// The helper has to be right before anything can lean on it.
+(() => {
+  const nine = atHourInZone(9, 'America/New_York');
+  const read = new Intl.DateTimeFormat('en-CA', {timeZone: 'America/New_York',
+    hour12: false, hour: '2-digit', minute: '2-digit'}).format(nine);
+  assert.ok(/^(09|9):00$/.test(read), 'atHourInZone must read 09:00 in New York, got ' + read);
+  const hono = atHourInZone(16, 'Pacific/Honolulu');
+  const readH = new Intl.DateTimeFormat('en-CA', {timeZone: 'Pacific/Honolulu',
+    hour12: false, hour: '2-digit', minute: '2-digit'}).format(hono);
+  assert.ok(/^16:00$/.test(readH), 'atHourInZone must read 16:00 in Honolulu, got ' + readH);
+  console.log('  ok  - atHourInZone anchors to the client timezone, not the machine');
+})();
+
 const logicSrc = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
 const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const code = logicSrc + '\n' + appSrc;
@@ -245,8 +294,8 @@ test('call today, already welcomed -> only dayof due', () => {
   // Explicit hours rather than "now": the call has to be LATER today for the
   // day-of text to make sense, and anchoring both ends removes the
   // time-of-day flakiness this suite has been bitten by before.
-  const now = new Date(); now.setHours(8, 0, 0, 0);
-  const callAt = new Date(now); callAt.setHours(15, 0, 0, 0);
+  const now = atHourInZone(8);
+  const callAt = atHourInZone(15);
   const c = freshClient({
     bookedDate: isoDaysAgo(5),
     callDateTime: callAt.toISOString(),
@@ -2424,26 +2473,43 @@ console.log('\n--- Today answers who, why and what next ---');
 console.log('\n--- one text a day, and an email does not use it up ---');
 
 {
-  const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
+  /* Every time in here hangs off NOW, never off the wall clock.
+
+     This block failed at 00:32 for a reason worth keeping: the fixture asked
+     for America/New_York but gave Caitlin a 213 number, and sanitizeClient
+     self-heals the zone from the area code, so she was silently in Los
+     Angeles. A message "sent now" then landed on yesterday in LA while NOW
+     said 09:00 today, the day allowance saw nothing, and the second text the
+     test exists to prevent came straight back. A fixture whose declared
+     timezone is quietly overwritten is not testing what it says it is, so the
+     number is now a 212 and the zone is asserted below. */
+  const ago = (h) => new Date(NOW.getTime() - h * 3600000).toISOString();
   const sms = (stage, when) => ({id: 'm' + stage, stage, variantId: 'v', text: 'x',
-    sentAt: when || new Date().toISOString(), responded: false, respondedAt: null,
+    sentAt: when || ago(1), responded: false, respondedAt: null,
     reviewed: false, channel: 'sms'});
   const email = () => ({id: 'me', stage: 'email', variantId: 'lib', text: 'x',
-    sentAt: new Date().toISOString(), responded: false, respondedAt: null,
+    sentAt: ago(1), responded: false, respondedAt: null,
     reviewed: false, channel: 'email'});
   const mk = (log, call) => GB.sanitizeClient({
-    id: 'c', name: 'Caitlin', phone: '2135550100', email: 'c@e.com',
+    id: 'c', name: 'Caitlin', phone: '2125550100', email: 'c@e.com',
     timezone: 'America/New_York', status: 'Booked', bookedDate: ago(24 * 10),
-    callDateTime: call || new Date(Date.now() + 4 * 86400000).toISOString(),
+    callDateTime: call || new Date(NOW.getTime() + 4 * 86400000).toISOString(),
     messageLog: log || []});
   /* A fixed morning "now", for the same reason the day-of tests upstream use
      one: an assertion that depends on the wall clock passes in the morning and
      fails in the evening. This one was written at midday and failed at 21:54,
      when a call set for 23:00 stopped being "today" and became "within the
      hour". Fourth test of that shape found today. */
-  const NOW = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })();
+  const NOW = atHourInZone(9, 'America/New_York');
   const queued = (c) => GB.getTextTodayList({clients: {c}, variants: GB.buildDefaultVariants(),
     variantStats: {}, todos: [], myCalendars: []}, NOW, '').map(i => i.stage);
+
+  test('the fixture is in the timezone it claims', () => {
+    // Guards the trap above: if this drifts, every day-allowance assertion
+    // below quietly starts measuring a different person's day.
+    assert.strictEqual(mk().timezone, 'America/New_York',
+      'sanitizeClient rewrote the zone from the area code — pick a matching number');
+  });
 
   test('sending one text does not immediately queue the next one', () => {
     /* pickTodaysTouch shows a single row per person when several touches come
@@ -2466,7 +2532,7 @@ console.log('\n--- one text a day, and an email does not use it up ---');
     // Missing a meeting link to avoid a second message is a far worse trade.
     // 16:00 against a 09:00 now: same day, comfortably outside the hour-before
     // window, so the assertion is about the rule and not about the clock.
-    const todayCall = (() => { const d = new Date(NOW); d.setHours(16, 0, 0, 0); return d.toISOString(); })();
+    const todayCall = atHourInZone(16, 'America/New_York', NOW).toISOString();
     assert.deepStrictEqual(queued(mk([sms('welcome', NOW.toISOString())], todayCall)), ['dayof']);
   });
 
@@ -2480,9 +2546,20 @@ console.log('\n--- one text a day, and an email does not use it up ---');
        how many messages THEY received. */
     const hawaii = GB.sanitizeClient({id: 'h', name: 'Keanu', phone: '8085550100',
       timezone: 'Pacific/Honolulu', status: 'Booked', bookedDate: ago(24 * 10),
-      callDateTime: new Date(Date.now() + 4 * 86400000).toISOString(),
-      messageLog: [sms('welcome')]});
-    assert.strictEqual(typeof GB.sentCadenceTouchToday(hawaii, new Date()), 'boolean');
+      callDateTime: new Date(NOW.getTime() + 4 * 86400000).toISOString(),
+      messageLog: [sms('welcome', '2026-06-15T06:00:00Z')]});
+    assert.strictEqual(hawaii.timezone, 'Pacific/Honolulu');
+    /* 06:00 UTC on the 15th is still 20:00 on the 14th in Honolulu. Asked at
+       18:00 UTC the same calendar day in UTC, their day has only just begun
+       and that message belongs to yesterday — so it must not use up today.
+       The old version of this asserted the answer was a boolean, which it
+       could not fail. */
+    assert.strictEqual(
+      GB.sentCadenceTouchToday(hawaii, new Date('2026-06-15T18:00:00Z')), false,
+      'a message from their yesterday must not spend their today');
+    assert.strictEqual(
+      GB.sentCadenceTouchToday(hawaii, new Date('2026-06-15T06:30:00Z')), true,
+      'and one from their today must');
   });
 }
 
@@ -2695,7 +2772,7 @@ console.log('\n--- end of day closes the books, it does not repeat the day ---')
 
   test('the questions only the end of the day can answer are all still here', () => {
     const clients = {
-      today:   mk('today',   {callDateTime: new Date(new Date().setHours(9, 0, 0, 0)).toISOString()}),
+      today:   mk('today',   {callDateTime: atHourInZone(9).toISOString()}),
       overdue: mk('overdue', {callDateTime: ago(9)}),
       won:     mk('won',     {status: 'Completed', callDateTime: ago(4)}),
     };
@@ -4337,8 +4414,8 @@ console.log('\n--- a reschedule restarts the appointment touches ---');
    A suite that fails depending on the wall clock is worse than a missing
    test: it teaches you that a red run is probably nothing. The rest of the
    file already passes an explicit `now` for exactly this reason. */
-const DAYOF_NOW = (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })();
-const DAYOF_CALL = (() => { const d = new Date(); d.setHours(16, 0, 0, 0); return d.toISOString(); })();
+const DAYOF_NOW = atHourInZone(9);
+const DAYOF_CALL = atHourInZone(16).toISOString();
 // Earlier the same morning, so "already sent today" is unambiguous.
 const DAYOF_SENT = (() => { const d = new Date(); d.setHours(8, 0, 0, 0); return d.toISOString(); })();
 
@@ -5009,6 +5086,29 @@ test('the Edge Function and logic.js apply the same rule', () => {
   assert.ok(/DEFAULT_FILTER/.test(ts), 'parse.ts must have a general default');
   assert.ok(/:\s*DEFAULT_FILTER/.test(ts),
     'parse.ts must FALL BACK to the general default, not to LEGACY_FILTER');
+
+  // Set-level collapsing has to exist on both sides too, or the .ics path and
+  // the Google path disagree on how many contacts one standing meeting is.
+  ['collapseRecurringSeries', 'recurringSeriesKey', 'recurringEventId']
+    .forEach(token => assert.ok(ts.includes(token),
+      'parse.ts is missing ' + token + ' — a recurring series would expand again'));
+});
+
+test('the sync actually calls the collapse, not just defines it', () => {
+  /* The failure mode this repo keeps producing: fully written, unit-tested,
+     never called. renderDeadTab rendered an empty tab for weeks that way.
+     collapseRecurringSeries is worthless unless the sync loop runs on its
+     output, and the stored-series guard is what stops an INCREMENTAL sync
+     rebuilding the pile a few occurrences per run. */
+  const src = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/collapseRecurringSeries\(/.test(src), 'the sync must call collapseRecurringSeries');
+  assert.ok(/for \(const ev of keptEvents\)/.test(src),
+    'the sync loop must iterate the COLLAPSED list, not the raw events');
+  assert.ok(/storedSeries\.has\(/.test(src),
+    'an incremental sync must skip a series it already stored');
+  assert.ok(/storedSeries\.add\(/.test(src),
+    'a newly inserted occurrence must register its series');
 });
 
 console.log('\n--- industry templates ---');
@@ -5909,6 +6009,97 @@ test('events are appended, never rewritten', async () => {
   await d.run('saveState(st)');
   assert.deepStrictEqual(d.calls.filter(c => c.table === 'events'), [], 'drained events must not be written twice');
 });
+
+console.log('\n--- a recurring series is one meeting, not hundreds ---');
+
+/* Found by auditing live accounts, not by a bug report.
+
+   One account's upcoming list held 136 bookings where every other account
+   held 10 to 26. 133 of them were a single standing meeting, expanded by
+   singleEvents into one contact per occurrence out to the following March.
+   The eight real bookings were buried in it, and each fake one carried its
+   own follow-up cadence.
+
+   The per-event filter was blameless: a standing call with an outside guest
+   genuinely looks like a booking. The gap was that nothing worked at the
+   level of the set. */
+{
+  const occ = (series, iso) => ({
+    id: series + '_' + iso.replace(/[-:]/g, '').replace('.000', ''),
+    recurringEventId: series,
+    summary: 'Standing check-in',
+    start: {dateTime: iso},
+  });
+  const NOW = '2026-10-02T12:00:00.000Z';
+
+  test('a recurring series collapses to its next upcoming occurrence', () => {
+    const events = [
+      occ('weekly', '2026-09-25T15:00:00Z'),   // past
+      occ('weekly', '2026-10-05T15:00:00Z'),   // next up
+      occ('weekly', '2026-10-12T15:00:00Z'),
+      occ('weekly', '2027-03-30T15:00:00Z'),
+    ];
+    const kept = GB.collapseRecurringSeries(events, NOW);
+    assert.strictEqual(kept.length, 1, 'one series must yield one contact');
+    assert.strictEqual(kept[0].start.dateTime, '2026-10-05T15:00:00Z',
+      'the occurrence worth keeping is the one you sit on next');
+  });
+
+  test('one-off bookings are never touched', () => {
+    const oneOffs = [
+      {id: 'evt-a', summary: 'Estimate - Smith', start: {dateTime: '2026-10-06T15:00:00Z'}},
+      {id: 'evt-b', summary: 'Estimate - Jones', start: {dateTime: '2026-10-07T15:00:00Z'}},
+    ];
+    assert.deepStrictEqual(GB.collapseRecurringSeries(oneOffs, NOW), oneOffs);
+  });
+
+  /* The case this must not break. Every other account's duplicate contacts
+     were the same person booking a second or third call, which is real
+     repeat business and the whole point of a follow-up CRM. Those are
+     separate events, not one series. */
+  test('the same person booking twice keeps both bookings', () => {
+    const rebooked = [
+      {id: 'evt-1', summary: 'Call - Dana', start: {dateTime: '2026-10-06T15:00:00Z'}},
+      {id: 'evt-2', summary: 'Second call - Dana', start: {dateTime: '2026-10-27T15:00:00Z'}},
+    ];
+    assert.strictEqual(GB.collapseRecurringSeries(rebooked, NOW).length, 2,
+      'repeat business must survive collapsing');
+  });
+
+  test('a series entirely in the past keeps its most recent occurrence', () => {
+    const kept = GB.collapseRecurringSeries([
+      occ('old', '2026-08-01T15:00:00Z'),
+      occ('old', '2026-09-01T15:00:00Z'),
+    ], NOW);
+    assert.strictEqual(kept.length, 1);
+    assert.strictEqual(kept[0].start.dateTime, '2026-09-01T15:00:00Z',
+      'a finished series should still show the call that happened');
+  });
+
+  // Rows read back from storage kept the event id but not recurringEventId,
+  // so the series has to be recoverable from Google's occurrence id shape.
+  test('the series is recoverable from the occurrence id alone', () => {
+    assert.strictEqual(
+      GB.recurringSeriesKey({id: '9a8n5ds6dfqsq2smuctj43qq9b_20261005T150000Z'}),
+      '9a8n5ds6dfqsq2smuctj43qq9b');
+    assert.strictEqual(GB.recurringSeriesKey({id: 'evt-plain'}), null,
+      'a one-off id must not be read as a series');
+  });
+
+  test('the real shape of the live flood collapses to one', () => {
+    const events = [];
+    for (let i = 0; i < 133; i++) {
+      const d = new Date(Date.UTC(2026, 8, 25, 15) + i * 86400000 * 1.33);
+      events.push(occ('9a8n5ds6dfqsq2smuctj43qq9b', d.toISOString()));
+    }
+    const realBooking = {id: 'real-1', summary: 'Strategy call - Sheri',
+                         start: {dateTime: '2026-10-02T18:00:00Z'}};
+    events.push(realBooking);
+    const kept = GB.collapseRecurringSeries(events, NOW);
+    assert.strictEqual(kept.length, 2, '133 occurrences + 1 booking must become 1 + 1');
+    assert.ok(kept.indexOf(realBooking) !== -1, 'the real booking must survive');
+  });
+}
 
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');

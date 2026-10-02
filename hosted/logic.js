@@ -2980,6 +2980,69 @@ function isStrategySessionEvent(ev){
   return matchesCalendarFilter(ev, LEGACY_CALENDAR_FILTER);
 }
 
+/* A recurring series is one meeting, not one meeting per occurrence.
+
+   Google is asked for singleEvents, which expands a series into one event per
+   occurrence. The per-event filter is right to keep them — a standing call
+   with an outside guest really does look like a booking — but importing every
+   occurrence turns one meeting into hundreds of contacts, each carrying its
+   own follow-up cadence. One account had a single standing meeting become 133
+   upcoming "clients" running out to the following March, which buried the
+   eight real bookings sitting alongside them.
+
+   Collapsing to the next upcoming occurrence keeps a genuine recurring client
+   visible without the flood. Two things deliberately pass through untouched:
+   ordinary one-off bookings, which have no series key at all, and the same
+   person booking a second call weeks later — those are separate events, not
+   one series, and that second booking is real. */
+function recurringSeriesKey(ev){
+  if(!ev) return null;
+  if(typeof ev.recurringEventId === 'string' && ev.recurringEventId) return ev.recurringEventId;
+  // Google's own occurrence id shape, "<seriesId>_20260302T150000Z". Needed for
+  // rows read back from storage, which kept the event id but not the series id.
+  var m = String(ev.id || '').match(/^(.+)_\d{8}T\d{6}Z$/);
+  return m ? m[1] : null;
+}
+
+function occurrenceStartMs(ev){
+  var dt = ev && ev.start && (ev.start.dateTime || ev.start.date);
+  var t = dt ? new Date(dt).getTime() : NaN;
+  return isNaN(t) ? null : t;
+}
+
+// Is `a` the better occurrence of a series to keep than `b`?
+function preferOccurrence(a, b, nowMs){
+  var ta = occurrenceStartMs(a), tb = occurrenceStartMs(b);
+  if(ta === null) return false;
+  if(tb === null) return true;
+  var aUpcoming = ta >= nowMs, bUpcoming = tb >= nowMs;
+  if(aUpcoming && bUpcoming) return ta < tb;   // the one you'll sit on next
+  if(aUpcoming !== bUpcoming) return aUpcoming;
+  return ta > tb;                              // all in the past: most recent
+}
+
+function collapseRecurringSeries(events, now){
+  var list = events || [];
+  var nowMs = now ? new Date(now).getTime() : Date.now();
+  var best = Object.create(null);
+  var i, ev, key;
+
+  for(i = 0; i < list.length; i++){
+    ev = list[i];
+    key = recurringSeriesKey(ev);
+    if(!key) continue;
+    if(!best[key] || preferOccurrence(ev, best[key], nowMs)) best[key] = ev;
+  }
+
+  var out = [];
+  for(i = 0; i < list.length; i++){
+    ev = list[i];
+    key = recurringSeriesKey(ev);
+    if(!key || best[key] === ev) out.push(ev);
+  }
+  return out;
+}
+
 // `tzid` covers Google's zone-qualified DTSTART (e.g. DTSTART;TZID=America/New_York:...),
 // which has no trailing Z and must not be read as the viewer's own browser timezone.
 function parseICSDate(raw, tzid){
@@ -4493,6 +4556,7 @@ var __LOGIC_EXPORTS__ = {
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
   matchesCalendarFilter: matchesCalendarFilter,
+  recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,
   DEFAULT_CALENDAR_FILTER: DEFAULT_CALENDAR_FILTER, LEGACY_CALENDAR_FILTER: LEGACY_CALENDAR_FILTER,
   parseICSDate: parseICSDate, extractAttendeeEmails: extractAttendeeEmails, clientFromICSEvent: clientFromICSEvent,
   MONTHS: MONTHS, parseHeuristicDate: parseHeuristicDate, parseBulkBlock: parseBulkBlock, parseBulkPaste: parseBulkPaste,

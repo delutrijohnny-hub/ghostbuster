@@ -71,6 +71,8 @@ export function extractMeetLink(text: string | null | undefined): string {
 
 export interface GCalEvent {
   id: string;
+  // Present on every occurrence Google expands out of a recurring series.
+  recurringEventId?: string;
   summary?: string;
   description?: string;
   created?: string;
@@ -184,6 +186,60 @@ export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): b
 // explicit filter through matchesCalendarFilter.
 export function isStrategySessionEvent(ev: GCalEvent): boolean {
   return matchesCalendarFilter(ev, LEGACY_FILTER);
+}
+
+/* Mirrors collapseRecurringSeries in logic.js — see the long comment there.
+
+   A recurring series is one meeting, not one meeting per occurrence. Google is
+   asked for singleEvents, which expands a series into an event per occurrence,
+   and the per-event filter is right to keep them: a standing call with an
+   outside guest genuinely looks like a booking. The gap was that nothing
+   worked at the level of the set, so one standing meeting on a live account
+   became 133 upcoming contacts out to the following March, each with its own
+   follow-up cadence, burying the eight real bookings beside them. */
+export function recurringSeriesKey(ev: GCalEvent | null | undefined): string | null {
+  if (!ev) return null;
+  if (typeof ev.recurringEventId === 'string' && ev.recurringEventId) return ev.recurringEventId;
+  // Google's occurrence id shape, "<seriesId>_20261005T150000Z". Needed for
+  // rows read back from storage, which kept the event id but not the series id.
+  const m = String(ev.id || '').match(/^(.+)_\d{8}T\d{6}Z$/);
+  return m ? m[1] : null;
+}
+
+function occurrenceStartMs(ev: GCalEvent): number | null {
+  const dt = ev && ev.start && (ev.start.dateTime || ev.start.date);
+  const t = dt ? new Date(dt).getTime() : NaN;
+  return isNaN(t) ? null : t;
+}
+
+// Is `a` the better occurrence of a series to keep than `b`?
+function preferOccurrence(a: GCalEvent, b: GCalEvent, nowMs: number): boolean {
+  const ta = occurrenceStartMs(a), tb = occurrenceStartMs(b);
+  if (ta === null) return false;
+  if (tb === null) return true;
+  const aUpcoming = ta >= nowMs, bUpcoming = tb >= nowMs;
+  if (aUpcoming && bUpcoming) return ta < tb;   // the one you'll sit on next
+  if (aUpcoming !== bUpcoming) return aUpcoming;
+  return ta > tb;                               // all in the past: most recent
+}
+
+export function collapseRecurringSeries(events: GCalEvent[], now?: string | number | Date): GCalEvent[] {
+  const list = events || [];
+  const nowMs = now ? new Date(now).getTime() : Date.now();
+  const best: Record<string, GCalEvent> = Object.create(null);
+
+  for (const ev of list) {
+    const key = recurringSeriesKey(ev);
+    if (!key) continue;
+    if (!best[key] || preferOccurrence(ev, best[key], nowMs)) best[key] = ev;
+  }
+
+  const out: GCalEvent[] = [];
+  for (const ev of list) {
+    const key = recurringSeriesKey(ev);
+    if (!key || best[key] === ev) out.push(ev);
+  }
+  return out;
 }
 
 // Mirrors extractAttendeeEmails(...).filter(excludes @marketmakermgmt.com)

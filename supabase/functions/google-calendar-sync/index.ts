@@ -16,7 +16,8 @@
 // commitImportedClients() already gives the .ics import path, just written
 // against the DB instead of an in-memory object.
 
-import { clientFromGCalEvent, type CalendarFilter, type GCalEvent } from '../_shared/parse.ts';
+import { clientFromGCalEvent, collapseRecurringSeries, recurringSeriesKey,
+         type CalendarFilter, type GCalEvent } from '../_shared/parse.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -147,14 +148,42 @@ async function syncOneCalendar(
   // "there was nothing on the calendar". Both used to surface as
   // "Synced: 0 new, 0 updated", which is how somebody sits in front of an
   // empty app for a week with no idea why.
-  let scanned = 0, filteredOut = 0;
-  for (const ev of events) {
+  let scanned = 0, filteredOut = 0, collapsedRecurring = 0;
+
+  /* A recurring series is one meeting, however many occurrences Google
+     expands it into. Collapsing the batch handles a full scan, which arrives
+     holding every occurrence at once. It is not enough on its own: an
+     incremental sync delivers occurrences a few at a time, so the same series
+     would still pile up across runs. Hence the second guard below, against
+     the series already stored. */
+  const keptEvents = collapseRecurringSeries(events, Date.now());
+  collapsedRecurring = events.length - keptEvents.length;
+
+  // Series already represented by a stored row, so a later run adds no more.
+  const storedSeries = new Set<string>();
+  for (const key of byEventId.keys()) {
+    const series = recurringSeriesKey({ id: key } as GCalEvent);
+    if (series) storedSeries.add(series);
+  }
+
+  for (const ev of keptEvents) {
     if (ev.status === 'cancelled') continue;
     scanned++;
     const parsed = clientFromGCalEvent(ev, calendarFilter);
     if (!parsed) { filteredOut++; continue; }
 
     const existingByEvent = byEventId.get(parsed.googleEventId);
+
+    /* One row per series. A different occurrence of a series we already hold
+       is not a new booking, so it never becomes a new contact. The row stays
+       on the occurrence it was created for rather than advancing — a standing
+       meeting showing a slightly stale date is a far better outcome than a
+       hundred of them, and a real rebooking is a separate event with its own
+       series key, so repeat business is untouched. */
+    if (!existingByEvent) {
+      const series = recurringSeriesKey(ev);
+      if (series && storedSeries.has(series)) { collapsedRecurring++; continue; }
+    }
     if (existingByEvent) {
       const patch: Record<string, unknown> = {
         name: parsed.name || existingByEvent.name,
@@ -217,6 +246,8 @@ async function syncOneCalendar(
     const [inserted] = await insertRes.json();
     byEventId.set(parsed.googleEventId, inserted);
     if (emailTimeKey) byEmailTime.set(emailTimeKey, inserted);
+    const newSeries = recurringSeriesKey(ev);
+    if (newSeries) storedSeries.add(newSeries);
     added++;
   }
 
@@ -225,7 +256,7 @@ async function syncOneCalendar(
     body: JSON.stringify({ sync_token: nextSyncToken, last_sync: new Date().toISOString() }),
   });
 
-  return { added, updated, rescheduled, skippedDuplicate, scanned, filteredOut };
+  return { added, updated, rescheduled, skippedDuplicate, scanned, filteredOut, collapsedRecurring };
 }
 
 async function syncUserCalendars(userId: string) {
