@@ -6751,6 +6751,55 @@ test('a team view that cannot load costs a tab, never the app', async () => {
   assert.ok(state.team && state.team.length === 0, 'state.team should be empty, not missing');
 });
 
+console.log('\n--- the privacy policy and the product agree ---');
+
+/* These two files drifted apart silently and nobody noticed for weeks.
+
+   The landing page says "Get started free" and eleven accounts exist, while
+   the privacy policy still said Ghost Recall was "a private scheduling and
+   follow-up tool", "not offered publicly as a product", covering "the single
+   connected Google account". Every one of those was untrue by the time it was
+   read. A policy is the one document where being out of date is not a tidiness
+   problem. */
+{
+  const privRaw = fs.readFileSync(path.join(__dirname, 'hosted', 'privacy.html'), 'utf8');
+  const land = fs.readFileSync(path.join(__dirname, 'hosted', 'index.html'), 'utf8');
+  /* Prose in HTML wraps where the file wrapped, and tags sit mid-sentence, so
+     matching the raw file misses any phrase that straddles a newline. That is
+     how the first version of these assertions failed on text plainly present.
+     Strip tags, collapse whitespace, then match. */
+  const priv = privRaw.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ');
+
+  test('it does not claim to be private while the front page invites signups', () => {
+    const publiclyOffered = /Get started free|Sign in with Google/i.test(land);
+    assert.ok(publiclyOffered, 'the landing page no longer offers signup — re-check this guard');
+    [/not offered publicly/i, /single connected Google account/i, /is a private scheduling/i]
+      .forEach(re => assert.ok(!re.test(priv),
+        'the privacy policy still describes a private one-account tool: ' + re));
+  });
+
+  test('it discloses what the operator can see, and what it cannot', () => {
+    // The owner view was built to exclude contact data. If that promise is
+    // made in the product it has to be made in the policy too, and vice versa.
+    assert.ok(/account-level operational information/i.test(priv),
+      'the support view is not disclosed at all');
+    assert.ok(/does not include your contacts/i.test(priv),
+      'the policy does not say what the operator cannot see');
+    assert.ok(/ask you first/i.test(priv),
+      'nothing commits to asking before looking at actual records');
+  });
+
+  test('it discloses team visibility, because a manager really can see them', () => {
+    assert.ok(/manager in your organi[sz]ation can see the accounts under them/i.test(priv),
+      'managers can see their team but the policy never says so');
+  });
+
+  test('Google Limited Use is affirmed, which OAuth verification requires', () => {
+    assert.ok(/Google API Services User Data Policy/.test(priv));
+    assert.ok(/Limited Use/.test(priv));
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

@@ -30,50 +30,81 @@
 <body>
 <div class="wrap">
   <h1>Ghost Recall — Privacy Policy</h1>
-  <div class="updated">Last updated: August 16, 2026</div>
+  <div class="updated">Last updated: October 2, 2026</div>
 
   <div class="card">
-    <p>Ghost Recall is a private scheduling and follow-up tool built for Market Maker Management
-    (John DeLutri) to manage YouTube coaching call bookings and client communication. It is not
-    offered publicly as a product — this policy explains what it does with data from the single
-    connected Google account.</p>
+    <p>Ghost Recall is a scheduling and follow-up tool operated by Market Maker Management
+    (John DeLutri). Each business that signs in gets its own account, and this policy explains
+    what the product does with the data in it.</p>
 
     <h2>Information we access</h2>
     <ul>
       <li><strong>Google Calendar (read-only).</strong> Event times, titles, and attendee
-      names/emails for events on the connected calendar, used only to detect newly booked
-      coaching calls and keep the client list in sync.</li>
+      names/emails on the calendars you connect, used only to detect newly booked
+      appointments and keep your contact list in sync. Which events count as a booking is
+      controlled by a filter you configure.</li>
       <li><strong>Google account profile.</strong> Your email address, used to identify your
       account when you sign in.</li>
+      <li><strong>What you enter yourself.</strong> Contacts, notes, call recaps, message
+      templates and the messages you record as sent.</li>
     </ul>
 
     <h2>How information is used</h2>
     <ul>
-      <li>To automatically detect new bookings from the connected calendar and create or update
-      the matching client record.</li>
-      <li>To prepare follow-up text messages about scheduled calls, opened in the account
-      holder's own Messages app to send.</li>
-      <li>Optionally, when the account holder manually clicks "Generate with AI," a specific
-      client's notes and call context (not calendar data) are sent to Google's Gemini API to draft
-      a personalized message. This only happens on manual request.</li>
+      <li>To detect new bookings from your connected calendars and create or update the
+      matching contact record.</li>
+      <li>To prepare follow-up messages about scheduled appointments. Text messages are always
+      opened in your own Messages app for you to send &mdash; Ghost Recall never sends a text
+      itself.</li>
+      <li>Emails are sent only when you send them, unless you deliberately switch on automatic
+      follow-up emails in your settings. That is off by default, has to be enabled twice (email
+      first, then automatic sending), and only ever uses wording you have written yourself.</li>
+      <li>Optionally, when you click "Generate with AI", a specific contact's notes and call
+      context (not calendar data) are sent to Google's Gemini API to draft a message. This only
+      happens on your manual request.</li>
+    </ul>
+
+    <h2>Who can see your data</h2>
+    <p>Accounts are separated at the database level. Another business using Ghost Recall cannot
+    see your contacts, messages or notes.</p>
+    <ul>
+      <li><strong>Your team.</strong> If your organisation has several people, a manager in your
+      organisation can see the accounts under them. Who that is, is set up by your organisation,
+      not by us.</li>
+      <li><strong>Us, for support.</strong> As the operator we can see account-level operational
+      information so we can help when something breaks: whether a calendar is connected, when it
+      last synced, how many contacts and appointments exist, and how many messages have been
+      sent. This does <em>not</em> include your contacts&rsquo; names, phone numbers, email
+      addresses, your notes, or the content of your messages. If diagnosing a problem ever needs
+      us to look at the actual records, we will ask you first.</li>
     </ul>
 
     <h2>Data storage</h2>
-    <p>Client and scheduling data is stored in a private Supabase (PostgreSQL) database,
-    accessible only to the authenticated account holder. Google Calendar refresh and access
-    tokens are stored server-side and are never exposed to the browser.</p>
+    <p>Data is stored in a private Supabase (PostgreSQL) database with row-level security, so
+    each account can only reach its own records. Google Calendar refresh and access tokens are
+    stored server-side and are never exposed to the browser.</p>
 
     <h2>Data sharing</h2>
-    <p>We do not sell or share personal data with third parties. Data is sent only to Google
-    (Calendar API, for sync) and, only when manually triggered, to Google's Gemini API (for the
-    AI message-drafting feature described above) — solely to provide that functionality.</p>
+    <p>We do not sell personal data, and we do not share it with third parties for advertising.
+    Data is sent only to Google (Calendar API, for sync) and, only when you manually trigger it,
+    to Google&rsquo;s Gemini API for message drafting &mdash; solely to provide those features.</p>
+
+    <h2>Google API Limited Use</h2>
+    <p>Ghost Recall&rsquo;s use of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank"
+    rel="noopener">Google API Services User Data Policy</a>, including the Limited Use
+    requirements. Calendar data is used only to provide the booking and follow-up features
+    described above. It is not used for advertising, is not sold, and is not used to train
+    generalised AI models.</p>
 
     <h2>Data retention &amp; deletion</h2>
-    <p>Data is retained as long as the account is active. To request deletion of data or revoke
-    calendar access, contact <a href="mailto:john@marketmakermgmt.com">john@marketmakermgmt.com</a>,
-    or remove Ghost Recall's access directly from your Google Account's
+    <p>Data is retained as long as the account is active. To request deletion of your data or to
+    revoke calendar access, contact
+    <a href="mailto:john@marketmakermgmt.com">john@marketmakermgmt.com</a>, or remove Ghost
+    Recall&rsquo;s access directly from your Google Account&rsquo;s
     <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">Third-party
-    access settings</a>.</p>
+    access settings</a>. Removing access stops future syncing; ask us if you also want existing
+    records deleted.</p>
 
     <h2>Contact</h2>
     <p><a href="mailto:john@marketmakermgmt.com">john@marketmakermgmt.com</a></p>
