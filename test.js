@@ -1997,7 +1997,7 @@ console.log('\n--- a brand new account is shown how to start ---');
   const panel = (seed) => {
     const ctx = makeHostedCtx();
     vm.runInContext('STATE = buildDefaultState(); ' + (seed || ''), ctx);
-    return vm.runInContext('buildBustedPanel().innerHTML', ctx);
+    return vm.runInContext('buildAllClearPanel().innerHTML', ctx);
   };
 
   test('an empty account is not congratulated for finishing', () => {
@@ -2006,7 +2006,7 @@ console.log('\n--- a brand new account is shown how to start ---');
        before they have started, and offers no way to begin -- on the one
        screen everybody sees first. */
     const html = panel('');
-    assert.ok(!/Busted!/.test(html), 'got: ' + html.slice(0, 200));
+    assert.ok(!/All clear/i.test(html), 'got: ' + html.slice(0, 200));
     assert.ok(/Nothing to follow up on yet/.test(html), html.slice(0, 200));
   });
 
@@ -2027,7 +2027,7 @@ console.log('\n--- a brand new account is shown how to start ---');
     assert.ok(/work@example\.com/.test(html), 'and name what it is connected to');
   });
 
-  test('"Busted!" is kept for the people who earned it', () => {
+  test('the cleared-queue badge is kept for the people who earned it', () => {
     /* It belongs to someone who had work and cleared it. Showing it to
        someone with nothing cheapens it for the people it is actually for. */
     const html = panel(`
@@ -2037,7 +2037,29 @@ console.log('\n--- a brand new account is shown how to start ---');
         callDateTime: new Date(Date.now() - 2*86400000).toISOString(),
         closeOutcome:'Closed'});
     `);
-    assert.ok(/Busted!/.test(html), 'a cleared list should still say so');
+    assert.ok(/All clear/i.test(html), 'a cleared list should still say so');
+    // The celebration must not quietly become a static image: the movement
+    // is the reward, and it is the thing most likely to be dropped by a
+    // later refactor of the badge markup.
+    assert.ok(/allclear-thumb/.test(html), 'the thumbs-up has no animated hand');
+    assert.ok(/allclear-ghost/.test(html), 'the ghost is not the animated element');
+    // And it must not have brought the old symbol back with it.
+    assert.ok(!/impact-lines|no-ghost/.test(html), 'the circle-and-slash badge is back');
+    /* The animated group must NOT be the one carrying the position.
+
+       A CSS transform replaces an SVG transform attribute outright, so when
+       the keyframes and translate(39 22) lived on the same <g>, the final
+       frame's "transform: rotate(0) scale(1)" wiped the translate and the
+       thumbs-up snapped to the top-left corner of the ghost. Only visible by
+       looking at it. */
+    const thumbIdx = html.indexOf('allclear-thumb');
+    assert.ok(thumbIdx !== -1, 'no animated thumb group');
+    const before = html.slice(0, thumbIdx);
+    const openTag = before.lastIndexOf('<g');
+    assert.ok(!/translate\(/.test(html.slice(openTag, thumbIdx + 40)),
+      'the animated group carries translate(), which the keyframes will wipe');
+    assert.ok(/<g transform="translate\([^"]+\)">\s*<g class="allclear-thumb"/.test(html),
+      'the thumb needs an outer group for position and an inner one to animate');
   });
 }
 
@@ -5706,7 +5728,7 @@ test('a completed call with no result offers closed / not closed', () => {
 
 test('an empty day says so instead of rendering empty sections', () => {
   const html = renderEodHtml('');
-  assert.ok(/Busted/i.test(html), 'a cleared day should be celebrated, not blank');
+  assert.ok(/All clear/i.test(html), 'a cleared day should be celebrated, not blank');
   assert.ok(!html.includes('eod-row'), 'no rows should render for an empty day');
 });
 

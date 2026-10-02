@@ -34,8 +34,24 @@ function timezoneSelectHtml(id, dataAttrs, selectedTz){
 }
 
 
-// A friendly big-green-ghost mascot for "nothing here" moments — distinct from the
-// white no-ghost "Busted!" logo, which is reserved for actually clearing your queue.
+/* The brandmark, inline, for headings that used to carry a ghost emoji.
+
+   An emoji is drawn by whatever font the device has, so the same heading was
+   a flat glyph on one machine and a colour cartoon on another, and neither
+   was the product's own mark. This is the mark from the header, at text size
+   and inheriting the text colour. */
+function brandMarkHtml(size, cls){
+  size = size || 18;
+  return '<svg class="' + (cls || 'inline-mark') + '" width="' + size + '" height="' + size + '"' +
+    ' viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+    '<path fill-rule="evenodd" fill="currentColor" d="M30 9c-10.5 0-18 7.4-18 18v19.3c0 2.4 2.8 3.6 4.5 2l3.3-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.4-3.1 3.4 3.1c1 1 2.6 1 3.6 0l3.3-3.1 3.2 3c1.7 1.6 4.3.3 4.3-2V27c0-10.6-7.5-18-18-18zM24 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5zM36 25a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z"/>' +
+    '<path d="M53.5 15.5a12 12 0 0 1 3.2 9" fill="none" stroke="#dc2f4a" stroke-width="4" stroke-linecap="round"/>' +
+    '<path d="M50 23.2a5.5 5.5 0 0 1 1.5 4.1" fill="none" stroke="#dc2f4a" stroke-width="3.6" stroke-linecap="round"/>' +
+    '</svg>';
+}
+
+// A friendly big-green-ghost mascot for "nothing here" moments — distinct from
+// the thumbs-up badge, which is reserved for actually clearing your queue.
 function slimerSvg(size){
   size = size || 64;
   return '<svg class="slimer-mark" width="'+size+'" height="'+size+'" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
@@ -500,50 +516,50 @@ function buildTouchCard(client, stage, now){
 }
 
 
-function bustedBadgeHtml(){
-  return '<div class="busted-badge">' +
-      '<svg class="impact-lines" viewBox="0 0 150 150" width="150" height="150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-        '<g stroke="#dc2f4a" stroke-width="4" stroke-linecap="round">' +
-          '<line x1="117" y1="75" x2="147" y2="75"/>' +
-          '<line x1="105" y1="105" x2="116" y2="116"/>' +
-          '<line x1="75" y1="117" x2="75" y2="147"/>' +
-          '<line x1="45" y1="105" x2="34" y2="116"/>' +
-          '<line x1="33" y1="75" x2="3" y2="75"/>' +
-          '<line x1="45" y1="45" x2="34" y2="34"/>' +
-          '<line x1="75" y1="33" x2="75" y2="3"/>' +
-          '<line x1="105" y1="45" x2="116" y2="34"/>' +
+/* The cleared-queue badge: the ghost, giving a thumbs up.
+
+   What was here before was a ghost inside a red circle with a diagonal line
+   through it, ringed by radiating impact lines, under the word "Busted!".
+   That is Sony's Ghostbusters symbol, drawn from scratch rather than copied
+   but recognisable as exactly the thing the rename exists to get clear of -
+   and it sat on the one screen people most want to screenshot and share.
+
+   No circle, no slash, no burst. The ghost is the same silhouette as the
+   brandmark and the hand is the one accent, so clearing your queue is the
+   ghost approving rather than the ghost being destroyed. */
+function allClearBadgeHtml(){
+  return '<div class="allclear-badge">' +
+      '<svg class="allclear-ghost" width="110" height="110" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+        '<path fill-rule="evenodd" fill="currentColor" d="M26 10c-9.8 0-17 6.9-17 17v18.1c0 2.3 2.6 3.4 4.2 1.9l3.1-2.9 3.2 2.9c.9.9 2.4.9 3.3 0l3.2-2.9 3.2 2.9c.9.9 2.4.9 3.3 0l3.1-2.9 3 2.8c1.6 1.5 4-.3 4-1.9V27c0-10.1-7.2-17-17-17zM21 25.5a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 1 0 0-4.8zM32 25.5a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 1 0 0-4.8z"/>' +
+        '<g transform="translate(39 22)">' +
+          '<g class="allclear-thumb">' +
+          '<path d="M1.6 11.4h4.6v11.1H1.6a1.9 1.9 0 0 1-1.9-1.9v-7.3a1.9 1.9 0 0 1 1.9-1.9z" fill="#dc2f4a"/>' +
+          '<path d="M8.1 11.1 12.7 2.6a2.5 2.5 0 0 1 4.6 1.8l-1 5.1h4.4a2.4 2.4 0 0 1 2.3 3l-2.3 8.5a2.5 2.5 0 0 1-2.4 1.8H8.1z" fill="#dc2f4a"/>' +
         '</g>' +
-      '</svg>' +
-      '<svg class="no-ghost" width="110" height="110" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-        '<path d="M32 6c-12 0-20 9-20 21v19c0 2 2 3 3.5 1.5L19 44l4 4 4-4 5 4 5-4 4 4 3.5-3.5C46 46 48 45 48 43V27C48 15 40 6 32 6z" fill="#fff"/>' +
-        '<ellipse cx="24" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>' +
-        '<ellipse cx="40" cy="27" rx="4.3" ry="5.4" fill="#17171a"/>' +
-        '<path d="M26 39q6 5 12 0" stroke="#17171a" stroke-width="2.4" stroke-linecap="round" fill="none"/>' +
-        '<circle cx="32" cy="30" r="27" fill="none" stroke="#dc2f4a" stroke-width="4.5"/>' +
-        '<line x1="10" y1="10" x2="54" y2="52" stroke="#dc2f4a" stroke-width="4.5" stroke-linecap="round"/>' +
+        '</g>' +
       '</svg>' +
     '</div>';
 }
 
-function buildBustedPanel(subtitle){
+function buildAllClearPanel(subtitle){
   /* An empty account is not an empty inbox.
 
      A brand new user -- no calendar, no contacts -- landed here and was told
-     "Busted! Inbox zero, nothing due right now." That congratulates someone
+     "Busted! Inbox zero, nothing due right now." That congratulated someone
      for finishing before they have started, and offers no way to begin. The
      one screen everybody sees first was the one screen that did not answer
      "how do I get my appointments in here?".
 
-     "Busted!" is earned. It belongs to someone who had work and cleared it,
-     and showing it to someone with nothing cheapens it for the people it is
-     actually for. */
+     The celebration is earned. It belongs to someone who had work and
+     cleared it, and showing it to someone with nothing cheapens it for the
+     people it is actually for. */
   var setup = describeSetup(STATE, new Date());
   if(!setup.contacts){
     var div0 = document.createElement('div');
-    div0.className = 'busted-panel start-panel';
+    div0.className = 'allclear-panel start-panel';
     div0.innerHTML =
-      '<div class="busted-title">' + escapeHtml(setup.headline) + '</div>' +
-      '<div class="busted-sub">' + escapeHtml(setup.detail) + '</div>' +
+      '<div class="allclear-title">' + escapeHtml(setup.headline) + '</div>' +
+      '<div class="allclear-sub">' + escapeHtml(setup.detail) + '</div>' +
       '<div class="start-acts">' +
         (setup.connected
           ? '<button class="btn btn-sm" data-action="sync-calendar-now">Sync calendar now</button>'
@@ -559,10 +575,10 @@ function buildBustedPanel(subtitle){
   }
 
   var div = document.createElement('div');
-  div.className = 'busted-panel';
-  div.innerHTML = bustedBadgeHtml() +
-    '<div class="busted-title">Busted!</div>' +
-    '<div class="busted-sub">' + escapeHtml(subtitle || 'Inbox zero — nothing due right now.') + '</div>';
+  div.className = 'allclear-panel';
+  div.innerHTML = allClearBadgeHtml() +
+    '<div class="allclear-title">All clear</div>' +
+    '<div class="allclear-sub">' + escapeHtml(subtitle || 'Inbox zero — nothing due right now.') + '</div>';
   return div;
 }
 
@@ -701,7 +717,7 @@ function renderCallsBoard(){
     if(!shown.length){
       todayCol.appendChild(UI.callsSearch.trim()
         ? h('div',{class:'empty-note'},['No matches for "' + UI.callsSearch.trim() + '".'])
-        : buildBustedPanel());
+        : buildAllClearPanel());
     }
 
     /* No headings between the cards at all now.
@@ -797,7 +813,7 @@ function renderGhostToday(){
             : ranked.filter(function(r){ return r.band === filter; });
 
   var head = h('div',{class:'gt-head'},[
-    h('h3',{},['👻 Ghost Recall Today']),
+    h('h3',{html: brandMarkHtml(18) + '<span>Ghost Recall Today</span>'}),
     h('span',{class:'count'},[
       actionable.length
         ? (actionable.length + ' ' + (actionable.length === 1 ? termLower('contact') : termLower('contactPlural')) + ' need attention')
@@ -4005,9 +4021,9 @@ function renderEndOfDay(){
     '<button class="btn-ghost btn" data-action="close-modal">✕</button></div>';
 
   if(!items.length){
-    html += '<div class="busted-panel">' + bustedBadgeHtml() +
-      '<div class="busted-title">Busted!</div>' +
-      '<div class="busted-sub">The day is closed — nothing left.</div></div>';
+    html += '<div class="allclear-panel">' + allClearBadgeHtml() +
+      '<div class="allclear-title">All clear</div>' +
+      '<div class="allclear-sub">The day is closed — nothing left.</div></div>';
     openModalHtml(html, true);
     return;
   }

@@ -264,34 +264,64 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .board-col .col-body{display:flex;flex-direction:column;gap:10px;min-height:40px;}
 .board-single{display:block;}
 .board-single .col-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;align-items:start;}
-.busted-panel{
+.allclear-panel{
   grid-column:1/-1;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:50px 20px;text-align:center;
 }
-.busted-badge{position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;}
-.busted-badge .impact-lines{position:absolute;inset:0;animation:impact-burst .6s cubic-bezier(.2,.9,.3,1) both;}
-.busted-badge svg.no-ghost{position:relative;z-index:1;animation:busted-slam .55s cubic-bezier(.34,1.56,.64,1) both;}
-@keyframes busted-slam{
-  0%{ opacity:0; transform:scale(2.2) rotate(-14deg); }
-  60%{ opacity:1; transform:scale(.92) rotate(3deg); }
-  80%{ transform:scale(1.04) rotate(-1deg); }
-  100%{ opacity:1; transform:scale(1) rotate(0); }
+.allclear-badge{position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;}
+
+/* The entrance is the point. Clearing the queue is the one genuinely good
+   moment in the day's work, and it used to land with a slam and a burst of
+   impact lines. Those went with the Ghostbusters symbol they belonged to, so
+   the movement is now carried by the ghost and its hand: the ghost pops in,
+   then the thumb comes up a beat later and overshoots before settling. */
+.allclear-ghost{
+  position:relative;z-index:1;color:var(--ink);
+  animation:allclear-pop .5s cubic-bezier(.34,1.56,.64,1) both;
 }
-@keyframes impact-burst{
-  0%{ opacity:0; transform:scale(.3); }
-  40%{ opacity:1; transform:scale(1.15); }
-  100%{ opacity:0; transform:scale(1.55); }
+@keyframes allclear-pop{
+  0%{ opacity:0; transform:scale(.55) translateY(14px) rotate(-8deg); }
+  60%{ opacity:1; transform:scale(1.07) translateY(-3px) rotate(2deg); }
+  100%{ opacity:1; transform:scale(1) translateY(0) rotate(0); }
 }
-.busted-title{
+
+/* Pivoted at the wrist so the hand swings up rather than sliding.
+
+   The animated element is an INNER group: a CSS transform replaces an SVG
+   transform attribute outright, so animating the group that carries
+   translate(39 22) wiped the position and threw the hand to the top-left
+   corner of the ghost. */
+.allclear-thumb{
+  transform-box:fill-box; transform-origin:12% 88%;
+  animation:allclear-thumb-up .52s .3s cubic-bezier(.34,1.56,.64,1) both;
+}
+@keyframes allclear-thumb-up{
+  0%{ opacity:0; transform:rotate(-42deg) translateY(7px) scale(.75); }
+  65%{ opacity:1; transform:rotate(9deg) translateY(0) scale(1.05); }
+  100%{ opacity:1; transform:rotate(0) scale(1); }
+}
+
+.allclear-title{
   font-family:'Anton',-apple-system,sans-serif;
   font-size:38px;font-weight:400;text-transform:uppercase;letter-spacing:1px;
   color:var(--red);margin-top:8px;
   text-shadow:3px 3px 0 rgba(20,22,31,.15);
-  animation:busted-in-text .4s .35s cubic-bezier(.34,1.56,.64,1) both;
+  animation:allclear-in-text .4s .5s cubic-bezier(.34,1.56,.64,1) both;
 }
-@keyframes busted-in-text{ 0%{ opacity:0; transform:translateY(6px) scale(.85); } 100%{ opacity:1; transform:translateY(0) scale(1); } }
-.busted-sub{color:var(--ink-faint);font-size:13px;margin-top:4px;}
+@keyframes allclear-in-text{ 0%{ opacity:0; transform:translateY(6px) scale(.85); } 100%{ opacity:1; transform:translateY(0) scale(1); } }
+.allclear-sub{color:var(--ink-faint);font-size:13px;margin-top:4px;}
+
+/* Someone who has asked their system not to animate things should still get
+   the badge, just without it moving. */
+@media (prefers-reduced-motion: reduce){
+  .allclear-ghost,.allclear-thumb,.allclear-title{ animation:none; opacity:1; transform:none; }
+}
+
+/* The brandmark sitting inline in a heading, where a ghost emoji used to be. */
+.inline-mark{vertical-align:-3px;margin-right:6px;flex:0 0 auto;}
+.gt-head h3{display:flex;align-items:center;}
+
 .empty-note{color:var(--ink-faint);font-size:12px;padding:10px 0;}
 
 /* touch card */
@@ -313,7 +343,7 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    Quiet by design: it qualifies the line rather than competing with it. */
 /* The first screen a new account sees. Not a celebration -- a starting
    point, with the one action that matters on it. */
-.start-panel .busted-title{font-size:17px;}
+.start-panel .allclear-title{font-size:17px;}
 .start-acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px;}
 .start-note{font-size:11.5px;color:var(--ink-faint);margin-top:11px;line-height:1.5;}
 @media (max-width:560px){ .start-acts .btn{flex:1 1 100%;} }
