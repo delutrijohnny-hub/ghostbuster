@@ -309,6 +309,12 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 /* The one-line reason under a card's name. Quiet -- it is context for the
    message, not a heading -- but always present, because a card without it
    leaves the judgement call to memory. */
+/* Whether a human recorded a timeline entry or GhostBuster observed it.
+   Quiet by design: it qualifies the line rather than competing with it. */
+.tl-by{display:inline-block;margin-left:7px;font-size:9.5px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;border-radius:99px;
+  background:var(--border);color:var(--ink-faint);vertical-align:middle;}
+.tl-by.automatic{background:var(--green-soft);color:var(--green);}
 .card .why{font-size:11.5px;color:var(--ink-soft);line-height:1.45;margin:-2px 0 8px;}
 .card .card-actions{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;}
 .card .card-actions .sent-label{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:5px;}

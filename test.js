@@ -1920,6 +1920,91 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- a retried webhook must not be processed twice ---');
+
+test('the webhook short-circuits an event it has already handled', () => {
+  /* Providers retry on a timeout or a 5xx, and the reply path was not merely
+     wasteful on a retry -- it was wrong. It marks "the most recent unanswered
+     email to this contact" as replied. Run it again and the most recent
+     unanswered email is a DIFFERENT, older message, so a second message gets
+     credited with a reply that never happened. That inflates the reply rate
+     and teaches the bandit the wrong copy worked. */
+  const src = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'email-webhook', 'index.ts'), 'utf8');
+
+  const guard = src.slice(0, src.indexOf("await db('/email_events'"));
+  assert.ok(/provider_id=eq\./.test(guard) && /kind=eq\./.test(guard),
+    'the duplicate check must key on provider_id AND kind, or two different events collapse');
+  assert.ok(/handled: 'duplicate'/.test(src), 'and it must return early rather than carry on');
+
+  // The check must come before anything that writes.
+  assert.ok(src.indexOf("handled: 'duplicate'") < src.indexOf('message_log'),
+    'the guard has to run before the reply path, not after it');
+});
+
+test('a unique index closes the race the check cannot', () => {
+  // Check-then-act leaves a gap if two retries land in the same instant.
+  const migrations = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+    .filter(f => f.endsWith('.sql'))
+    .map(f => fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8'))
+    .join('\n');
+  assert.ok(/unique index[\s\S]{0,120}email_events[\s\S]{0,120}provider_id, kind/i.test(migrations),
+    'email_events needs a unique index on (provider_id, kind)');
+  // Nulls must stay unconstrained: an event with no id cannot be deduplicated,
+  // and constraining them would reject every such event after the first.
+  assert.ok(/where provider_id is not null/i.test(migrations),
+    'the index must exclude null provider ids');
+});
+
+console.log('\n--- recorded by a person vs observed by GhostBuster ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  const msg = (over) => Object.assign({id: 'm', stage: 'welcome', variantId: 'w1', text: 'x',
+    sentAt: ago(3), responded: false, respondedAt: null, reviewed: true, channel: 'sms'}, over);
+  const mk = (log) => GB.sanitizeClient({id: 'c', name: 'Dana', phone: '2135550100',
+    bookedDate: ago(5), messageLog: log});
+
+  test('a text is always marked by a person, because nothing else can see it', () => {
+    /* A text is handed to the salesperson's own phone. GhostBuster cannot
+       confirm Send was ever pressed, so an unqualified "sent" claims a
+       certainty it does not have. */
+    assert.strictEqual(GB.messageSource(msg({channel: 'sms'})), 'you');
+    assert.strictEqual(GB.replySource(msg({channel: 'sms', responded: true})), 'you');
+  });
+
+  test('an email opened in Gmail is also a person, not an integration', () => {
+    // It is marked the instant the button is clicked, before anything is sent.
+    assert.strictEqual(GB.messageSource(msg({channel: 'email'})), 'you');
+  });
+
+  test('only a send that went through a provider counts as observed', () => {
+    assert.strictEqual(GB.messageSource(msg({channel: 'email', providerId: 're_abc'})), 'automatic');
+    assert.strictEqual(GB.replySource(msg({channel: 'email', providerId: 're_abc', responded: true})), 'automatic');
+    // An SMS with a stray provider id is still a text; nothing watches those.
+    assert.strictEqual(GB.replySource(msg({channel: 'sms', providerId: 're_abc', responded: true})), 'you');
+  });
+
+  test('the timeline carries it through to what gets rendered', () => {
+    const t = GB.buildTimeline(mk([msg({responded: true, respondedAt: ago(2)})]), [], new Date());
+    const sent = t.find(e => e.kind === 'message.sent');
+    const replied = t.find(e => e.kind === 'message.replied');
+    assert.strictEqual(sent.by, 'you');
+    assert.strictEqual(replied.by, 'you');
+    // Entries that are not messages carry no claim either way.
+    assert.strictEqual(t.find(e => e.kind === 'contact.created').by, null);
+  });
+
+  test('nothing claims automatic tracking for an integration that is not connected', () => {
+    /* The brief's rule, and today it resolves to "everything is manual":
+       no email provider is configured, so no message can carry a provider id
+       and nothing in the log should say confirmed. */
+    const t = GB.buildTimeline(mk([msg({channel: 'email', responded: true, respondedAt: ago(2)})]), [], new Date());
+    assert.ok(!t.some(e => e.by === 'automatic'),
+      'without a provider, nothing may be presented as confirmed');
+  });
+}
+
 console.log('\n--- Today answers who, why and what next ---');
 
 {

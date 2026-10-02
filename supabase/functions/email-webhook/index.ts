@@ -65,16 +65,49 @@ Deno.serve(async (req) => {
   const toAddress: string | null = Array.isArray(data?.to) ? data.to[0] : (data?.to || null);
   const fromAddress: string | null = data?.from || null;
 
+  /* A retried webhook must not be processed twice.
+
+     Providers retry on a timeout or a 5xx, and the reply path below was not
+     merely wasteful on a retry, it was WRONG. It marks "the most recent
+     unanswered email to this contact" as replied. Run it again and the most
+     recent unanswered email is now a different, older message -- so a second
+     message gets credited with a reply that never happened, which inflates
+     the reply rate and teaches the bandit that the wrong copy worked.
+
+     (provider_id, kind) is the natural key: the same email id with the same
+     event type is the same event, and a retry carries both unchanged. Two
+     genuine replies from one person arrive as different email ids, and a
+     delivered-then-bounced pair differs by kind, so neither collapses.
+
+     Check-then-act leaves a small race if two retries land at the same
+     instant. The migration adds a unique index that closes it properly; this
+     check is what makes the function correct before that is run, and it is
+     also what keeps the error path quiet afterwards. */
+  if (providerId) {
+    const seen = await db(
+      `/email_events?provider_id=eq.${encodeURIComponent(providerId)}` +
+      `&kind=eq.${encodeURIComponent(type)}&select=id&limit=1`);
+    const prior = await seen.json().catch(() => []);
+    if (Array.isArray(prior) && prior.length) {
+      return json({ ok: true, handled: 'duplicate', note: 'already processed this event' });
+    }
+  }
+
   // Kept before anything is interpreted. Matching a reply to the message it
   // answers involves judgement, so the original payload stays available for
   // when an attribution turns out to be wrong.
-  await db('/email_events', {
+  const stored = await db('/email_events', {
     method: 'POST',
     body: JSON.stringify([{
       provider_id: providerId, kind: type,
       to_address: toAddress, from_address: fromAddress, payload: event,
     }]),
   });
+  // With the unique index in place a simultaneous retry loses this insert
+  // rather than the check. Either way the second one stops here.
+  if (!stored.ok && stored.status === 409) {
+    return json({ ok: true, handled: 'duplicate', note: 'raced with another delivery' });
+  }
 
   // --- delivery outcomes -------------------------------------------------
   if (type === 'email.delivered' || type === 'email.bounced' || type === 'email.complained') {

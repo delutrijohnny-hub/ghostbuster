@@ -2300,9 +2300,37 @@ function recommendNextAction(client, now){
    honest rather than implying a precision the data does not have.
    ============================================================ */
 
-function timelineEntry(at, kind, label, detail, source){
+function timelineEntry(at, kind, label, detail, source, by){
   var t = Date.parse(at);
-  return {at: at, ms: isNaN(t) ? 0 : t, kind: kind, label: label, detail: detail || '', source: source};
+  return {at: at, ms: isNaN(t) ? 0 : t, kind: kind, label: label,
+          detail: detail || '', source: source, by: by || null};
+}
+
+/* Did a person record this, or did GhostBuster see it?
+
+   A text is handed to the phone and marked sent optimistically. An email
+   opens in Gmail and is marked the moment the button is clicked. Neither is
+   confirmed -- GhostBuster cannot see whether Send was ever pressed. Only a
+   send that went out through an email provider has a provider id, and only
+   those are observed rather than asserted.
+
+   Saying so matters more than it looks: an unqualified "sent" claims a
+   certainty that does not exist, and the first time someone discovers a
+   message they never actually sent is recorded as sent, they stop trusting
+   the whole log. */
+function messageSource(m){
+  return m && m.providerId ? 'automatic' : 'you';
+}
+
+/* A reply is observed only where something could have observed it.
+
+   GhostBuster never sees SMS -- those go through the salesperson's own phone
+   -- so an SMS reply is always a human ticking a box. An email reply can be
+   seen by the inbound webhook, but only for a message the provider sent and
+   can therefore match. Everything else is someone's word for it, and should
+   read that way. */
+function replySource(m){
+  return (m && m.channel === 'email' && m.providerId) ? 'automatic' : 'you';
 }
 
 // EVENT_LABELS keeps the phrasing in one place so the timeline and any future
@@ -2333,13 +2361,26 @@ function buildTimeline(client, events, now){
       client.manuallyAdded ? 'Added by hand' : 'From the calendar', 'derived'));
   }
   (client.messageLog || []).forEach(function(m){
+    /* Who recorded this, not just that it happened.
+
+       The timeline had a source of 'derived' vs recorded, which is about
+       where the entry was reconstructed from -- a different question from
+       the one that matters when you are reading history: did a person say
+       this happened, or did GhostBuster see it happen?
+
+       Today the honest answer is almost always a person. A text is handed to
+       your phone and marked sent optimistically; an email opens in Gmail and
+       is marked the moment the button is clicked. Only a send that went
+       through an email provider carries a provider_id, and only those can be
+       confirmed. Showing "sent" with no qualifier implies a confirmation
+       GhostBuster does not have. */
     out.push(timelineEntry(m.sentAt, 'message.sent', 'Message sent',
-      m.stage + (m.variantId ? ' · ' + m.variantId : ''), 'derived'));
+      m.stage + (m.variantId ? ' \u00b7 ' + m.variantId : ''), 'derived', messageSource(m)));
     // respondedAt is when the reply was LOGGED, which can be much later than
     // when it arrived. Fall back to the send time rather than inventing one.
     if(m.responded){
       out.push(timelineEntry(m.respondedAt || m.sentAt, 'message.replied', 'Reply received',
-        m.respondedAt ? '' : 'time approximate', 'derived'));
+        m.respondedAt ? '' : 'time approximate', 'derived', replySource(m)));
     }
   });
   (client.reschedules || []).forEach(function(r){
@@ -4221,6 +4262,7 @@ var __LOGIC_EXPORTS__ = {
   computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
+  messageSource: messageSource, replySource: replySource,
   explainDue: explainDue,   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
   stageWithRole: stageWithRole, recordInteractionOutcome: recordInteractionOutcome,
   HOURBEFORE_LEAD_MIN: HOURBEFORE_LEAD_MIN, HOURBEFORE_FLOOR_MIN: HOURBEFORE_FLOOR_MIN,

@@ -2254,7 +2254,16 @@ function renderTimeline(client, events){
     mount.appendChild(h('div',{class:'tl-item' + (e.source === 'derived' ? ' derived' : '')},[
       h('span',{class:'tl-icon'},[TIMELINE_ICONS[e.kind] || '•']),
       h('div',{class:'tl-body'},[
-        h('div',{class:'tl-label'},[e.label + (e.detail ? '  ·  ' + e.detail : '')]),
+        h('div',{class:'tl-label'},[
+          e.label + (e.detail ? '  ·  ' + e.detail : ''),
+          /* Who recorded it. An unqualified "Message sent" claims a certainty
+             GhostBuster does not have -- a text is handed to your phone and an
+             email opens in Gmail, and neither can be confirmed. The first time
+             someone finds a message they never sent recorded as sent, they
+             stop trusting the whole log. */
+          e.by ? h('span',{class:'tl-by ' + e.by},
+            [e.by === 'automatic' ? 'confirmed' : 'you logged this']) : ''
+        ]),
         h('div',{class:'tl-when'},[when ? when.toLocaleString() : ''])
       ])
     ]));
