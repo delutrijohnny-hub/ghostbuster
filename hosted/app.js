@@ -2541,6 +2541,50 @@ function renderSettingsModal(){
     (SETTINGS_DRAFT.sequence.length < buildDefaultSequence().length
       ? '<button class="btn btn-sm" data-action="restore-sequence">Restore the default cadence</button>' : '') +
     '</div>' +
+    /* One place that answers "how do appointments get in here?".
+
+       The question was spread across a Connect button in the menu, a filter
+       section here, and nothing at all about booking links. Worse, it was
+       asked as one question -- connect your calendar? -- when there are four
+       genuinely different answers that differ in what GhostBuster can DO.
+
+       Providers that do not work are listed and marked unavailable, with what
+       they would need. Hiding them makes the product look incapable; showing
+       them as choices that silently do nothing turns a missing feature into a
+       broken one, and the person spends an afternoon wondering what they did
+       wrong. */
+    '<div class="set-section"><h3>How appointments get in</h3>' +
+    '<div class="hint">These are different levels of connection, not styles of the same one.</div>' +
+    '<div class="sch-list">' +
+    SCHEDULING_PROVIDERS.map(function(pv){
+      var st = schedulingStatus(STATE);
+      var on = (pv.key === 'google' && st.calendarConnected)
+            || (pv.key === 'link' && st.hasBookingLink)
+            || (pv.key === 'manual');
+      return '<div class="sch-row' + (pv.available ? '' : ' unavailable') + '">' +
+        '<div class="sch-main">' +
+          '<strong>' + escapeHtml(pv.label) + '</strong>' +
+          '<span class="sch-level">' + escapeHtml(SCHEDULING_LEVELS[pv.level]) + '</span>' +
+          '<div class="sch-blurb">' + escapeHtml(pv.blurb) + '</div>' +
+          (pv.caveat ? '<div class="sch-caveat">' + escapeHtml(pv.caveat) + '</div>' : '') +
+          (pv.needs ? '<div class="sch-needs">Not available yet. ' + escapeHtml(pv.needs) + '</div>' : '') +
+        '</div>' +
+        '<div class="sch-state">' +
+          (!pv.available ? '<span class="sch-tag off">not available</span>'
+            : on ? '<span class="sch-tag on">in use</span>'
+            : pv.key === 'google'
+              ? '<button class="btn btn-sm" data-action="connect-calendar" data-priority="0" data-label="Work">Connect</button>'
+              : '<span class="sch-tag">available</span>') +
+        '</div></div>';
+    }).join('') +
+    '</div>' +
+    '<div class="term-grid" style="margin-top:10px;"><div><label>Your booking link</label>' +
+      '<input type="text" data-action="set-booking-link" value="' +
+      escapeHtml(STATE.bookingLink || '') +
+      '" placeholder="https://calendar.google.com/..."></div></div>' +
+    '<div class="hint" style="margin-top:5px;">Use <code>{bookinglink}</code> in any message or email and this gets filled in. Changing it here changes it everywhere.</div>' +
+    '</div>' +
+
     '<div class="set-section"><h3>Which calendar events become ' + escapeHtml(termLower('contactPlural')) + '</h3>' +
     '<div class="hint">If your bookings are not appearing, this is almost always why.</div>' +
     ['attendees','keywords','all'].map(function(m){
@@ -3380,6 +3424,16 @@ document.addEventListener('change', function(ev){
 
      On change rather than on input, so it saves when you leave a field
      instead of on every keystroke. */
+  /* A text input, so it belongs on change rather than in the click switch --
+     a click handler would never fire for typing, and the link would appear to
+     save while never being written. */
+  if(t.getAttribute && t.getAttribute('data-action') === 'set-booking-link'){
+    STATE.bookingLink = t.value.trim();
+    setBookingLink(STATE.bookingLink);
+    saveState(STATE);
+    renderAll();
+    return;
+  }
   if(t.getAttribute && t.getAttribute('data-action') === 'set-email-doc'){
     var edoc = findEmailDoc(t.getAttribute('data-id'));
     if(edoc){

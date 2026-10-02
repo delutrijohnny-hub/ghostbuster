@@ -185,6 +185,17 @@ function setTerminology(terms){
 }
 function getTerminology(){ return ACTIVE_TERMS; }
 
+/* The account's booking link, held the way the pipeline and vocabulary are.
+
+   Module-level rather than passed through renderTemplate, because that
+   function is called from a dozen places and threading an argument through
+   all of them to reach one placeholder is how call sites drift apart. It is
+   set once on load, next to setPipeline and setSequence, which is the pattern
+   this file already uses for per-account configuration. */
+var ACTIVE_BOOKING_LINK = '';
+function setBookingLink(link){ ACTIVE_BOOKING_LINK = (typeof link === 'string' ? link.trim() : ''); }
+function getBookingLink(){ return ACTIVE_BOOKING_LINK; }
+
 // term('contact') -> 'Client'. Unknown keys return the key itself rather than
 // undefined, so a typo shows up as visible text instead of silently rendering
 // "undefined" into the interface.
@@ -1724,6 +1735,17 @@ function renderTemplate(template, client, senderName){
        The fallback is a visible marker rather than silence, following {link}:
        these drafts open in Gmail and are read before they are sent, so an
        obvious gap gets filled, whereas an empty space gets missed. */
+    /* The link people book through, held once and reused.
+
+       It was being pasted into each email body by hand, which means a
+       changed link has to be found in nine places and will be missed in at
+       least one. Held on the account, every message that uses it updates at
+       once.
+
+       The fallback is a visible marker rather than silence, following {link}:
+       a message inviting someone to book, with nothing to book through, is
+       worse than one that obviously is not finished. */
+    bookinglink: ACTIVE_BOOKING_LINK || '(set your booking link in Settings)',
     recap: client.recap || '(paste your call notes here before sending)',
     notes: client.notes || '',
     channel: extractChannelHandle(client.youtubeLink) || ''
@@ -3476,6 +3498,94 @@ function statusLabel(status){
    So it reports the three facts that distinguish those states: whether a
    calendar is attached, how many contacts came in, and how many are owed a
    message today. */
+/* ---- how appointments get into GhostBuster ----
+
+   Four genuinely different levels of connection, which the interface had
+   collapsed into one question ("connect your calendar?"). They differ in what
+   GhostBuster can actually DO, and saying so is the difference between a
+   person understanding why bookings are not appearing and assuming the
+   product is broken:
+
+     sync     read appointments from a connected calendar
+     booking  detect bookings, cancellations and reschedules from a
+              scheduling service -- strictly more than sync, because a
+              cancellation is an event rather than an absence
+     link     hold a booking link and put it in messages; GhostBuster cannot
+              see what gets booked
+     manual   the person records the appointment and the outcome
+
+   `available` is the load-bearing field, and it is deliberately not
+   aspirational. A provider is listed so the option is known to exist, and
+   marked unavailable until its connection and sync genuinely work. Showing
+   Outlook as a choice that silently does nothing is worse than not showing it
+   at all: it converts a missing feature into a broken one, and the person
+   spends their afternoon wondering what they did wrong.
+
+   `needs` is what it would actually take, so the answer to "why not?" is a
+   list rather than a shrug. */
+var SCHEDULING_PROVIDERS = [
+  {
+    key: 'google', label: 'Google Calendar', level: 'sync', available: true,
+    blurb: 'Reads your calendar and turns bookings into contacts automatically.',
+    caveat: 'Sees appointments, not cancellations from a booking tool.',
+    needs: null
+  },
+  {
+    key: 'outlook', label: 'Microsoft Outlook / 365', level: 'sync', available: false,
+    blurb: 'The same calendar sync, for a Microsoft account.',
+    caveat: null,
+    needs: 'An Azure app registration with Microsoft Graph Calendars.Read, a client ID and secret, and admin consent on the tenant. None of that exists yet, so it is listed rather than offered.'
+  },
+  {
+    key: 'calendly', label: 'Calendly', level: 'booking', available: false,
+    blurb: 'Would see bookings, cancellations and reschedules as they happen.',
+    caveat: null,
+    needs: 'A Calendly developer account and OAuth app, plus webhook subscriptions - which Calendly limits to its paid tiers. Nothing is wired yet.'
+  },
+  {
+    key: 'link', label: 'A booking link', level: 'link', available: true,
+    blurb: 'Paste the link people book through. It goes into your messages with {bookinglink}.',
+    caveat: 'A saved link is not a connection. GhostBuster cannot see what gets booked through it, so those appointments still have to arrive by calendar sync or by hand.',
+    needs: null
+  },
+  {
+    key: 'manual', label: 'Add them yourself', level: 'manual', available: true,
+    blurb: 'Enter appointments by hand and record how they went.',
+    caveat: null,
+    needs: null
+  }
+];
+
+// Plain words for what a level can do, used wherever a provider is shown so
+// the same promise is never described two different ways.
+var SCHEDULING_LEVELS = {
+  sync:    'Reads your calendar',
+  booking: 'Sees bookings and cancellations',
+  link:    'Link only - no detection',
+  manual:  'You record it'
+};
+
+/* What this account actually has, as opposed to what it could have.
+
+   Deliberately conservative: a connected calendar is the only thing that
+   counts as connected, because it is the only one that is. A saved booking
+   link is reported separately and never as a connection -- the brief's rule,
+   and the honest one, since a link cannot tell you anything came back. */
+function schedulingStatus(state){
+  state = state || {};
+  var calendars = (state.myCalendars || []).filter(Boolean);
+  var link = (state.bookingLink || '').trim();
+  return {
+    calendarConnected: calendars.length > 0,
+    calendars: calendars,
+    bookingLink: link,
+    hasBookingLink: !!link,
+    // Nothing here can see a cancellation yet. Said plainly so no part of the
+    // interface implies otherwise.
+    detectsCancellations: false
+  };
+}
+
 function describeSetup(state, now){
   now = now || new Date();
   var connected = ((state && state.calendarConnections) || []).length > 0
@@ -4393,7 +4503,9 @@ var __LOGIC_EXPORTS__ = {
   sentCadenceTouchToday: sentCadenceTouchToday,   pickTodaysTouch: pickTodaysTouch, dedupeByPerson: dedupeByPerson, TOUCH_PICK_ORDER: TOUCH_PICK_ORDER,
   cadenceTouches: cadenceTouches, cadenceProgress: cadenceProgress,
   computeStats: computeStats, pct: pct, statusLabel: statusLabel,
-  describeSetup: describeSetup,   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
+  setBookingLink: setBookingLink, getBookingLink: getBookingLink,
+    SCHEDULING_PROVIDERS: SCHEDULING_PROVIDERS, SCHEDULING_LEVELS: SCHEDULING_LEVELS,
+  schedulingStatus: schedulingStatus,   describeSetup: describeSetup,   computeHealthAlerts: computeHealthAlerts, getTextTodayList: getTextTodayList, byCallDate: byCallDate,
   getUnloggedCalls: getUnloggedCalls, resolveStaleCalls: resolveStaleCalls,
   sameContact: sameContact, normalizedPhone: normalizedPhone, isDeadClient: isDeadClient, computeDeadClients: computeDeadClients,
   isOthersLead: isOthersLead, canEmail: canEmail, gmailComposeUrl: gmailComposeUrl,

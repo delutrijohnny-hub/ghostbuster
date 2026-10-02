@@ -1920,6 +1920,92 @@ console.log('\n--- a message with no appointment on it still reads like English 
   });
 }
 
+console.log('\n--- scheduling: four levels, and no provider claimed before it works ---');
+
+{
+  test('nothing is marked available until it actually works', () => {
+    /* The brief's own rule, and the honest one. Showing Outlook as a choice
+       that silently does nothing converts a missing feature into a broken
+       one, and the person spends an afternoon wondering what they did wrong.
+
+       Neither Outlook nor Calendly exists in any form -- the only Microsoft
+       reference in the codebase is a Teams link regex. */
+    const by = {};
+    GB.SCHEDULING_PROVIDERS.forEach(p => { by[p.key] = p; });
+    assert.strictEqual(by.google.available, true, 'Google sync genuinely works');
+    assert.strictEqual(by.outlook.available, false);
+    assert.strictEqual(by.calendly.available, false);
+    assert.strictEqual(by.link.available, true);
+    assert.strictEqual(by.manual.available, true);
+  });
+
+  test('an unavailable provider says what it would take, not just "no"', () => {
+    GB.SCHEDULING_PROVIDERS.filter(p => !p.available).forEach(p => {
+      assert.ok(p.needs && p.needs.length > 30,
+        p.key + ' should say what it needs: ' + p.needs);
+    });
+    // And an available one must not be carrying an excuse.
+    GB.SCHEDULING_PROVIDERS.filter(p => p.available).forEach(p => {
+      assert.strictEqual(p.needs, null, p.key + ' is available but lists requirements');
+    });
+  });
+
+  test('a saved booking link is never reported as a connection', () => {
+    /* The distinction the brief insists on, and the one that matters: a link
+       goes into messages, and nothing can see what gets booked through it. */
+    const st = GB.schedulingStatus({bookingLink: 'https://cal.example/x'});
+    assert.strictEqual(st.hasBookingLink, true);
+    assert.strictEqual(st.calendarConnected, false, 'a link is not a connection');
+    assert.strictEqual(st.detectsCancellations, false, 'nothing here can see a cancellation yet');
+    const link = GB.SCHEDULING_PROVIDERS.find(p => p.key === 'link');
+    assert.ok(/not a connection/i.test(link.caveat), 'and the interface must say so');
+  });
+
+  test('every level has plain words for what it can do', () => {
+    GB.SCHEDULING_PROVIDERS.forEach(p => {
+      assert.ok(GB.SCHEDULING_LEVELS[p.level], p.key + ' has an undescribed level: ' + p.level);
+    });
+  });
+
+  test('{bookinglink} fills from the account, and says so when unset', () => {
+    const c = GB.sanitizeClient({id: 'c', name: 'Dana', phone: '2135550100'});
+    GB.setBookingLink('');
+    assert.ok(/set your booking link/i.test(GB.renderTemplate('Book: {bookinglink}', c, 'J')),
+      'an unset link must be visible, not silent');
+    GB.setBookingLink('https://cal.example/abc');
+    assert.strictEqual(GB.renderTemplate('Book: {bookinglink}', c, 'J'), 'Book: https://cal.example/abc');
+    GB.setBookingLink('');
+  });
+
+  test('the link is stored once and persisted', () => {
+    // It was pasted into each email body by hand, so a changed link had to be
+    // found in nine places and would be missed in at least one.
+    const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+    assert.ok(/booking_link/.test(data), 'data.js must load and save it');
+    assert.ok(/setBookingLink\(state\.bookingLink\)/.test(data),
+      'and hand it to the engine on load, like the pipeline and sequence');
+    const migrations = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+      .filter(f => f.endsWith('.sql'))
+      .map(f => fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8')).join('\n');
+    assert.ok(/add column if not exists booking_link/i.test(migrations));
+  });
+
+  test('a past appointment is still never auto-marked a no-show', () => {
+    /* The brief names this explicitly. It already held, and it is worth a
+       test so it keeps holding: an unanswered call is unknown, not a miss. */
+    const past = GB.sanitizeClient({id: 'c', name: 'Dana', phone: '2135550100',
+      timezone: 'America/New_York', status: 'Booked',
+      bookedDate: new Date(Date.now() - 20 * 86400000).toISOString(),
+      callDateTime: new Date(Date.now() - 3 * 86400000).toISOString()});
+    assert.strictEqual(GB.isMissed(past.status), false);
+    assert.strictEqual(GB.stageRole(past.status), 'open');
+    const stats = GB.computeStats({clients: {c: past}, variants: GB.buildDefaultVariants(),
+      variantStats: {}, todos: []}, 'month', new Date());
+    assert.strictEqual(stats.showUpRate, null, 'an unanswered call must not create a show rate');
+    assert.strictEqual(stats.unloggedCalls, 1, 'it is counted as unknown instead');
+  });
+}
+
 console.log('\n--- setup ends by saying what it produced ---');
 
 {

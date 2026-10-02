@@ -135,6 +135,9 @@ async function loadState(){
     emailFromName: (settingsRes.data && settingsRes.data.email_from_name) || null,
     emailFromAddress: (settingsRes.data && settingsRes.data.email_from_address) || null,
     emailReplyTo: (settingsRes.data && settingsRes.data.email_reply_to) || null,
+    // The link people book through. A saved link is not a connection -- it
+    // goes into messages, and nothing can see what gets booked through it.
+    bookingLink: (settingsRes.data && settingsRes.data.booking_link) || '',
     pendingEvents: [],
     lastSync: null
   };
@@ -306,6 +309,9 @@ async function loadState(){
   // hold right now. Until this is set, saveState refuses to delete anything —
   // so a failed or partial load can never be mistaken for "the user emptied
   // their account".
+  // Per-account config into the engine, next to pipeline and sequence.
+  setBookingLink(state.bookingLink);
+
   SYNCED = buildSyncSnapshot(state, uid);
 
   return state;
@@ -461,6 +467,7 @@ function buildSyncSnapshot(state, uid){
     email_from_name: state.emailFromName || null,
     email_from_address: state.emailFromAddress || null,
     email_reply_to: state.emailReplyTo || null,
+    booking_link: state.bookingLink || null,
     score_weights: state.scoreWeights || null
   };
   return snap;

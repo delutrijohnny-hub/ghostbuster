@@ -311,6 +311,28 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    leaves the judgement call to memory. */
 /* Whether a human recorded a timeline entry or GhostBuster observed it.
    Quiet by design: it qualifies the line rather than competing with it. */
+/* How appointments get in: the four levels of connection, side by side.
+   An unavailable provider is dimmed but present -- hiding it makes the
+   product look incapable, and showing it as an equal choice would be a lie. */
+.sch-list{display:flex;flex-direction:column;gap:7px;margin-top:9px;}
+.sch-row{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);}
+.sch-row.unavailable{opacity:.62;background:var(--bg);}
+.sch-main{flex:1;min-width:0;}
+.sch-main strong{font-size:13px;}
+.sch-level{display:inline-block;margin-left:8px;font-size:9.5px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.4px;padding:1px 7px;border-radius:99px;
+  background:var(--bg);color:var(--ink-faint);border:1px solid var(--border);}
+.sch-blurb{font-size:11.5px;color:var(--ink-soft);margin-top:3px;line-height:1.45;}
+.sch-caveat{font-size:11px;color:var(--amber);margin-top:4px;line-height:1.45;}
+.sch-needs{font-size:11px;color:var(--ink-faint);margin-top:4px;line-height:1.45;}
+.sch-state{flex-shrink:0;}
+.sch-tag{display:inline-block;font-size:9.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.4px;padding:2px 8px;border-radius:99px;background:var(--border);color:var(--ink-faint);}
+.sch-tag.on{background:var(--green-soft);color:var(--green);}
+.sch-tag.off{background:transparent;color:var(--ink-faint);border:1px solid var(--border);}
+@media (max-width:560px){ .sch-row{flex-direction:column;gap:8px;} }
+
 /* The closing panel of setup: what it actually produced. */
 .ob-setup-rows{margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;}
 .ob-setup-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;

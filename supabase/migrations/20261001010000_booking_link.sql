@@ -1,0 +1,11 @@
+-- The link people book through.
+--
+-- It was being pasted into each email body by hand, which means a changed
+-- link has to be found in nine places and will be missed in at least one.
+-- Held on the account, every message using {bookinglink} updates at once.
+--
+-- Deliberately not called an integration. A saved link is not a connection:
+-- GhostBuster cannot see what gets booked through it, so those appointments
+-- still arrive by calendar sync or by hand. The interface says so, and this
+-- column exists only to hold a string.
+alter table public.app_settings add column if not exists booking_link text;
