@@ -526,6 +526,38 @@ function bustedBadgeHtml(){
 }
 
 function buildBustedPanel(subtitle){
+  /* An empty account is not an empty inbox.
+
+     A brand new user -- no calendar, no contacts -- landed here and was told
+     "Busted! Inbox zero, nothing due right now." That congratulates someone
+     for finishing before they have started, and offers no way to begin. The
+     one screen everybody sees first was the one screen that did not answer
+     "how do I get my appointments in here?".
+
+     "Busted!" is earned. It belongs to someone who had work and cleared it,
+     and showing it to someone with nothing cheapens it for the people it is
+     actually for. */
+  var setup = describeSetup(STATE, new Date());
+  if(!setup.contacts){
+    var div0 = document.createElement('div');
+    div0.className = 'busted-panel start-panel';
+    div0.innerHTML =
+      '<div class="busted-title">' + escapeHtml(setup.headline) + '</div>' +
+      '<div class="busted-sub">' + escapeHtml(setup.detail) + '</div>' +
+      '<div class="start-acts">' +
+        (setup.connected
+          ? '<button class="btn btn-sm" data-action="sync-calendar-now">Sync calendar now</button>'
+          : '<button class="btn btn-green" data-action="connect-calendar" data-priority="0" data-label="Work">Connect your calendar</button>') +
+        '<button class="btn btn-sm" data-action="add-client">Add someone by hand</button>' +
+      '</div>' +
+      '<div class="start-note">' +
+        (setup.connected
+          ? 'Connected to ' + escapeHtml((STATE.myCalendars || []).join(', ')) + '.'
+          : 'Or open Menu \u2192 Settings to see every way appointments can get in.') +
+      '</div>';
+    return div0;
+  }
+
   var div = document.createElement('div');
   div.className = 'busted-panel';
   div.innerHTML = bustedBadgeHtml() +

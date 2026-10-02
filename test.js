@@ -58,18 +58,40 @@ const NOOP_PROXY_EMPTY_PROPS = new Set([
   'firstChild', 'lastChild', 'nextSibling', 'previousSibling', 'parentNode', 'parentElement',
   'length', 'childElementCount'
 ]);
+/* A DOM stand-in that remembers what was written to it.
+
+   It used to discard every write and return itself for every read. That made
+   it impossible to crash a render, which is what it was for -- but it also
+   made every assertion about rendered markup VACUOUS, because
+   `el('x').innerHTML.includes('anything')` returned the proxy, and a proxy is
+   truthy. A test of mine written earlier today asserted a Gmail link appeared
+   in a modal and would have passed if the modal were empty.
+
+   Strings that are written are now stored and read back. Everything else
+   still proxies, so chains like el('x').classList.add() keep working. The
+   point is narrow: a test that claims to check rendered output should fail
+   when the output is wrong. */
 function makeNoopProxy() {
   const target = function () {};
+  const written = new Map();
   const handler = {
     get(t, prop) {
       if (prop === Symbol.iterator) return function* () {};
       if (prop === 'then') return undefined;
       if (prop === Symbol.toPrimitive) return () => 0;
       if (prop === 'length') return 0;
+      if (written.has(prop)) return written.get(prop);
       if (NOOP_PROXY_EMPTY_PROPS.has(prop)) return null;
       return proxy;
     },
-    set() { return true; },
+    set(t, prop, value) {
+      // Only remember primitives. Storing an appended child node would hand
+      // callers a real object where they expect a proxy and break the chain.
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        written.set(prop, value);
+      }
+      return true;
+    },
     apply() { return proxy; },
     construct() { return proxy; },
     has() { return true; }
@@ -1917,6 +1939,56 @@ console.log('\n--- a message with no appointment on it still reads like English 
       }
     }));
     assert.deepStrictEqual(broken, [], 'reads badly without an appointment:\n' + broken.join('\n'));
+  });
+}
+
+console.log('\n--- a brand new account is shown how to start ---');
+
+{
+  const panel = (seed) => {
+    const ctx = makeHostedCtx();
+    vm.runInContext('STATE = buildDefaultState(); ' + (seed || ''), ctx);
+    return vm.runInContext('buildBustedPanel().innerHTML', ctx);
+  };
+
+  test('an empty account is not congratulated for finishing', () => {
+    /* No calendar, no contacts, and the first screen said "Busted! Inbox
+       zero, nothing due right now." That congratulates someone for finishing
+       before they have started, and offers no way to begin -- on the one
+       screen everybody sees first. */
+    const html = panel('');
+    assert.ok(!/Busted!/.test(html), 'got: ' + html.slice(0, 200));
+    assert.ok(/Nothing to follow up on yet/.test(html), html.slice(0, 200));
+  });
+
+  test('and it is shown the one action that matters', () => {
+    const html = panel('');
+    assert.ok(/data-action="connect-calendar"/.test(html), 'connect must be right there');
+    assert.ok(/data-action="add-client"/.test(html), 'and the manual path too');
+    assert.ok(/Settings/.test(html), 'and where to find the rest');
+  });
+
+  test('a connected calendar that imported nothing offers a sync, not a connect', () => {
+    // Offering "connect" to someone already connected reads as though the
+    // connection failed, which is a different and more alarming problem.
+    const html = panel("STATE.myCalendars = ['work@example.com'];");
+    assert.ok(/Calendar connected, nothing imported/.test(html), html.slice(0, 200));
+    assert.ok(/data-action="sync-calendar-now"/.test(html));
+    assert.ok(!/data-action="connect-calendar"/.test(html));
+    assert.ok(/work@example\.com/.test(html), 'and name what it is connected to');
+  });
+
+  test('"Busted!" is kept for the people who earned it', () => {
+    /* It belongs to someone who had work and cleared it. Showing it to
+       someone with nothing cheapens it for the people it is actually for. */
+    const html = panel(`
+      STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Completed',
+        bookedDate: new Date(Date.now() - 30*86400000).toISOString(),
+        callDateTime: new Date(Date.now() - 2*86400000).toISOString(),
+        closeOutcome:'Closed'});
+    `);
+    assert.ok(/Busted!/.test(html), 'a cleared list should still say so');
   });
 }
 

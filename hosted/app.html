@@ -311,6 +311,13 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    leaves the judgement call to memory. */
 /* Whether a human recorded a timeline entry or GhostBuster observed it.
    Quiet by design: it qualifies the line rather than competing with it. */
+/* The first screen a new account sees. Not a celebration -- a starting
+   point, with the one action that matters on it. */
+.start-panel .busted-title{font-size:17px;}
+.start-acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px;}
+.start-note{font-size:11.5px;color:var(--ink-faint);margin-top:11px;line-height:1.5;}
+@media (max-width:560px){ .start-acts .btn{flex:1 1 100%;} }
+
 /* How appointments get in: the four levels of connection, side by side.
    An unavailable provider is dimmed but present -- hiding it makes the
    product look incapable, and showing it as an equal choice would be a lie. */
