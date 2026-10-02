@@ -35,6 +35,106 @@ function deriveSenderName(email){
   return first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'there';
 }
 
+/* Who else can this account see, and what are they doing?
+
+   Deliberately built out of the rows RLS already decides this caller may read,
+   aggregated here in JavaScript. No new database function, no service key, no
+   second source of truth about who can see whom: if the security layer says an
+   account is invisible, nothing here can surface it. An individual with no
+   team reads exactly their own row and gets no tab.
+
+   Every failure path returns an empty list rather than throwing. A team view
+   is a nice-to-have; the email library taught this codebase once already that
+   a secondary panel which throws takes the whole app down with it, and nobody
+   should lose their morning list because a manager widget could not load. */
+async function loadTeamRows(sb, uid){
+  try{
+    var memRes = await sb.from('memberships').select('org_id, user_id, role');
+    if(memRes.error || !memRes.data) return [];
+    var mems = memRes.data;
+
+    // Only the caller showing up means a one-person account: no team, no tab.
+    var peers = {};
+    mems.forEach(function(m){ peers[m.user_id] = true; });
+    if(Object.keys(peers).length < 2) return [];
+
+    var orgRes = await sb.from('organizations').select('id, name');
+    var orgName = {};
+    ((orgRes && orgRes.data) || []).forEach(function(o){ orgName[o.id] = o.name; });
+
+    /* A readable name per person. auth.users is not reachable from the
+       browser, and it should not be: the org each account was created with is
+       named after them, which is enough to label a row without exposing login
+       addresses to anyone who can see the team. */
+    var nameFor = {};
+    mems.forEach(function(m){
+      if(nameFor[m.user_id]) return;
+      if(m.role === 'admin' || m.role === 'owner') return;   // a manager's membership, not their own org
+      nameFor[m.user_id] = orgName[m.org_id] || 'teammate';
+    });
+    mems.forEach(function(m){ if(!nameFor[m.user_id]) nameFor[m.user_id] = orgName[m.org_id] || 'teammate'; });
+
+    var cRes = await sb.from('clients')
+      .select('id, user_id, call_date_time, status, created_at');
+    if(cRes.error || !cRes.data) return [];
+
+    var ownerOf = {}, agg = {};
+    function bucket(u){
+      if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
+        upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
+        rescheduled:0, connectedCalendars:0, lastSync:null, lastSentAt:null};
+      return agg[u];
+    }
+    Object.keys(peers).forEach(bucket);
+
+    var now = Date.now();
+    cRes.data.forEach(function(c){
+      ownerOf[c.id] = c.user_id;
+      var b = bucket(c.user_id);
+      b.contacts++;
+      var t = c.call_date_time ? Date.parse(c.call_date_time) : NaN;
+      if(!isNaN(t) && t >= now) b.upcoming++;
+      if(c.status === 'Completed') b.completed++;
+      if(c.status === 'No-show') b.noshows++;
+    });
+
+    var mRes = await sb.from('message_log').select('client_id, sent_at, responded');
+    ((mRes && mRes.data) || []).forEach(function(m){
+      var u = ownerOf[m.client_id];
+      if(!u) return;
+      var b = bucket(u);
+      b.sentEver++;
+      if(m.responded) b.replies++;
+      var t = m.sent_at ? Date.parse(m.sent_at) : NaN;
+      if(isNaN(t)) return;
+      if(now - t <= 7 * 86400000) b.sent7d++;
+      if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
+    });
+
+    var tRes = await sb.from('google_oauth_tokens').select('user_id, last_sync');
+    ((tRes && tRes.data) || []).forEach(function(r){
+      var b = bucket(r.user_id);
+      b.connectedCalendars++;
+      var t = r.last_sync ? Date.parse(r.last_sync) : NaN;
+      if(!isNaN(t) && (b.lastSync === null || t > Date.parse(b.lastSync))) b.lastSync = r.last_sync;
+    });
+
+    return Object.keys(agg).map(function(u){
+      var b = agg[u];
+      b.idleDays = b.lastSentAt === null ? null : Math.floor((now - b.lastSentAt) / 86400000);
+      /* Only an account with at least one recorded reply can have a reply RATE.
+         Zero recorded replies is genuinely ambiguous - nobody answered, or
+         nobody ever reconciled them - and the view must not resolve that
+         ambiguity in the flattering direction or the alarming one. */
+      b.repliesMeasured = b.replies > 0;
+      return b;
+    });
+  }catch(e){
+    console.error('Ghost Recall: team view unavailable', e);
+    return [];
+  }
+}
+
 async function loadState(){
   var sb = window.GB_SUPABASE;
   var userRes = await sb.auth.getUser();
@@ -311,6 +411,14 @@ async function loadState(){
   // their account".
   // Per-account config into the engine, next to pipeline and sequence.
   setBookingLink(state.bookingLink);
+
+  /* The team and owner views. Loaded last and never allowed to fail the load:
+     state is already complete and usable by this point, so a manager widget
+     that cannot read anything costs a tab, not a morning. Both tabs hide
+     themselves when handed an empty list, so an individual account simply
+     never sees them. */
+  state.team = await loadTeamRows(sb, uid);
+  state.platform = state.team;
 
   SYNCED = buildSyncSnapshot(state, uid);
 

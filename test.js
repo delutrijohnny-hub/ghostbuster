@@ -6654,6 +6654,103 @@ console.log('\n--- the owner view, across every account ---');
   });
 }
 
+console.log('\n--- loading the team, without a new database function ---');
+
+/* The team rows come out of whatever RLS already lets the caller read,
+   aggregated in JavaScript. That matters for a reason beyond convenience:
+   there is no second source of truth about who may see whom. If the security
+   layer says an account is invisible, nothing in the loader can surface it. */
+
+test('an individual account gets no team at all', async () => {
+  // One membership, one person. The tabs hide themselves on an empty list, so
+  // somebody working alone never sees a team view appear.
+  const d = makeLoadCtx({
+    memberships: {data: [{org_id:'o1', user_id:'u1', role:'owner'}], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  // .length, not deepStrictEqual: an array built inside the vm has that
+  // context's Array.prototype, so a deep compare fails on the prototype
+  // rather than the contents.
+  assert.strictEqual(rows.length, 0, 'a solo account was given a team');
+});
+
+test('a manager gets a row per person, aggregated from the visible rows', async () => {
+  const now = new Date();
+  const soon = new Date(now.getTime() + 3*86400000).toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'owner'},
+      {org_id:'o2', user_id:'u2', role:'owner'},
+      {org_id:'o2', user_id:'u1', role:'admin'}
+    ], error: null},
+    organizations: {data: [{id:'o1', name:'johnny'}, {id:'o2', name:'ethan'}], error: null},
+    clients: {data: [
+      {id:'c1', user_id:'u1', call_date_time: soon, status:'Booked'},
+      {id:'c2', user_id:'u2', call_date_time: soon, status:'Completed'},
+      {id:'c3', user_id:'u2', call_date_time: soon, status:'No-show'}
+    ], error: null},
+    message_log: {data: [
+      {client_id:'c1', sent_at: now.toISOString(), responded: true},
+      {client_id:'c2', sent_at: now.toISOString(), responded: false}
+    ], error: null},
+    google_oauth_tokens: {data: [
+      {user_id:'u1', last_sync: now.toISOString()},
+      {user_id:'u2', last_sync: now.toISOString()}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  assert.strictEqual(rows.length, 2, 'expected one row per person, got ' + rows.length);
+  const byName = {}; rows.forEach(r => byName[r.name] = r);
+  assert.ok(byName.johnny && byName.ethan, 'rows are not labelled: ' + rows.map(r=>r.name).join(','));
+  assert.strictEqual(byName.ethan.contacts, 2);
+  assert.strictEqual(byName.ethan.completed, 1);
+  assert.strictEqual(byName.ethan.noshows, 1);
+  assert.strictEqual(byName.johnny.sent7d, 1);
+  assert.strictEqual(byName.johnny.connectedCalendars, 1);
+});
+
+test('a reply rate is claimed only where a reply was actually seen', async () => {
+  /* Zero recorded replies is genuinely ambiguous — nobody answered, or nobody
+     ever reconciled them. The loader must not resolve that ambiguity in
+     either direction, so it reports measured only when it has seen one. */
+  const now = new Date().toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'owner'},
+      {org_id:'o2', user_id:'u2', role:'owner'},
+      {org_id:'o2', user_id:'u1', role:'admin'}
+    ], error: null},
+    organizations: {data: [{id:'o1',name:'johnny'},{id:'o2',name:'ethan'}], error: null},
+    clients: {data: [{id:'c1',user_id:'u1',status:'Booked'},{id:'c2',user_id:'u2',status:'Booked'}], error: null},
+    message_log: {data: [
+      {client_id:'c1', sent_at: now, responded: true},
+      {client_id:'c2', sent_at: now, responded: false}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const byName = {}; rows.forEach(r => byName[r.name] = r);
+  assert.strictEqual(byName.johnny.repliesMeasured, true);
+  assert.strictEqual(byName.ethan.repliesMeasured, false,
+    'an account with no seen reply must not claim a measured rate');
+  assert.strictEqual(GB.teamReplyRate(byName.ethan), null);
+});
+
+test('a team view that cannot load costs a tab, never the app', async () => {
+  /* The email library taught this codebase once already: a secondary panel
+     that throws takes the whole load down with it. Nobody should lose their
+     morning list because a manager widget could not read a table. */
+  const d = makeLoadCtx({
+    memberships: {data: null, error: {message: 'permission denied for table memberships', code: '42501'}}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  assert.strictEqual(rows.length, 0, 'a failed team load must degrade to no team');
+
+  const state = await d.run('loadState()');
+  assert.ok(state, 'loadState must still return a usable state');
+  assert.ok(state.clients, 'the account itself must still load');
+  assert.ok(state.team && state.team.length === 0, 'state.team should be empty, not missing');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
