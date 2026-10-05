@@ -267,6 +267,21 @@ function renderTeamTab(){
     ]));
   }
 
+  /* What the team's results can and cannot tell you.
+
+     Every performance figure divides by calls whose outcome was recorded, so
+     this says up front how much of the history is actually known. On this
+     book that ranges from 99% to zero, and printing a completion rate for
+     somebody who has logged nothing would be a confident, specific, false
+     claim about their work. */
+  if(o.unlogged){
+    box.appendChild(h('p',{class:'team-lead team-coverage'},[
+      o.unlogged + ' finished ' + (o.unlogged === 1 ? 'call has' : 'calls have') +
+      ' no outcome recorded, so results are only measurable for ' +
+      o.measurable + ' of ' + o.total + '.'
+    ]));
+  }
+
   var lead;
   if(!o.needsAttention){
     lead = h('p',{class:'team-lead'},['All ' + o.working + ' working their lists. ' +
@@ -291,7 +306,16 @@ function renderTeamTab(){
                     title:'versus the previous 7 days'},
             [(m.trend > 0 ? '\u2191' : '\u2193') + Math.abs(m.trend)])
       ]),
-      h('div',{},[h('b',{},[String(m.completed)]), 'completed']),
+      h('div',{},[
+        m.completionRate === null
+          ? h('span',{class:'unknown',
+                      title: m.unlogged
+                        ? m.unlogged + ' finished calls have no outcome recorded, so a rate here would be meaningless'
+                        : 'not enough finished calls yet'},['not enough logged'])
+          : h('b',{title: m.outcomeCoverage + '% of finished calls have an outcome recorded'},
+              [m.completionRate + '%']),
+        m.completionRate === null ? '' : 'completed'
+      ]),
       h('div',{},[
         m.replyRate === null
           ? h('span',{class:'unknown', title:'Replies are only recorded for accounts where they are reconciled. This is not a zero.'},['not measured'])
@@ -309,7 +333,10 @@ function renderTeamTab(){
         h('span',{class:'team-why'},[m.why]),
         m.daysSinceSignIn === null ? '' :
           h('span',{class:'team-seen' + (m.daysSinceSignIn >= 7 ? ' is-away' : '')},
-            [lastSeenLabel(m.daysSinceSignIn)])
+            [lastSeenLabel(m.daysSinceSignIn)]),
+        m.unlogged ? h('span',{class:'team-seen is-away',
+                               title:'Finished calls with no outcome recorded'},
+          [' \u00b7 ' + m.unlogged + ' unlogged']) : ''
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
       h('div',{class:'team-nums'}, nums)

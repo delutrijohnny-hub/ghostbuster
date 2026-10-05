@@ -3838,8 +3838,20 @@ function teamReplyRate(m){
   return Math.round(100 * (Number(m.replies) || 0) / sent);
 }
 
+// A rate needs both a decent share of outcomes recorded and enough calls for
+// the number not to swing on one. Below either, the honest answer is silence.
+var TEAM_MIN_COVERAGE = 60;   // percent of finished calls with an outcome
+var TEAM_MIN_LOGGED = 8;      // logged calls before a percentage means anything
+
 function teamMemberState(m, now){
   var at = now ? now.getTime() : Date.now();
+  var pastCalls = Number(m.pastCalls) || 0;
+  var unlogged = Number(m.unlogged) || 0;
+  var logged = pastCalls - unlogged;
+  var coverage = pastCalls ? (100 * logged / pastCalls) : 0;
+  var ratesTrustworthy = logged >= TEAM_MIN_LOGGED && coverage >= TEAM_MIN_COVERAGE;
+  var completed = Number(m.completed) || 0;
+  var noshows = Number(m.noshows) || 0;
   var prev = Number(m.sentPrev7d) || 0;
   var awayDays = (function(){
     var t = m.lastSignIn ? Date.parse(m.lastSignIn) : NaN;
@@ -3947,6 +3959,21 @@ function teamMemberState(m, now){
     upcoming: upcoming,
     queue: queue,
     untouched: untouched,
+    pastCalls: pastCalls,
+    unlogged: unlogged,
+    /* How much of this person's history is actually known.
+
+       Every performance figure divides by calls whose outcome was recorded,
+       so coverage IS the denominator's integrity. On this book it ranges from
+       99% to zero: one person has 117 finished calls and has never logged a
+       single outcome. Reporting his completion rate as 0% would be a
+       confident, specific, entirely false claim about his work. */
+    outcomeCoverage: pastCalls ? Math.round(100 * (pastCalls - unlogged) / pastCalls) : null,
+    /* Rates only where there is enough logged history to mean anything.
+       Null is not a hedge here — it is the honest answer, and the UI says
+       "not enough logged" rather than printing a zero. */
+    completionRate: ratesTrustworthy ? Math.round(100 * completed / logged) : null,
+    noShowRate: ratesTrustworthy ? Math.round(100 * noshows / logged) : null,
     todayUntouched: todayUntouched,
     sentPrev7d: prev,
     /* Direction, not a percentage. A manager wants to know whether last
@@ -4003,6 +4030,8 @@ function teamOverview(rows, now){
     sent7d: members.reduce(function(n, m){ return n + m.sent7d; }, 0),
     sentPrev7d: members.reduce(function(n, m){ return n + m.sentPrev7d; }, 0),
     todayUntouched: members.reduce(function(n, m){ return n + m.todayUntouched; }, 0),
+    unlogged: members.reduce(function(n, m){ return n + m.unlogged; }, 0),
+    measurable: members.filter(function(m){ return m.completionRate !== null; }).length,
     // Booked work nobody has spoken to, across the whole team.
     untouched: members.reduce(function(n, m){ return n + m.untouched; }, 0),
     replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length
@@ -5016,7 +5045,8 @@ var __LOGIC_EXPORTS__ = {
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
   teamOverview: teamOverview, teamMemberState: teamMemberState, teamReplyRate: teamReplyRate,
   platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
-  TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
+  TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS,
+  TEAM_MIN_COVERAGE: TEAM_MIN_COVERAGE, TEAM_MIN_LOGGED: TEAM_MIN_LOGGED, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
   recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,

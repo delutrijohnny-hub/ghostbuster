@@ -6711,8 +6711,15 @@ console.log('\n--- the team view ---');
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     const fn = app.slice(app.indexOf('function renderTeamTab()'),
                          app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
-    const trendCode = fn.slice(fn.indexOf('var dir'), fn.indexOf('var lead'));
-    assert.ok(trendCode.length > 40, 'could not find the week-on-week code');
+    /* Just the delta computation, with comments stripped. The slice used to
+       run to 'var lead' and match a '%' inside prose explaining an unrelated
+       coverage figure — a test failing on a sentence rather than on code. */
+    const from = fn.indexOf('var dir');
+    const trendCode = fn.slice(from, fn.indexOf('}', fn.indexOf('Down ', from)) + 1)
+                        .replace(/\/\*[\s\S]*?\*\//g, '')
+                        .replace(/\/\/[^\n]*/g, '');
+    assert.ok(/delta/.test(trendCode) && trendCode.length > 40,
+      'could not find the week-on-week code');
     assert.ok(!/\*\s*100|%/.test(trendCode),
       'the week-on-week line computes a percentage: ' + trendCode);
     assert.ok(/Up ' \+ delta/.test(trendCode) && /Down ' \+ Math\.abs/.test(trendCode),
@@ -6798,6 +6805,61 @@ console.log('\n--- the team view ---');
                          app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
     assert.ok(fn.indexOf('team-urgent') < fn.indexOf('var lead'),
       'the urgent banner must render above the lead line, not inside the needs-attention branch');
+  });
+
+  test('a rate is refused where the outcomes were never logged', () => {
+    /* The reply-rate trap, in a second place. Ethan.M has 117 finished calls
+       and has logged the outcome of none of them. Dividing completed by past
+       calls would print "0% completion" and a manager would read it as
+       catastrophic performance rather than as an empty column. */
+    const never = GB.teamMemberState(row({pastCalls: 117, unlogged: 117, completed: 0, noshows: 0}), now);
+    assert.strictEqual(never.outcomeCoverage, 0);
+    assert.strictEqual(never.completionRate, null, 'a rate was printed from no logged outcomes');
+    assert.strictEqual(never.noShowRate, null);
+    assert.strictEqual(never.unlogged, 117, 'the real finding is the unlogged count itself');
+
+    const patchy = GB.teamMemberState(row({pastCalls: 78, unlogged: 73, completed: 0, noshows: 3}), now);
+    assert.strictEqual(patchy.completionRate, null,
+      'five logged calls out of seventy-eight is not a measurable rate');
+
+    const good = GB.teamMemberState(row({pastCalls: 144, unlogged: 1, completed: 49, noshows: 67}), now);
+    assert.strictEqual(good.outcomeCoverage, 99);
+    assert.strictEqual(good.completionRate, 34, 'a well-logged history must still report');
+    assert.strictEqual(good.noShowRate, 47);
+  });
+
+  test('a genuine zero is still reported where the logging is there', () => {
+    // The guard must not hide real bad news: somebody who logs diligently and
+    // completes nothing has a true 0%, and that is worth knowing.
+    const m = GB.teamMemberState(row({pastCalls: 20, unlogged: 1, completed: 0, noshows: 19}), now);
+    assert.strictEqual(m.completionRate, 0, 'a real zero was suppressed');
+    assert.strictEqual(m.noShowRate, 100);
+  });
+
+  test('no history at all reports unknown, not zero', () => {
+    const m = GB.teamMemberState(row({pastCalls: 0, unlogged: 0}), now);
+    assert.strictEqual(m.outcomeCoverage, null);
+    assert.strictEqual(m.completionRate, null);
+  });
+
+  test('the team total says how many people are measurable at all', () => {
+    const o = GB.teamOverview([
+      row({name:'logged',   pastCalls: 144, unlogged: 1,   completed: 49, noshows: 67}),
+      row({name:'unlogged', pastCalls: 117, unlogged: 117, completed: 0,  noshows: 0})
+    ], now);
+    assert.strictEqual(o.unlogged, 118);
+    assert.strictEqual(o.measurable, 1, 'only one of the two can be measured');
+  });
+
+  test('the tab says so rather than printing a zero', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    assert.ok(/completionRate === null/.test(fn),
+      'the renderer does not special-case an unmeasurable rate');
+    assert.ok(/not enough logged/.test(fn), 'nothing tells the manager why the column is blank');
+    assert.ok(/no outcome recorded/.test(fn),
+      'the tab never explains that the history is missing');
   });
 
   test('an empty team does not throw', () => {

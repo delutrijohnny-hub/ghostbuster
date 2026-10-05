@@ -121,7 +121,8 @@ async function loadTeamRows(sb, uid){
            somebody is sitting on rather than only how many. Deliberately only
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
-        sentPrev7d:0, upcomingList: [], lastSignIn: null, signedUp: null};
+        sentPrev7d:0, pastCalls:0, unlogged:0,
+        upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
     Object.keys(peers).forEach(bucket);
@@ -147,6 +148,14 @@ async function loadTeamRows(sb, uid){
       }
       if(c.status === 'Completed') b.completed++;
       if(c.status === 'No-show') b.noshows++;
+      /* A call that has happened and still sits on a booked-ish status is one
+         nobody recorded the outcome of. It is the denominator for every
+         performance figure on this screen, so it is counted rather than
+         assumed. */
+      if(!isNaN(t) && t < now){
+        b.pastCalls++;
+        if(c.status === 'Booked' || c.status === 'Confirmed' || c.status === 'Reminded') b.unlogged++;
+      }
     });
 
     var sentPer = {};
