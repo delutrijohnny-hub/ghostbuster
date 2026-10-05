@@ -6731,6 +6731,75 @@ console.log('\n--- the team view ---');
     assert.strictEqual(o.untouched, 1, 'only the appointment with nothing sent counts');
   });
 
+  /* "Today" here means the viewer's own calendar day — a manager deciding
+     what to chase this afternoon — so these fixtures are built from local
+     hours rather than fixed UTC instants. The first version used literal Z
+     times and passed in London while failing in Tokyo, where the same instant
+     falls on the next day. Third time this suite has been bitten by that. */
+  const dayAt = (base, h) => { const d = new Date(base); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+  // 9am local today, and a sync an hour before it. The block's shared row()
+  // pins lastSync to the old fixed fixture date, which reads as stale against
+  // a real `now` and turned every one of these into "sync broken".
+  const today9 = () => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; };
+  const fresh = (at) => new Date(at.getTime() - 3600000).toISOString();
+
+  test("today's untouched calls are counted separately from the rest", () => {
+    const at = today9();
+    const nextWeek = new Date(at.getTime() + 7 * 86400000).toISOString();
+    const m = GB.teamMemberState(row({sent7d:0, sentEver:0, lastSync: fresh(at), upcomingList:[
+      {clientId:'a', name:'Dana', when: dayAt(at, 14), sent:0},
+      {clientId:'b', name:'Sam',  when: dayAt(at, 16), sent:0},
+      {clientId:'c', name:'Kim',  when: nextWeek,      sent:0},
+      {clientId:'d', name:'Lee',  when: dayAt(at, 15), sent:3}
+    ]}), at);
+    assert.strictEqual(m.untouched, 3);
+    assert.strictEqual(m.todayUntouched, 2, 'only today, and only the unmessaged');
+    assert.ok(/2 calls today/.test(m.why), m.why);
+  });
+
+  test('somebody working their list is still flagged for a call today', () => {
+    /* The case that must not get lost: a person can be sending plenty and
+       still have a call this afternoon nobody has touched. If urgency only
+       appeared on people already in trouble, this one would be invisible
+       precisely because they look fine. */
+    const at = today9();
+    const m = GB.teamMemberState(row({sent7d:49, sentEver:800, lastSync: fresh(at), upcomingList:[
+      {clientId:'a', name:'Pat', when: dayAt(at, 13), sent:0}
+    ]}), at);
+    assert.strictEqual(m.state, 'working');
+    assert.strictEqual(m.todayUntouched, 1);
+    assert.ok(/^1 call today with nothing sent\./.test(m.why),
+      'the urgent fact must lead the reason line: ' + m.why);
+  });
+
+  test('a call tomorrow morning is not today', () => {
+    const at = today9();
+    const tomorrow = dayAt(new Date(at.getTime() + 86400000), 9);
+    const m = GB.teamMemberState(row({lastSync: fresh(at), upcomingList:[
+      {clientId:'a', name:'Kim', when: tomorrow, sent:0}
+    ]}), at);
+    assert.strictEqual(m.todayUntouched, 0, 'tomorrow morning is not today');
+    assert.ok(!/today/.test(m.why), m.why);
+  });
+
+  test('the team headline carries it too, above the attention split', () => {
+    const at = today9();
+    const o = GB.teamOverview([
+      row({name:'a', sent7d:49, sentEver:800, lastSync: fresh(at), upcomingList:[
+        {clientId:'x', name:'Pat', when: dayAt(at, 13), sent:0}]}),
+      row({name:'b', sent7d:0, sentEver:0, lastSync: fresh(at), upcomingList:[
+        {clientId:'y', name:'Dana', when: dayAt(at, 15), sent:0}]})
+    ], at);
+    assert.strictEqual(o.todayUntouched, 2,
+      'a working person contributing an urgent call was dropped from the total');
+
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    assert.ok(fn.indexOf('team-urgent') < fn.indexOf('var lead'),
+      'the urgent banner must render above the lead line, not inside the needs-attention branch');
+  });
+
   test('an empty team does not throw', () => {
     const o = GB.teamOverview([], now);
     assert.deepStrictEqual(o.members, []);

@@ -3858,6 +3858,41 @@ function teamMemberState(m, now){
     else if((at - last) / 3600000 > STALE_AFTER_HOURS) cal = 'stale';
   }
 
+  /* The appointments behind the number.
+
+     "Ethan has 11 booked and sent nothing" is a statistic. "Ethan has Dana on
+     Thursday and nobody has spoken to her" is something you act on, so the
+     list travels with the row and the untouched count is pulled out, because
+     that is the subset worth a conversation. */
+  var queue = (m.upcomingList || []).map(function(x){
+    return {
+      clientId: x.clientId || null,
+      name: x.name || 'Unknown',
+      when: x.when || null,
+      status: x.status || 'Booked',
+      sent: Number(x.sent) || 0,
+      untouched: (Number(x.sent) || 0) === 0
+    };
+  });
+  var untouched = queue.filter(function(x){ return x.untouched; }).length;
+
+  /* Of those, the ones happening today.
+
+     "Nine untouched" reads very differently depending on whether they are
+     spread over a fortnight or two of them are this afternoon. A call today
+     that nobody has prepared for is the one thing on this screen that cannot
+     wait until tomorrow, because tomorrow it is a no-show. */
+  var endOfDay = (function(){
+    var d = new Date(at);
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  })();
+  queue.forEach(function(x){
+    var t = x.when ? Date.parse(x.when) : NaN;
+    x.today = !isNaN(t) && t >= at && t <= endOfDay;
+  });
+  var todayUntouched = queue.filter(function(x){ return x.untouched && x.today; }).length;
+
   /* Ordered by how much it costs the business, not by severity of the
      plumbing. Someone sitting on booked appointments having never sent
      anything is losing deals right now; a disconnected calendar on an empty
@@ -3897,23 +3932,13 @@ function teamMemberState(m, now){
     why = sent7d + ' sent in the last ' + TEAM_IDLE_DAYS + ' days.';
   }
 
-  /* The appointments behind the number.
-
-     "Ethan has 11 booked and sent nothing" is a statistic. "Ethan has Dana on
-     Thursday and nobody has spoken to her" is something you act on, so the
-     list travels with the row and the untouched count is pulled out, because
-     that is the subset worth a conversation. */
-  var queue = (m.upcomingList || []).map(function(x){
-    return {
-      clientId: x.clientId || null,
-      name: x.name || 'Unknown',
-      when: x.when || null,
-      status: x.status || 'Booked',
-      sent: Number(x.sent) || 0,
-      untouched: (Number(x.sent) || 0) === 0
-    };
-  });
-  var untouched = queue.filter(function(x){ return x.untouched; }).length;
+  /* Said last so it overrides whatever reason was chosen above. Somebody can
+     be working their list perfectly well and still have a call in two hours
+     that nobody has texted, and that is the more urgent fact. */
+  if(todayUntouched){
+    why = todayUntouched + (todayUntouched === 1 ? ' call today with' : ' calls today with')
+        + ' nothing sent. ' + why;
+  }
 
   return {
     id: m.id || null,
@@ -3922,6 +3947,7 @@ function teamMemberState(m, now){
     upcoming: upcoming,
     queue: queue,
     untouched: untouched,
+    todayUntouched: todayUntouched,
     sentPrev7d: prev,
     /* Direction, not a percentage. A manager wants to know whether last
        week's conversation worked, and 'up 4' is a fact where 'up 400%' is
@@ -3976,6 +4002,7 @@ function teamOverview(rows, now){
     strandedUpcoming: strandedWork,
     sent7d: members.reduce(function(n, m){ return n + m.sent7d; }, 0),
     sentPrev7d: members.reduce(function(n, m){ return n + m.sentPrev7d; }, 0),
+    todayUntouched: members.reduce(function(n, m){ return n + m.todayUntouched; }, 0),
     // Booked work nobody has spoken to, across the whole team.
     untouched: members.reduce(function(n, m){ return n + m.untouched; }, 0),
     replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length

@@ -254,6 +254,19 @@ function renderTeamTab(){
         : ' Down ' + Math.abs(delta) + ' on the week before.';
   }
 
+  /* Today's gap goes first, above everything else on the screen. A call this
+     afternoon nobody has texted cannot wait until tomorrow, because tomorrow
+     it is a no-show — and it is true even of people working their lists well,
+     so it must not hide behind the "needs attention" split below. */
+  if(o.todayUntouched){
+    box.appendChild(h('div',{class:'team-urgent'},[
+      h('strong',{},[String(o.todayUntouched)]),
+      o.todayUntouched === 1
+        ? ' call happening today that nobody has messaged.'
+        : ' calls happening today that nobody has messaged.'
+    ]));
+  }
+
   var lead;
   if(!o.needsAttention){
     lead = h('p',{class:'team-lead'},['All ' + o.working + ' working their lists. ' +
@@ -314,7 +327,8 @@ function renderTeamTab(){
         ]));
       }
       m.queue.forEach(function(q){
-        list.appendChild(h('div',{class:'tq-row' + (q.untouched ? ' tq-untouched' : '')},[
+        list.appendChild(h('div',{class:'tq-row' + (q.untouched ? ' tq-untouched' : '')
+                                   + (q.today && q.untouched ? ' tq-today' : '')},[
           h('span',{class:'tq-when'},[fmtDayTime(q.when)]),
           h('span',{class:'tq-name'},[q.name]),
           h('span',{class:'tq-status'},[q.status]),
