@@ -6800,6 +6800,84 @@ console.log('\n--- the privacy policy and the product agree ---');
   });
 }
 
+console.log('\n--- a member sees their own rows, a manager sees the team ---');
+
+/* The regression that would matter once a real team shares an organisation.
+
+   Every data policy used to say "the row's organisation is one of mine",
+   granted for ALL commands, with no notion of role. Harmless while each
+   account is alone in its org; the moment they share one it hands every member
+   read AND WRITE over every colleague's book.
+
+   Scope note, because the first version of this test was wrong: policies
+   created inside a format() loop — which is how both the original org
+   migration and the role-aware one create the six uniform tables — are
+   invisible to a regex looking for "create policy <name> on public.<table>".
+   That version ended up judging a superseded migration from August and failing
+   for the wrong reason. So this checks two things separately: the loop
+   TEMPLATE in the role-aware migration, and any explicitly-named policy added
+   from that migration onwards. Anything older is superseded and not binding. */
+{
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const ROLE_AWARE = '20261005170000_role_aware_policies.sql';
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+
+  test('the role-aware migration exists and is the binding one', () => {
+    assert.ok(files.includes(ROLE_AWARE), 'the role-aware policy migration is gone');
+  });
+
+  test('the looped policy template checks role AND own rows', () => {
+    const sql = fs.readFileSync(path.join(dir, ROLE_AWARE), 'utf8');
+    const loop = sql.slice(sql.indexOf('foreach t in array'), sql.indexOf('end loop'));
+    assert.ok(/user_managed_org_ids/.test(loop),
+      'the template is org-wide with no role check — every member would read '
+      + 'and write every colleague\'s rows once orgs are shared');
+    assert.ok(/user_id = auth\.uid\(\)/.test(loop),
+      'the template never matches the caller\'s own rows, so an ordinary '
+      + 'member would see nothing at all');
+    ['clients','app_settings','variants','variant_stats','todos','email_library']
+      .forEach(t => assert.ok(loop.includes("'" + t + "'"),
+        t + ' is no longer covered by the role-aware template'));
+    assert.ok(!/google_oauth_tokens/.test(loop),
+      'the token table is back in the loop — it holds live credentials and '
+      + 'must stay owner-only');
+  });
+
+  test('nothing added later reverts a table to plain org-wide', () => {
+    const scoped = ['clients','app_settings','variants','variant_stats',
+                    'todos','email_library','events','message_log'];
+    files.filter(f => f >= ROLE_AWARE).forEach(f => {
+      const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+      const re = /create policy\s+"?([a-z_]+)"?\s+on\s+public\.([a-z_]+)([\s\S]*?);/gi;
+      let m;
+      while ((m = re.exec(sql)) !== null) {
+        const [body, , table] = [m[0], m[1], m[2]];
+        if (!scoped.includes(table)) continue;
+        if (/for\s+insert/i.test(body)) {
+          assert.ok(/auth\.uid\(\)/.test(body),
+            f + ': insert policy on ' + table + ' is not restricted to the writer');
+          continue;
+        }
+        assert.ok(/user_managed_org_ids/.test(body),
+          f + ': policy on ' + table + ' is org-wide with no role check');
+        assert.ok(/auth\.uid\(\)/.test(body),
+          f + ': policy on ' + table + ' never matches the caller\'s own rows');
+      }
+    });
+  });
+
+  test('a manager cannot write into somebody else\'s timeline', () => {
+    // events is history. Reading a teammate's is reasonable; appending to it
+    // is not, so SELECT widened and INSERT deliberately did not.
+    const sql = fs.readFileSync(path.join(dir, ROLE_AWARE), 'utf8');
+    const ins = sql.slice(sql.indexOf('events_org_insert'));
+    const body = ins.slice(0, ins.indexOf(';', ins.indexOf('with check')));
+    assert.ok(!/user_managed_org_ids/.test(body),
+      'the events insert policy lets a manager write someone else\'s history');
+    assert.ok(/user_id = auth\.uid\(\)/.test(body));
+  });
+}
+
 console.log('\n--- Google refresh tokens stay with their owner ---');
 
 /* google_oauth_tokens.refresh_token is not data about a person, it is a live
