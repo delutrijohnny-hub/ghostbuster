@@ -173,6 +173,53 @@ function fmtDayTime(iso){
   }catch(e){ return d.toDateString(); }
 }
 
+/* Moving an appointment to a different owner.
+
+   Lives here rather than in the click dispatcher because a <select> fires
+   'change', not 'click' — the first version of this was a switch case that
+   could never have run. */
+function assignFromPicker(target){
+  var moveId = target.getAttribute('data-cid');
+  var moveFrom = target.getAttribute('data-from');
+  var moveTo = target.value;
+  if(!moveId || !moveTo) return;
+  var toLabel = target.options && target.options[target.selectedIndex]
+    ? target.options[target.selectedIndex].text : 'them';
+  target.disabled = true;
+  reassignClient(moveId, moveTo).then(function(r){
+    if(!r.ok){
+      showToast('Could not move it: ' + (r.error || 'refused'));
+      target.disabled = false;
+      renderTeamTab();   // put the picker back on the real owner
+      return;
+    }
+    showToast('Moved from ' + moveFrom + ' to ' + toLabel + '.');
+    /* A full reload rather than patching two lists in memory: the contact has
+       to leave one person's row and appear in another's, and the cadence has
+       to recompute against the new owner. */
+    init();
+  });
+}
+
+/* The owner picker on a queue row. Current owner preselected, so leaving it
+   alone is always the no-op and only a deliberate change moves anything. */
+function assignPicker(q, member, members){
+  var sel = h('select',{class:'tq-assign','data-action':'team-assign',
+                        'data-cid':q.clientId,'data-from':member.name,
+                        title: q.untouched
+                          ? 'Move this appointment to someone else'
+                          : 'Already ' + q.sent + ' message(s) sent — moving it takes over mid-conversation'},[]);
+  members.forEach(function(x){
+    if(!x.userId) return;
+    var label = (x.userId === STATE.userId) ? 'me' : x.name;
+    var o = h('option',{value:x.userId}, [label]);
+    if(x.userId === member.userId) o.selected = true;
+    sel.appendChild(o);
+  });
+  if(!q.untouched) sel.className += ' has-history';
+  return sel;
+}
+
 function renderTeamTab(){
   var box = el('team-view');
   var btn = el('tab-btn-team');
@@ -272,14 +319,17 @@ function renderTeamTab(){
           h('span',{class:'tq-name'},[q.name]),
           h('span',{class:'tq-status'},[q.status]),
           h('span',{class:'tq-sent'},[q.untouched ? 'nothing sent' : q.sent + ' sent']),
-          /* Only offered on somebody else's row, and only where nothing has
-             been sent yet. Taking a call a colleague has already started a
-             conversation on would cut across them mid-thread. */
-          (m.userId && m.userId !== STATE.userId && q.untouched)
-            ? h('button',{class:'btn btn-sm tq-take','data-action':'team-take',
-                          'data-cid':q.clientId,'data-who':m.name,
-                          title:'Move this appointment to you'},['Take'])
-            : h('span',{class:'tq-take-gap'},[''])
+          /* Who owns it, as a picker rather than a one-way Take.
+
+             A one-way button could not hand a call back, or pass it to a
+             third person — and handing over work somebody has already started
+             is exactly the case a departure creates. So any upcoming
+             appointment can move to anyone on the team, including back.
+
+             A call with messages already sent is still movable, but it says
+             so, because taking over mid-conversation should be a decision
+             rather than a slip. */
+          assignPicker(q, m, o.members)
         ]));
       });
       box.appendChild(list);
@@ -3390,27 +3440,6 @@ document.addEventListener('click', function(ev){
       renderEmailLibrary();
       break;
     }
-    case 'team-take': {
-      var takeId = target.getAttribute('data-cid');
-      var takeFrom = target.getAttribute('data-who');
-      if(!takeId) break;
-      target.disabled = true;
-      target.textContent = '...';
-      reassignClient(takeId, STATE.userId).then(function(r){
-        if(!r.ok){
-          showToast('Could not move it: ' + (r.error || 'refused'));
-          target.disabled = false;
-          target.textContent = 'Take';
-          return;
-        }
-        showToast('Moved from ' + takeFrom + ' to you.');
-        /* A full reload rather than patching two lists in memory: the contact
-           has to leave their team row AND appear in your own queue, and the
-           cadence has to recompute against you as the owner. */
-        init();
-      });
-      break;
-    }
     case 'team-toggle': {
       var who = target.getAttribute('data-who');
       TEAM_OPEN = (TEAM_OPEN === who) ? null : who;
@@ -3744,6 +3773,10 @@ document.addEventListener('click', function(ev){
 
 document.addEventListener('change', function(ev){
   var t = ev.target;
+  if(t.getAttribute && t.getAttribute('data-action') === 'team-assign'){
+    assignFromPicker(t);
+    return;
+  }
   if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-stage-role'){
     var ri = parseInt(t.getAttribute('data-idx'), 10);
     if(SETTINGS_DRAFT.pipeline[ri]) SETTINGS_DRAFT.pipeline[ri].role = t.value;

@@ -5680,7 +5680,14 @@ test('the failure is surfaced through a window property, not a shared name', () 
 
 test('the warning is persistent, not a toast', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const block = app.slice(app.indexOf('window.GB_ON_SAVE_HEALTH ='), app.indexOf('function renderAll()'));
+  /* Just the handler, not everything between it and renderAll. The wider
+     slice swept up whatever function happened to be defined next and failed
+     on an unrelated showToast — a test reporting a real rule broken by code
+     that does not implement that rule. */
+  const start = app.indexOf('window.GB_ON_SAVE_HEALTH =');
+  const block = app.slice(start, app.indexOf('\n};', start) + 3);
+  assert.ok(/GB_ON_SAVE_HEALTH/.test(block) && block.length < 1200,
+    'the slice no longer isolates the handler');
   assert.ok(!/showToast/.test(block),
     'a toast disappears, and what this announces is that work is disappearing');
   assert.ok(/classList\.remove\('hidden'\)/.test(block), 'it must actually show the banner');
@@ -6584,23 +6591,32 @@ console.log('\n--- the team view ---');
       'a contact name reached the platform overview');
   });
 
-  test('Take is offered only on a colleague\'s untouched appointment', () => {
-    /* Three conditions, each for a reason: not your own row (you cannot take
-       from yourself), nothing sent yet (taking a call somebody has already
-       started a conversation on cuts across them mid-thread), and only where
-       the owner is known. */
+  test('an appointment can be moved to anyone on the team, including back', () => {
+    /* Replaced a one-way Take button, which could not hand a call back or
+       pass it to a third person — and handing over work somebody has already
+       started is exactly the case a departure creates. */
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-    const fn = app.slice(app.indexOf('function renderTeamTab()'),
-                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
-    const cond = fn.slice(fn.indexOf("'team-take'") - 400, fn.indexOf("'team-take'"));
-    assert.ok(/m\.userId !== STATE\.userId/.test(cond),
-      'Take appears on your own row');
-    assert.ok(/q\.untouched/.test(cond),
-      'Take appears on an appointment somebody has already messaged about');
-    assert.ok(/case 'team-take'/.test(app), 'the Take button has no handler');
-    assert.ok(/init\(\)/.test(app.slice(app.indexOf("case 'team-take'"),
-                                        app.indexOf("case 'team-toggle'"))),
+    const picker = app.slice(app.indexOf('function assignPicker('),
+                             app.indexOf('function renderTeamTab()'));
+    assert.ok(/members\.forEach/.test(picker), 'the picker does not list the team');
+    assert.ok(/o\.selected = true/.test(picker),
+      'the current owner is not preselected, so leaving it alone would move the call');
+    assert.ok(/has-history/.test(picker),
+      'a call with messages already sent is not marked as a takeover');
+
+    /* A <select> fires 'change', not 'click'. The first version of this was a
+       case in the click dispatcher and could never have run. */
+    const onChange = app.slice(app.indexOf("document.addEventListener('change'"),
+                               app.indexOf("document.addEventListener('change'") + 400);
+    assert.ok(/team-assign/.test(onChange),
+      'the picker is not wired to the change event');
+    assert.ok(/function assignFromPicker/.test(app), 'no handler for the move');
+    const handler = app.slice(app.indexOf('function assignFromPicker'),
+                              app.indexOf('/* The owner picker'));
+    assert.ok(/init\(\)/.test(handler),
       'nothing reloads after a move, so the contact would sit in both lists');
+    assert.ok(/renderTeamTab\(\)/.test(handler),
+      'a refused move leaves the picker showing the wrong owner');
   });
 
   test('the team tab can open a person, and only when there is something to show', () => {
