@@ -17,40 +17,64 @@ rejects it because the redirect URL is not on its.
 So the order below matters. Steps 1–3 are additive and change nothing for
 anyone while the old domain keeps serving. Nobody is affected until step 5.
 
+## Which console actually matters
+
+Corrected after reading `hosted/auth.js`. It calls `signInWithOAuth` with
+`redirectTo`, so the flow is:
+
+```
+browser -> Supabase /auth/v1/authorize -> Google -> Supabase callback -> your app
+```
+
+Google never redirects to your domain. Its authorised redirect URI is
+**Supabase's** callback, `https://gqfpsjksosxvszzhhezu.supabase.co/auth/v1/callback`,
+which does not change when the domain does.
+
+**So the allow-list that can lock everyone out is Supabase's, not Google's.**
+An earlier draft of this file had that backwards and would have sent you to
+spend time in Google Cloud Console believing the job was done.
+
+Confirm it in one look before starting: Google Cloud Console -> Credentials ->
+your OAuth client -> Authorised redirect URIs. If it lists the Supabase
+callback, nothing there needs touching for sign-in to keep working. If it
+somehow lists `ghostbustercrm.com`, tell me, because the rest of this changes.
+
 ## Order of operations
 
-1. **Google Cloud Console** — APIs & Services → Credentials → the OAuth 2.0
-   client used for sign-in. ADD (do not replace):
-   - Authorised JavaScript origins: `https://NEWDOMAIN`
-   - Authorised redirect URIs: `https://NEWDOMAIN` and `https://NEWDOMAIN/app`
+New domain: **ghostrecallcrm.com**
 
-   Leave the existing `ghostbustercrm.com` entries in place. Both domains work
-   from here until you choose to remove the old one.
+1. **Register it.** Confirm availability at the registrar; a DNS check showed
+   no nameservers, which is a strong hint but not proof.
 
-2. **Supabase** — Authentication → URL Configuration. Add `https://NEWDOMAIN`
-   and `https://NEWDOMAIN/**` to Redirect URLs. Leave Site URL pointing at the
-   old domain for now; change it in step 6.
+2. **Supabase — the one that matters.** Dashboard -> Authentication -> URL
+   Configuration. ADD to **Redirect URLs** (do not remove the old ones):
+   - `https://ghostrecallcrm.com/**`
+   - `https://www.ghostrecallcrm.com/**`
 
-3. **Vercel** — Project → Settings → Domains → Add `NEWDOMAIN`. Vercel will
-   show the DNS records it wants. Do not set it as primary yet.
+   Leave **Site URL** on the old domain for now; it changes in step 6.
 
-4. **DNS** — at the registrar for the new domain, add the records Vercel asked
-   for. Wait for Vercel to show the domain as Valid.
+3. **Vercel.** Project -> Settings -> Domains -> Add `ghostrecallcrm.com` (and
+   the `www` variant). Vercel shows the DNS records it wants. Do not set it as
+   primary yet.
 
-5. **Verify before switching.** Open `https://NEWDOMAIN/app` and sign in with
-   Google. This is the real test: if the consent screen errors with
-   `redirect_uri_mismatch`, step 1 or 2 is incomplete, and the old domain is
-   still serving everyone normally while you fix it.
+4. **DNS.** At the registrar, add exactly the records Vercel asked for. Wait
+   for Vercel to show the domain as Valid.
 
-6. **Make it primary.** In Vercel set `NEWDOMAIN` as the primary domain and
-   leave `ghostbustercrm.com` as a redirect to it. In Supabase change Site URL
-   to `https://NEWDOMAIN`.
+5. **Verify before switching anything.** Open `https://ghostrecallcrm.com/app`
+   and sign in with Google. This is the real test. If it fails, the old domain
+   is still serving everyone normally while you fix it. The likely error is a
+   redirect that bounces back to the old address — that means step 2 is
+   incomplete.
 
-7. **Consent screen.** Google Cloud → OAuth consent screen: update the app
-   name to Ghost Recall, the application home page, and the privacy policy link
-   to `https://NEWDOMAIN/privacy`. Changing the name or the links can put the
-   app back into review if it is published — worth doing deliberately rather
-   than on a Friday.
+6. **Make it primary.** Vercel: set `ghostrecallcrm.com` as primary and leave
+   `ghostbustercrm.com` redirecting to it. Supabase: change **Site URL** to
+   `https://ghostrecallcrm.com`.
+
+7. **Branding, not function.** Google Cloud Console -> OAuth consent screen:
+   app name to Ghost Recall, homepage and privacy policy link to
+   `https://ghostrecallcrm.com/privacy`. This cannot break sign-in, but
+   changing the name or links on a published app can trigger re-review, so do
+   it deliberately rather than late on a Friday.
 
 ## Afterwards
 
