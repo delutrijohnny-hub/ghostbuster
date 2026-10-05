@@ -195,23 +195,42 @@ function renderTeamTab(){
      belongs to somebody who is not following anyone up. Phrased as the cost,
      not as a count of people, because people are not the problem - unworked
      appointments are. */
+  /* Week on week, in plain numbers. A manager's real question after having a
+     conversation is "did that change anything", and a snapshot cannot answer
+     it. Stated as counts rather than a percentage: going from one message to
+     three is not a 200% improvement, it is two more messages. */
+  var dir = '';
+  if(o.sent7d || o.sentPrev7d){
+    var delta = o.sent7d - o.sentPrev7d;
+    dir = delta === 0 ? ' Same as the week before.'
+        : delta > 0 ? ' Up ' + delta + ' on the week before.'
+        : ' Down ' + Math.abs(delta) + ' on the week before.';
+  }
+
   var lead;
   if(!o.needsAttention){
     lead = h('p',{class:'team-lead'},['All ' + o.working + ' working their lists. ' +
-      o.sent7d + ' messages sent across the team this week.']);
+      o.sent7d + ' messages sent across the team this week.' + dir]);
   } else {
     lead = h('p',{class:'team-lead', html:
       '<strong>' + o.strandedUpcoming + '</strong> booked ' +
       (o.strandedUpcoming === 1 ? termLower('appointment') : termLower('appointmentPlural')) +
       ' belong to someone who is not following anyone up. ' +
-      o.working + ' of ' + o.total + ' are working their lists.'});
+      o.working + ' of ' + o.total + ' are working their lists. ' +
+      o.sent7d + ' messages sent this week.' + dir});
   }
   box.appendChild(lead);
 
   o.members.forEach(function(m){
     var nums = [
       h('div',{},[h('b',{},[String(m.upcoming)]), 'booked']),
-      h('div',{},[h('b',{},[String(m.sent7d)]), 'sent 7d']),
+      h('div',{},[
+        h('b',{},[String(m.sent7d)]), 'sent 7d',
+        m.trend === null || m.trend === 0 ? '' :
+          h('span',{class:'team-trend ' + (m.trend > 0 ? 'up' : 'down'),
+                    title:'versus the previous 7 days'},
+            [(m.trend > 0 ? '\u2191' : '\u2193') + Math.abs(m.trend)])
+      ]),
       h('div',{},[h('b',{},[String(m.completed)]), 'completed']),
       h('div',{},[
         m.replyRate === null

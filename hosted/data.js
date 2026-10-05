@@ -90,7 +90,7 @@ async function loadTeamRows(sb, uid){
            somebody is sitting on rather than only how many. Deliberately only
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
-        upcomingList: [], lastSignIn: null, signedUp: null};
+        sentPrev7d:0, upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
     Object.keys(peers).forEach(bucket);
@@ -124,6 +124,11 @@ async function loadTeamRows(sb, uid){
       var t = m.sent_at ? Date.parse(m.sent_at) : NaN;
       if(isNaN(t)) return;
       if(now - t <= 7 * 86400000) b.sent7d++;
+      /* The week before last week, so the tab can say whether this is getting
+         better. No new table and no nightly job: the message log already
+         holds every timestamp, it was only ever being asked about one
+         window. */
+      else if(now - t <= 14 * 86400000) b.sentPrev7d++;
       if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
     });

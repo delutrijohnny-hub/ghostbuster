@@ -3840,6 +3840,7 @@ function teamReplyRate(m){
 
 function teamMemberState(m, now){
   var at = now ? now.getTime() : Date.now();
+  var prev = Number(m.sentPrev7d) || 0;
   var awayDays = (function(){
     var t = m.lastSignIn ? Date.parse(m.lastSignIn) : NaN;
     return isNaN(t) ? null : Math.floor((at - t) / 86400000);
@@ -3921,6 +3922,12 @@ function teamMemberState(m, now){
     upcoming: upcoming,
     queue: queue,
     untouched: untouched,
+    sentPrev7d: prev,
+    /* Direction, not a percentage. A manager wants to know whether last
+       week's conversation worked, and 'up 4' is a fact where 'up 400%' is
+       three sends dressed as a turnaround. Null when both weeks are zero,
+       because nothing happening twice is not a trend. */
+    trend: (!sent7d && !prev) ? null : (sent7d - prev),
     /* Days since they last opened the app, which separates "ignoring the
        list" from "cannot get in" — opposite conversations. null means we
        genuinely do not know rather than zero. */
@@ -3968,6 +3975,9 @@ function teamOverview(rows, now){
     // not currently following anyone up.
     strandedUpcoming: strandedWork,
     sent7d: members.reduce(function(n, m){ return n + m.sent7d; }, 0),
+    sentPrev7d: members.reduce(function(n, m){ return n + m.sentPrev7d; }, 0),
+    // Booked work nobody has spoken to, across the whole team.
+    untouched: members.reduce(function(n, m){ return n + m.untouched; }, 0),
     replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length
   };
 }

@@ -6645,6 +6645,53 @@ console.log('\n--- the team view ---');
       'anon is not revoked from a definer function that reads auth.users');
   });
 
+  test('the week is compared with the week before it', () => {
+    const m = GB.teamMemberState(row({sent7d: 4, sentPrev7d: 18}), now);
+    assert.strictEqual(m.trend, -14);
+    assert.strictEqual(GB.teamMemberState(row({sent7d: 20, sentPrev7d: 18}), now).trend, 2);
+  });
+
+  test('nothing happening twice is not a trend', () => {
+    /* Four of six accounts send nothing week after week. Rendering that as
+       "0%" or a flat arrow dresses a standing problem up as stability, so a
+       member with no activity in either week reports null and the tab shows
+       no arrow at all. */
+    assert.strictEqual(GB.teamMemberState(row({sent7d: 0, sentPrev7d: 0}), now).trend, null);
+    // But a real drop to zero IS the news, and must still be reported.
+    assert.strictEqual(GB.teamMemberState(row({sent7d: 0, sentPrev7d: 18}), now).trend, -18);
+  });
+
+  test('the trend is a count, never a percentage', () => {
+    /* One message becoming three is not a 200% improvement, it is two more
+       messages. On numbers this small a percentage makes noise look like a
+       turnaround, which is the wrong thing to put in front of a manager.
+
+       Checked on the trend code specifically, not the whole function: the
+       reply-rate column legitimately renders a percentage, and an earlier
+       version of this test banned '%' outright and failed on it. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    const trendCode = fn.slice(fn.indexOf('var dir'), fn.indexOf('var lead'));
+    assert.ok(trendCode.length > 40, 'could not find the week-on-week code');
+    assert.ok(!/\*\s*100|%/.test(trendCode),
+      'the week-on-week line computes a percentage: ' + trendCode);
+    assert.ok(/Up ' \+ delta/.test(trendCode) && /Down ' \+ Math\.abs/.test(trendCode),
+      'it does not state a plain count up or down');
+  });
+
+  test('the team total carries both weeks and the untouched work', () => {
+    const o = GB.teamOverview([
+      row({name:'a', sent7d: 49, sentPrev7d: 72,
+           upcomingList:[{clientId:'x', name:'Dana', when:'2026-10-08T15:00:00Z', sent:0}]}),
+      row({name:'b', sent7d: 0,  sentPrev7d: 18,
+           upcomingList:[{clientId:'y', name:'Sam', when:'2026-10-08T15:00:00Z', sent:1}]})
+    ], now);
+    assert.strictEqual(o.sent7d, 49);
+    assert.strictEqual(o.sentPrev7d, 90);
+    assert.strictEqual(o.untouched, 1, 'only the appointment with nothing sent counts');
+  });
+
   test('an empty team does not throw', () => {
     const o = GB.teamOverview([], now);
     assert.deepStrictEqual(o.members, []);
