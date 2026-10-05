@@ -6800,6 +6800,56 @@ console.log('\n--- the privacy policy and the product agree ---');
   });
 }
 
+console.log('\n--- Google refresh tokens stay with their owner ---');
+
+/* google_oauth_tokens.refresh_token is not data about a person, it is a live
+   credential: whoever can read it can act as that person against their Google
+   Calendar indefinitely, and keeps being able to after they leave.
+
+   The original policy said "any member of the row's organisation", which was
+   harmless only because every organisation happened to contain one person. The
+   manager-access plan was first written to carry that policy forward into a
+   SHARED organisation, which would have handed every member their colleagues'
+   Google credentials. It was caught while reading the table definition, not by
+   anything failing. */
+{
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+  const latest = files
+    .map(f => ({f, sql: fs.readFileSync(path.join(dir, f), 'utf8')}))
+    .filter(x => /create policy[^;]*on public\.google_oauth_tokens/is.test(x.sql))
+    .pop();
+
+  test('the newest policy on the token table is owner-scoped', () => {
+    assert.ok(latest, 'no migration defines a policy on google_oauth_tokens');
+    const policy = latest.sql.slice(latest.sql.search(/create policy/i));
+    assert.ok(/user_id\s*=\s*auth\.uid\(\)/.test(policy),
+      latest.f + ' defines a token policy that is not restricted to the owner');
+  });
+
+  test('no migration ever widens it back to the whole organisation', () => {
+    /* The regression that matters: a later migration doing the org-wide thing
+       again, perhaps by copying the pattern used by every other table. Every
+       other table SHOULD be org-scoped; this one must not be. */
+    files.forEach(f => {
+      const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+      const re = /create policy[^;]*?on public\.google_oauth_tokens[\s\S]*?;/gi;
+      let m;
+      while ((m = re.exec(sql)) !== null) {
+        assert.ok(/user_id\s*=\s*auth\.uid\(\)/.test(m[0]),
+          f + ' grants the token table to a whole organisation. Refresh tokens '
+            + 'are credentials, not records — keep it to user_id = auth.uid().');
+      }
+    });
+  });
+
+  test('the plan says why, so it is not undone by someone tidying up', () => {
+    const plan = fs.readFileSync(path.join(__dirname, 'scripts', 'manager-access-plan.md'), 'utf8');
+    assert.ok(/refresh_token/.test(plan), 'the plan never mentions the credential');
+    assert.ok(/excluded|tightened/i.test(plan), 'the plan does not record the exclusion');
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
