@@ -9,13 +9,17 @@ configuration in three consoles.
 
 ## The one way this breaks
 
-Switch DNS before Google and Supabase know about the new domain, and **every
-sign-in fails at once** — for the whole team, not gradually. Google rejects the
-OAuth redirect because the origin is not on its allow-list, and Supabase
-rejects it because the redirect URL is not on its.
+Switch DNS before **Supabase** knows about the new domain and **every sign-in
+fails at once** — for the whole team, not gradually. Supabase refuses to
+redirect back to an address that is not on its allow-list, so people complete
+the Google prompt and then land nowhere.
 
-So the order below matters. Steps 1–3 are additive and change nothing for
-anyone while the old domain keeps serving. Nobody is affected until step 5.
+See the section below for why it is Supabase rather than Google: the first
+draft of this file blamed the wrong console.
+
+So the order matters. Every step up to and including 4 is additive and changes
+nothing for anyone while the old domain keeps serving. Nobody is affected
+until step 6.
 
 ## Which console actually matters
 
