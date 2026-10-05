@@ -111,7 +111,14 @@ async function loadTeamRows(sb, uid){
       if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
     });
 
-    var tRes = await sb.from('google_oauth_tokens').select('user_id, last_sync');
+    /* Sync health comes through a function, not the table.
+
+       google_oauth_tokens is owner-only, because refresh_token is a live
+       credential rather than a record. Reading it directly here would return
+       nothing for a teammate and the view would report everyone as "no
+       calendar connected" — a confident wrong answer that looks exactly like
+       the real thing. team_calendar_health returns four columns and no tokens. */
+    var tRes = await sb.rpc('team_calendar_health');
     ((tRes && tRes.data) || []).forEach(function(r){
       var b = bucket(r.user_id);
       b.connectedCalendars++;

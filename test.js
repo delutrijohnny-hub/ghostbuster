@@ -5773,10 +5773,13 @@ function makeDataCtx(){
     };
     return {upsert: rec('upsert'), insert: rec('insert'), delete: rec('delete'), select: rec('select')};
   }
+  // Sync health is read through an RPC now, because the token table is
+  // owner-only. Nothing in the save path calls it; this keeps it from throwing.
+  function rpc(){ return Promise.resolve({data: [], error: null}); }
   const sandbox = {
     console, JSON, Date, Math, Promise, Object, Array, String, Number, isNaN, parseInt, parseFloat,
     crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2,10) },
-    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table } }
+    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table, rpc } }
   };
   sandbox.window.window = sandbox.window;
   const ctx = vm.createContext(sandbox);
@@ -5805,10 +5808,14 @@ function makeLoadCtx(tableResults){
             insert(){ return {select(){ return chain; }, then(ok,bad){ return res().then(ok,bad); }}; },
             upsert(){ return chain; }, delete(){ return chain; }};
   }
+  function rpc(name){
+    return Promise.resolve(
+      Object.prototype.hasOwnProperty.call(results, name) ? results[name] : {data: [], error: null});
+  }
   const sandbox = {
     console, JSON, Date, Math, Promise, Object, Array, String, Number, isNaN, parseInt, parseFloat, Set,
     crypto: { randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2,10) },
-    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table } }
+    window: { GB_SUPABASE: { auth: { getUser: async () => ({data:{user:{id:'u1', email:'a@b.com'}}}) }, from: table, rpc } }
   };
   sandbox.window.window = sandbox.window;
   const ctx = vm.createContext(sandbox);
@@ -6693,9 +6700,9 @@ test('a manager gets a row per person, aggregated from the visible rows', async 
       {client_id:'c1', sent_at: now.toISOString(), responded: true},
       {client_id:'c2', sent_at: now.toISOString(), responded: false}
     ], error: null},
-    google_oauth_tokens: {data: [
-      {user_id:'u1', last_sync: now.toISOString()},
-      {user_id:'u2', last_sync: now.toISOString()}
+    team_calendar_health: {data: [
+      {user_id:'u1', calendar_id:'u1@x.com', last_sync: now.toISOString()},
+      {user_id:'u2', calendar_id:'u2@x.com', last_sync: now.toISOString()}
     ], error: null}
   });
   const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
@@ -6875,6 +6882,48 @@ console.log('\n--- a member sees their own rows, a manager sees the team ---');
     assert.ok(!/user_managed_org_ids/.test(body),
       'the events insert policy lets a manager write someone else\'s history');
     assert.ok(/user_id = auth\.uid\(\)/.test(body));
+  });
+}
+
+console.log('\n--- sync health without the keys ---');
+
+/* The silent failure this pair of changes exists to avoid.
+
+   google_oauth_tokens became owner-only because refresh_token is a live
+   credential. loadTeamRows read last_sync straight from that table, so once
+   the team shares an organisation a manager would get nothing back and the
+   view would report every teammate as "no calendar connected" — not an error,
+   not a warning, a confident wrong answer indistinguishable from the truth. */
+{
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const fn = data.slice(data.indexOf('async function loadTeamRows'),
+                        data.indexOf('\nasync function loadState'));
+
+  test('the team loader never reads the token table directly', () => {
+    assert.ok(!/from\(['"]google_oauth_tokens['"]\)/.test(fn),
+      'loadTeamRows reads google_oauth_tokens, which is owner-only — every '
+      + 'teammate would report as having no calendar connected');
+    assert.ok(/rpc\(['"]team_calendar_health['"]\)/.test(fn),
+      'loadTeamRows does not go through team_calendar_health');
+  });
+
+  test('the function hands back no credential, by construction', () => {
+    const dir = path.join(__dirname, 'supabase', 'migrations');
+    const f = fs.readdirSync(dir).find(x => x.includes('team_calendar_health'));
+    assert.ok(f, 'the team_calendar_health migration is missing');
+    const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+    const body = sql.slice(sql.indexOf('create or replace function'));
+    assert.ok(!/refresh_token/.test(body.replace(/--[^\n]*/g, '')),
+      'team_calendar_health can return a refresh token');
+    assert.ok(!/access_token/.test(body.replace(/--[^\n]*/g, '')),
+      'team_calendar_health can return an access token');
+    // SECURITY DEFINER bypasses RLS, so its where clause IS the access control
+    // and there is no policy underneath to catch a mistake.
+    assert.ok(/security\s+definer/i.test(body), 'it would be blocked by its own policy without this');
+    assert.ok(/user_id\s*=\s*auth\.uid\(\)/.test(body), 'it does not scope to the caller');
+    assert.ok(/user_managed_org_ids/.test(body), 'it does not scope to managed orgs');
+    assert.ok(/revoke all on function public\.team_calendar_health\(\) from anon/.test(sql),
+      'anon is not revoked from a definer function that bypasses RLS');
   });
 }
 
