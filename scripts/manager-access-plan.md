@@ -49,7 +49,8 @@ person is the only member of their org, so `user_id = auth.uid()` already
 matches every row they can currently see.
 
 For each of `clients`, `app_settings`, `variants`, `variant_stats`, `todos`,
-`email_library`, `events`, `google_oauth_tokens`:
+`email_library` — and `events`, which needs splitting because it separates
+SELECT from INSERT:
 
 ```sql
 using (
@@ -61,7 +62,32 @@ using (
 )
 ```
 
-`message_log` mirrors it through its parent, since it has no `user_id`:
+### `google_oauth_tokens` is excluded, on purpose
+
+This was nearly a mistake. That table stores `refresh_token`, which is a live
+credential: anyone who can read it can act as that person against their Google
+Calendar indefinitely, and keep doing so after they leave. A manager who wants
+to know whether somebody's calendar is syncing has no business holding the key
+to it.
+
+So it goes the other way — **tightened**, not loosened:
+
+```sql
+using (org_id in (select public.user_org_ids()) and user_id = auth.uid())
+```
+
+Today that changes nothing, because the only member of each org is the owner of
+the credential. It matters the moment step 3 runs.
+
+The team view still needs `last_sync` to report sync health, and it currently
+reads that table directly in `loadTeamRows` — so under this policy it would
+report every teammate as "no calendar connected", which is the silent failure
+this whole plan is trying to avoid. That needs a narrow `security definer`
+function returning only `user_id`, `calendar_id` and `last_sync` for managed
+orgs, and `loadTeamRows` pointed at it instead. Do that in the same step, not
+afterwards.
+
+`message_log` mirrors the rule through its parent, since it has no `user_id`:
 
 ```sql
 using (exists (
