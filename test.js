@@ -6862,6 +6862,42 @@ console.log('\n--- the team view ---');
       'the tab never explains that the history is missing');
   });
 
+  test('show-up rate divides by calls that reached a yes or no', () => {
+    /* Deliberately a different question from the completion rate, which
+       divides by every logged call including reschedules and closures. "Did
+       they turn up" only makes sense over calls that actually resolved into
+       came or did-not. */
+    const m = GB.teamMemberState(row({pastCalls:144, unlogged:1, completed:49, noshows:67}), now);
+    assert.strictEqual(m.decidedCalls, 116);
+    assert.strictEqual(m.showUpRate, 42, '49 of 116 decided');
+    assert.strictEqual(m.completionRate, 34, 'and 49 of 143 logged, which is a different figure');
+  });
+
+  test('show-up is refused on the same terms as everything else', () => {
+    // Somebody with no logged outcomes must not read as 0% attendance.
+    const none = GB.teamMemberState(row({pastCalls:117, unlogged:117, completed:0, noshows:0}), now);
+    assert.strictEqual(none.showUpRate, null);
+    assert.strictEqual(none.decidedCalls, 0);
+    // And a handful of decided calls is not a rate either.
+    const few = GB.teamMemberState(row({pastCalls:20, unlogged:13, completed:5, noshows:1}), now);
+    assert.strictEqual(few.showUpRate, null, 'six decided calls is not an attendance rate');
+  });
+
+  test('touches per call is reported as activity, never as a cause', () => {
+    /* Three quarters of logged calls on this book have no recorded touch at
+       all, so there is nowhere near enough to claim contact drives
+       attendance. The figure is still worth showing as activity — it just
+       must not be presented as an explanation. */
+    const m = GB.teamMemberState(row({pastCalls:144, unlogged:1, touchesBeforeCall:130}), now);
+    assert.strictEqual(m.touchesPerCall, 0.9);
+    assert.strictEqual(GB.teamMemberState(row({pastCalls:0}), now).touchesPerCall, null);
+
+    const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+    const block = logic.slice(logic.indexOf('touchesPerCall:') - 400, logic.indexOf('touchesPerCall:'));
+    assert.ok(/not cause|Activity, not cause/i.test(block),
+      'the comment no longer warns that this is not a causal figure');
+  });
+
   test('an empty team does not throw', () => {
     const o = GB.teamOverview([], now);
     assert.deepStrictEqual(o.members, []);

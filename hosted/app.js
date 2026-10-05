@@ -277,8 +277,8 @@ function renderTeamTab(){
   if(o.unlogged){
     box.appendChild(h('p',{class:'team-lead team-coverage'},[
       o.unlogged + ' finished ' + (o.unlogged === 1 ? 'call has' : 'calls have') +
-      ' no outcome recorded, so results are only measurable for ' +
-      o.measurable + ' of ' + o.total + '.'
+      ' no outcome recorded, so show-up rates are only measurable for ' +
+      o.showUpMeasurable + ' of ' + o.total + '.'
     ]));
   }
 
@@ -305,6 +305,19 @@ function renderTeamTab(){
           h('span',{class:'team-trend ' + (m.trend > 0 ? 'up' : 'down'),
                     title:'versus the previous 7 days'},
             [(m.trend > 0 ? '\u2191' : '\u2193') + Math.abs(m.trend)])
+      ]),
+      h('div',{},[
+        /* Did they turn up. The number a manager actually asks for, kept
+           separate from "completed" because that divides by every logged
+           call including reschedules; this divides only by calls that
+           reached came-or-did-not. */
+        m.showUpRate === null
+          ? h('span',{class:'unknown',
+                      title: m.unlogged
+                        ? m.unlogged + ' finished calls have no outcome recorded'
+                        : 'not enough decided calls yet'},['\u2014'])
+          : h('b',{title: m.decidedCalls + ' calls reached a yes or no'},[m.showUpRate + '%']),
+        m.showUpRate === null ? '' : 'showed up'
       ]),
       h('div',{},[
         m.completionRate === null

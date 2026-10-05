@@ -112,7 +112,7 @@ async function loadTeamRows(sb, uid){
       .select('id, user_id, name, call_date_time, status, created_at, ignored');
     if(cRes.error || !cRes.data) return [];
 
-    var ownerOf = {}, agg = {};
+    var ownerOf = {}, callTimeOf = {}, agg = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
@@ -121,7 +121,7 @@ async function loadTeamRows(sb, uid){
            somebody is sitting on rather than only how many. Deliberately only
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
-        sentPrev7d:0, pastCalls:0, unlogged:0,
+        sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0,
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -152,6 +152,7 @@ async function loadTeamRows(sb, uid){
          nobody recorded the outcome of. It is the denominator for every
          performance figure on this screen, so it is counted rather than
          assumed. */
+      if(!isNaN(t)) callTimeOf[c.id] = t;
       if(!isNaN(t) && t < now){
         b.pastCalls++;
         if(c.status === 'Booked' || c.status === 'Confirmed' || c.status === 'Reminded') b.unlogged++;
@@ -176,6 +177,11 @@ async function loadTeamRows(sb, uid){
       else if(now - t <= 14 * 86400000) b.sentPrev7d++;
       if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
+      /* Touches that landed BEFORE the call, which is the only kind that can
+         affect whether somebody turns up. Counted as activity, not as a
+         claim about cause. */
+      var ct = callTimeOf[m.client_id];
+      if(ct && t < ct) b.touchesBeforeCall++;
     });
 
     /* Sync health comes through a function, not the table.

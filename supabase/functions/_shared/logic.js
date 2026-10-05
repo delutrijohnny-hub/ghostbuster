@@ -3852,6 +3852,7 @@ function teamMemberState(m, now){
   var ratesTrustworthy = logged >= TEAM_MIN_LOGGED && coverage >= TEAM_MIN_COVERAGE;
   var completed = Number(m.completed) || 0;
   var noshows = Number(m.noshows) || 0;
+  var decided = completed + noshows;   // calls that reached came-or-did-not
   var prev = Number(m.sentPrev7d) || 0;
   var awayDays = (function(){
     var t = m.lastSignIn ? Date.parse(m.lastSignIn) : NaN;
@@ -3974,6 +3975,17 @@ function teamMemberState(m, now){
        "not enough logged" rather than printing a zero. */
     completionRate: ratesTrustworthy ? Math.round(100 * completed / logged) : null,
     noShowRate: ratesTrustworthy ? Math.round(100 * noshows / logged) : null,
+    /* Did they turn up? Deliberately a different question from the completion
+       rate above, which divides by every logged call including reschedules
+       and closures. This divides by calls that actually reached a yes-or-no:
+       they came, or they did not. */
+    showUpRate: (decided >= TEAM_MIN_LOGGED && ratesTrustworthy)
+      ? Math.round(100 * completed / decided) : null,
+    decidedCalls: decided,
+    /* Average touches landing before the call. Activity, not cause: on this
+       book three quarters of logged calls have no recorded touch at all, so
+       there is nowhere near enough to claim contact drives attendance. */
+    touchesPerCall: pastCalls ? Math.round(10 * (Number(m.touchesBeforeCall) || 0) / pastCalls) / 10 : null,
     todayUntouched: todayUntouched,
     sentPrev7d: prev,
     /* Direction, not a percentage. A manager wants to know whether last
@@ -4032,6 +4044,7 @@ function teamOverview(rows, now){
     todayUntouched: members.reduce(function(n, m){ return n + m.todayUntouched; }, 0),
     unlogged: members.reduce(function(n, m){ return n + m.unlogged; }, 0),
     measurable: members.filter(function(m){ return m.completionRate !== null; }).length,
+    showUpMeasurable: members.filter(function(m){ return m.showUpRate !== null; }).length,
     // Booked work nobody has spoken to, across the whole team.
     untouched: members.reduce(function(n, m){ return n + m.untouched; }, 0),
     replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length
