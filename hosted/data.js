@@ -90,7 +90,7 @@ async function loadTeamRows(sb, uid){
            somebody is sitting on rather than only how many. Deliberately only
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
-        upcomingList: []};
+        upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
     Object.keys(peers).forEach(bucket);
@@ -146,6 +146,21 @@ async function loadTeamRows(sb, uid){
       b.connectedCalendars++;
       var t = r.last_sync ? Date.parse(r.last_sync) : NaN;
       if(!isNaN(t) && (b.lastSync === null || t > Date.parse(b.lastSync))) b.lastSync = r.last_sync;
+    });
+
+    /* When each person last opened the app.
+
+       Without this a manager cannot tell "ignoring their list" from "has not
+       logged in for twelve days", and those need opposite conversations.
+       auth.users is unreachable from the browser, so this comes through a
+       function that returns two timestamps and nothing else — no email, no
+       phone, no provider identity. */
+    var aRes = await sb.rpc('team_sign_in_activity');
+    ((aRes && aRes.data) || []).forEach(function(r){
+      var b = agg[r.user_id];
+      if(!b) return;
+      b.lastSignIn = r.last_sign_in || null;
+      b.signedUp = r.signed_up || null;
     });
 
     return Object.keys(agg).map(function(u){

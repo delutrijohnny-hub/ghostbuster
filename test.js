@@ -6591,6 +6591,60 @@ console.log('\n--- the team view ---');
     assert.ok(/nothing sent/.test(fn), 'an untouched appointment is not called out');
   });
 
+  test('not logging in is told apart from ignoring the list', () => {
+    /* The whole reason for the sign-in data. Chase has logged in and sent
+       nothing; Ethan.M has not opened the app for twelve days. Same zero in
+       the sent column, opposite conversations — and telling somebody off for
+       ignoring a tool they could not get into is the worst version of this
+       feature. */
+    // Dates are relative to this block's fixed `now` of 2 Oct, not to today.
+    const away = GB.teamMemberState(row({sent7d:0, sentEver:0, upcoming:7,
+      lastSignIn:'2026-09-23T12:00:00Z'}), now);
+    assert.strictEqual(away.state, 'not logging in');
+    assert.strictEqual(away.daysSinceSignIn, 9);
+    assert.ok(/9 days/.test(away.why), away.why);
+
+    const present = GB.teamMemberState(row({sent7d:0, sentEver:0, upcoming:7,
+      lastSignIn:'2026-09-30T12:00:00Z'}), now);
+    assert.strictEqual(present.state, 'never started',
+      'somebody who signs in and sends nothing is not an access problem');
+    assert.strictEqual(present.daysSinceSignIn, 2);
+  });
+
+  test('a broken calendar still outranks not logging in', () => {
+    // If the sync is dead, that is the thing to fix regardless of whether
+    // they have been in. Order matters: fix the cause, not the symptom.
+    const m = GB.teamMemberState(row({sent7d:0, sentEver:0,
+      lastSync:'2026-09-29T16:00:00Z', lastSignIn:'2026-09-23T12:00:00Z'}), now);
+    assert.strictEqual(m.state, 'sync broken');
+  });
+
+  test('an unknown sign-in time is unknown, not zero', () => {
+    const m = GB.teamMemberState(row({}), now);
+    assert.strictEqual(m.daysSinceSignIn, null,
+      'a missing sign-in time must not read as "in today"');
+  });
+
+  test('the sign-in function gives up two timestamps and nothing else', () => {
+    const dir = path.join(__dirname, 'supabase', 'migrations');
+    const f = fs.readdirSync(dir).find(x => x.includes('team_sign_in_activity'));
+    assert.ok(f, 'the migration is missing');
+    const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+    const body = sql.slice(sql.indexOf('create or replace function'));
+    const code = body.replace(/--[^\n]*/g, '');
+    /* auth.users holds email, phone, password hashes and recovery tokens. A
+       manager seeing a colleague's sign-in time is reasonable; pulling their
+       recovery address out of the CRM is not. */
+    ['email', 'phone', 'encrypted_password', 'recovery', 'confirmation_token', 'raw_user_meta']
+      .forEach(w => assert.ok(code.indexOf(w) === -1,
+        'the sign-in function can return ' + w));
+    assert.ok(/security\s+definer/i.test(code), 'it cannot read auth.users without this');
+    assert.ok(/user_managed_org_ids/.test(code), 'it is not scoped to managed orgs');
+    assert.ok(/u\.id = auth\.uid\(\)/.test(code), 'it does not let somebody see their own');
+    assert.ok(/revoke all on function public\.team_sign_in_activity\(\) from anon/.test(sql),
+      'anon is not revoked from a definer function that reads auth.users');
+  });
+
   test('an empty team does not throw', () => {
     const o = GB.teamOverview([], now);
     assert.deepStrictEqual(o.members, []);

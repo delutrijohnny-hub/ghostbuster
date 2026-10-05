@@ -141,8 +141,18 @@ window.GB_ON_SAVE_HEALTH = function(health){
 
 var TEAM_STATE_CLASS = {
   'never started':'s-never', 'gone quiet':'s-quiet', 'sync broken':'s-sync',
-  'needs calendar':'s-sync', 'not set up':'s-setup', 'working':'s-ok'
+  'not logging in':'s-never', 'needs calendar':'s-sync', 'not set up':'s-setup',
+  'working':'s-ok'
 };
+
+// "last in 12d" next to the name answers the question the counts raise:
+// is this person ignoring their list, or not getting into the app at all?
+function lastSeenLabel(days){
+  if(days === null || days === undefined) return '';
+  if(days <= 0) return 'in today';
+  if(days === 1) return 'in yesterday';
+  return 'last in ' + days + 'd ago';
+}
 
 /* The team view.
 
@@ -217,7 +227,10 @@ function renderTeamTab(){
         h('span',{class:'team-name'},[
           m.queue.length ? (open ? '\u25be ' : '\u25b8 ') : '', m.name
         ]),
-        h('span',{class:'team-why'},[m.why])
+        h('span',{class:'team-why'},[m.why]),
+        m.daysSinceSignIn === null ? '' :
+          h('span',{class:'team-seen' + (m.daysSinceSignIn >= 7 ? ' is-away' : '')},
+            [lastSeenLabel(m.daysSinceSignIn)])
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
       h('div',{class:'team-nums'}, nums)

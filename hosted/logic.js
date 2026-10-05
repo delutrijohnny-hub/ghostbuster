@@ -3815,6 +3815,7 @@ function schedulingStatus(state){
    whether their calendar is green. */
 
 var TEAM_IDLE_DAYS = 7;          // no send in this long, having sent before
+var TEAM_AWAY_DAYS = 7;          // not opened the app in this long
 var TEAM_BACKLOG_UPCOMING = 5;   // enough booked work that silence is notable
 
 /* Reply rate is NOT computed per person, and that is the point.
@@ -3839,6 +3840,10 @@ function teamReplyRate(m){
 
 function teamMemberState(m, now){
   var at = now ? now.getTime() : Date.now();
+  var awayDays = (function(){
+    var t = m.lastSignIn ? Date.parse(m.lastSignIn) : NaN;
+    return isNaN(t) ? null : Math.floor((at - t) / 86400000);
+  })();
   var contacts = Number(m.contacts) || 0;
   var upcoming = Number(m.upcoming) || 0;
   var sentEver = Number(m.sentEver) || 0;
@@ -3866,6 +3871,14 @@ function teamMemberState(m, now){
   } else if(cal === 'stale'){
     state = 'sync broken';
     why = 'Their calendar stopped syncing, so new bookings are not arriving.';
+  } else if(awayDays !== null && awayDays >= TEAM_AWAY_DAYS && (!sent7d)){
+    /* Checked before the "never started" and "gone quiet" cases below,
+       because it is the reason for them. Telling somebody they are ignoring
+       their list when they have not been able to open it for a fortnight is
+       the wrong conversation, had badly. */
+    state = 'not logging in';
+    why = 'Has not opened Ghost Recall for ' + awayDays + ' days'
+        + (upcoming ? ', with ' + upcoming + ' booked.' : '.');
   } else if(!sentEver && upcoming >= TEAM_BACKLOG_UPCOMING){
     state = 'never started';
     why = upcoming + ' booked and not one message sent.';
@@ -3908,6 +3921,13 @@ function teamMemberState(m, now){
     upcoming: upcoming,
     queue: queue,
     untouched: untouched,
+    /* Days since they last opened the app, which separates "ignoring the
+       list" from "cannot get in" — opposite conversations. null means we
+       genuinely do not know rather than zero. */
+    daysSinceSignIn: (function(){
+      var t = m.lastSignIn ? Date.parse(m.lastSignIn) : NaN;
+      return isNaN(t) ? null : Math.floor((at - t) / 86400000);
+    })(),
     sent7d: sent7d,
     sentEver: sentEver,
     completed: Number(m.completed) || 0,
@@ -3921,8 +3941,8 @@ function teamMemberState(m, now){
   };
 }
 
-var TEAM_STATE_ORDER = ['never started', 'sync broken', 'gone quiet',
-                        'needs calendar', 'not set up', 'working'];
+var TEAM_STATE_ORDER = ['never started', 'not logging in', 'sync broken',
+                        'gone quiet', 'needs calendar', 'not set up', 'working'];
 
 function teamOverview(rows, now){
   var members = (rows || []).map(function(m){ return teamMemberState(m, now); });
@@ -4959,7 +4979,7 @@ var __LOGIC_EXPORTS__ = {
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,
   teamOverview: teamOverview, teamMemberState: teamMemberState, teamReplyRate: teamReplyRate,
   platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
-  TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
+  TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
   recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,
