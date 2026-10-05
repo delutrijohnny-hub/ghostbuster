@@ -271,7 +271,15 @@ function renderTeamTab(){
           h('span',{class:'tq-when'},[fmtDayTime(q.when)]),
           h('span',{class:'tq-name'},[q.name]),
           h('span',{class:'tq-status'},[q.status]),
-          h('span',{class:'tq-sent'},[q.untouched ? 'nothing sent' : q.sent + ' sent'])
+          h('span',{class:'tq-sent'},[q.untouched ? 'nothing sent' : q.sent + ' sent']),
+          /* Only offered on somebody else's row, and only where nothing has
+             been sent yet. Taking a call a colleague has already started a
+             conversation on would cut across them mid-thread. */
+          (m.userId && m.userId !== STATE.userId && q.untouched)
+            ? h('button',{class:'btn btn-sm tq-take','data-action':'team-take',
+                          'data-cid':q.clientId,'data-who':m.name,
+                          title:'Move this appointment to you'},['Take'])
+            : h('span',{class:'tq-take-gap'},[''])
         ]));
       });
       box.appendChild(list);
@@ -3380,6 +3388,27 @@ document.addEventListener('click', function(ev){
       STATE.emailLibrary.push(fresh);
       LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
       renderEmailLibrary();
+      break;
+    }
+    case 'team-take': {
+      var takeId = target.getAttribute('data-cid');
+      var takeFrom = target.getAttribute('data-who');
+      if(!takeId) break;
+      target.disabled = true;
+      target.textContent = '...';
+      reassignClient(takeId, STATE.userId).then(function(r){
+        if(!r.ok){
+          showToast('Could not move it: ' + (r.error || 'refused'));
+          target.disabled = false;
+          target.textContent = 'Take';
+          return;
+        }
+        showToast('Moved from ' + takeFrom + ' to you.');
+        /* A full reload rather than patching two lists in memory: the contact
+           has to leave their team row AND appear in your own queue, and the
+           cadence has to recompute against you as the owner. */
+        init();
+      });
       break;
     }
     case 'team-toggle': {

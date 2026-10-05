@@ -47,6 +47,37 @@ function deriveSenderName(email){
    is a nice-to-have; the email library taught this codebase once already that
    a secondary panel which throws takes the whole app down with it, and nobody
    should lose their morning list because a manager widget could not load. */
+/* Move one appointment to a different person on the team.
+
+   The case this exists for: somebody has booked calls in the diary and has
+   not opened the app for a fortnight. The calls happen regardless. A manager
+   needs to hand them to whoever will actually make them, and until now the
+   team view could only report the problem.
+
+   Deliberately NOT part of saveState. That path diffs STATE.clients, which
+   holds only the signed-in person's own contacts — a teammate's row is not in
+   it and never will be. So this is a direct, single-row write, and the caller
+   reloads afterwards rather than trying to patch two lists in memory.
+
+   Security is left entirely to RLS: the policy allows a write only where the
+   row is yours or sits in an organisation you manage. A member who tries this
+   on somebody else's contact gets nothing back and nothing changes. The
+   org_id is untouched because both people are in the same organisation —
+   moving work across organisations is a different question with a different
+   answer. */
+async function reassignClient(clientId, toUserId){
+  var sb = window.GB_SUPABASE;
+  if(!clientId || !toUserId) return {ok:false, error:'missing id'};
+  var res = await sb.from('clients')
+    .update({user_id: toUserId, updated_at: new Date().toISOString()})
+    .eq('id', clientId)
+    .select('id');
+  if(res.error) return {ok:false, error: res.error.message || String(res.error)};
+  // RLS refusing shows up as zero rows, not as an error.
+  if(!res.data || !res.data.length) return {ok:false, error:'not allowed'};
+  return {ok:true};
+}
+
 async function loadTeamRows(sb, uid){
   try{
     var memRes = await sb.from('memberships').select('org_id, user_id, role');
@@ -254,6 +285,9 @@ async function loadState(){
       }) : [];
 
   var state = {
+    // Who is signed in. Needed by the team view to tell your own row from a
+    // colleague's, and to know who an appointment is being moved to.
+    userId: uid,
     clients: {},
     variants: {},
     emailVariants: {},

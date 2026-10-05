@@ -5801,11 +5801,15 @@ function makeLoadCtx(tableResults){
       Object.prototype.hasOwnProperty.call(results, name) ? results[name] : {data: [], error: null});
     const chain = {
       eq(){ return chain; }, order(){ return chain; }, not(){ return chain; },
+      // update().eq().select() has to resolve the same way a read does, or
+      // reassignClient cannot be tested at all.
+      select(){ return chain; },
       maybeSingle(){ return res(); },
       then(ok, bad){ return res().then(ok, bad); }
     };
     return {select(){ return chain; },
             insert(){ return {select(){ return chain; }, then(ok,bad){ return res().then(ok,bad); }}; },
+            update(){ return chain; },
             upsert(){ return chain; }, delete(){ return chain; }};
   }
   function rpc(name){
@@ -6580,6 +6584,25 @@ console.log('\n--- the team view ---');
       'a contact name reached the platform overview');
   });
 
+  test('Take is offered only on a colleague\'s untouched appointment', () => {
+    /* Three conditions, each for a reason: not your own row (you cannot take
+       from yourself), nothing sent yet (taking a call somebody has already
+       started a conversation on cuts across them mid-thread), and only where
+       the owner is known. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    const cond = fn.slice(fn.indexOf("'team-take'") - 400, fn.indexOf("'team-take'"));
+    assert.ok(/m\.userId !== STATE\.userId/.test(cond),
+      'Take appears on your own row');
+    assert.ok(/q\.untouched/.test(cond),
+      'Take appears on an appointment somebody has already messaged about');
+    assert.ok(/case 'team-take'/.test(app), 'the Take button has no handler');
+    assert.ok(/init\(\)/.test(app.slice(app.indexOf("case 'team-take'"),
+                                        app.indexOf("case 'team-toggle'"))),
+      'nothing reloads after a move, so the contact would sit in both lists');
+  });
+
   test('the team tab can open a person, and only when there is something to show', () => {
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     const fn = app.slice(app.indexOf('function renderTeamTab()'),
@@ -6870,6 +6893,37 @@ test('a manager gets a row per person, aggregated from the visible rows', async 
   assert.strictEqual(byName.ethan.noshows, 1);
   assert.strictEqual(byName.johnny.sent7d, 1);
   assert.strictEqual(byName.johnny.connectedCalendars, 1);
+});
+
+test('taking an appointment reports refusal honestly', async () => {
+  /* RLS refusing a write shows up as ZERO ROWS, not as an error. If that is
+     read as success the manager is told the call was moved while it sits
+     exactly where it was — the worst kind of wrong, because they stop
+     worrying about it. */
+  const ok = makeLoadCtx({ clients: {data: [{id:'c1'}], error: null} });
+  assert.deepStrictEqual(
+    await ok.run('reassignClient("c1","u1").then(r => JSON.stringify(r))').then(JSON.parse),
+    {ok: true});
+
+  const refused = makeLoadCtx({ clients: {data: [], error: null} });
+  const r = JSON.parse(await refused.run('reassignClient("c1","u1").then(r => JSON.stringify(r))'));
+  assert.strictEqual(r.ok, false, 'an empty result was treated as a successful move');
+  assert.strictEqual(r.error, 'not allowed');
+
+  const broke = makeLoadCtx({ clients: {data: null, error: {message: 'boom'}} });
+  const b = JSON.parse(await broke.run('reassignClient("c1","u1").then(r => JSON.stringify(r))'));
+  assert.strictEqual(b.ok, false);
+  assert.strictEqual(b.error, 'boom');
+
+  const missing = JSON.parse(await ok.run('reassignClient(null,"u1").then(r => JSON.stringify(r))'));
+  assert.strictEqual(missing.ok, false, 'a missing id should not reach the database');
+});
+
+test('loadState says who is signed in', async () => {
+  // The team view needs it to tell your own row from a colleague's.
+  const d = makeLoadCtx({});
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.userId, 'u1');
 });
 
 test('an ignored contact is not counted as work', async () => {
