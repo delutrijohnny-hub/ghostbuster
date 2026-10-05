@@ -78,7 +78,7 @@ async function loadTeamRows(sb, uid){
     });
 
     var cRes = await sb.from('clients')
-      .select('id, user_id, name, call_date_time, status, created_at');
+      .select('id, user_id, name, call_date_time, status, created_at, ignored');
     if(cRes.error || !cRes.data) return [];
 
     var ownerOf = {}, agg = {};
@@ -99,6 +99,11 @@ async function loadTeamRows(sb, uid){
     cRes.data.forEach(function(c){
       ownerOf[c.id] = c.user_id;
       var b = bucket(c.user_id);
+      /* An ignored contact is not work, so it must not read as a booked
+         appointment nobody has spoken to. Zachary had 132 occurrences of one
+         standing meeting marked ignored; counting them would have shown him
+         sitting on 137 untouched calls when the real figure is 10. */
+      if(c.ignored) return;
       b.contacts++;
       var t = c.call_date_time ? Date.parse(c.call_date_time) : NaN;
       if(!isNaN(t) && t >= now){

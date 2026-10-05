@@ -6872,6 +6872,35 @@ test('a manager gets a row per person, aggregated from the visible rows', async 
   assert.strictEqual(byName.johnny.connectedCalendars, 1);
 });
 
+test('an ignored contact is not counted as work', async () => {
+  /* Zachary had 132 occurrences of one standing meeting marked ignored to get
+     them out of his queue. If the team view still counted them he would read
+     as sitting on 137 untouched appointments when the real number is 10 —
+     the manager tab confidently pointing at the wrong person. */
+  const soon = new Date(Date.now() + 2*86400000).toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'mm', user_id:'u1', role:'admin'},
+      {org_id:'mm', user_id:'u2', role:'member'}
+    ], error: null},
+    organizations: {data: [{id:'mm', name:'Market Maker Management'}], error: null},
+    app_settings: {data: [{user_id:'u1', sender_name:'Johnny'},
+                          {user_id:'u2', sender_name:'Zachary'}], error: null},
+    clients: {data: [
+      {id:'real',   user_id:'u2', name:'Dana',    call_date_time: soon, status:'Booked'},
+      {id:'junk1',  user_id:'u2', name:'Standing', call_date_time: soon, status:'Booked', ignored:true},
+      {id:'junk2',  user_id:'u2', name:'Standing', call_date_time: soon, status:'Booked', ignored:true}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const z = rows.filter(r => r.name === 'Zachary')[0];
+  assert.ok(z, 'Zachary missing from the team');
+  assert.strictEqual(z.contacts, 1, 'ignored contacts counted toward the total');
+  assert.strictEqual(z.upcoming, 1, 'ignored contacts counted as booked work');
+  assert.strictEqual(z.upcomingList.length, 1, 'ignored contacts listed in the queue');
+  assert.strictEqual(z.upcomingList[0].name, 'Dana');
+});
+
 test('a reply rate is claimed only where a reply was actually seen', async () => {
   /* Zero recorded replies is genuinely ambiguous — nobody answered, or nobody
      ever reconciled them. The loader must not resolve that ambiguity in
