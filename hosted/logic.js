@@ -3962,6 +3962,21 @@ function teamMemberState(m, now){
     untouched: untouched,
     pastCalls: pastCalls,
     unlogged: unlogged,
+    /* Has this person ever used Ghost Recall for anything — sent a message or
+       recorded an outcome?
+
+       Somebody who has not is an onboarding question, not a performance one,
+       and mixing the two makes the screen useless. Three of six accounts have
+       never tracked a thing, and ranked by booked work they sit at the top of
+       the list every day, pushing the people who ARE using it out of view.
+       Nothing is hidden: they get their own group, with their counts, below
+       the team being managed.
+
+       The bar is a sent message, or outcomes logged across a real share of
+       their calls. Any-trace-at-all was too lenient: Chase has logged five
+       outcomes out of seventy-eight, which is not somebody tracking their
+       work, it is somebody who clicked something once in September. */
+    adopted: (sentEver > 0) || (pastCalls > 0 && coverage >= TEAM_MIN_COVERAGE),
     /* How much of this person's history is actually known.
 
        Every performance figure divides by calls whose outcome was recorded,
@@ -4017,7 +4032,13 @@ var TEAM_STATE_ORDER = ['never started', 'not logging in', 'sync broken',
                         'gone quiet', 'needs calendar', 'not set up', 'working'];
 
 function teamOverview(rows, now){
-  var members = (rows || []).map(function(m){ return teamMemberState(m, now); });
+  var all = (rows || []).map(function(m){ return teamMemberState(m, now); });
+
+  /* The headline figures describe the team being managed. Counting people who
+     have never used the product at all would make every number a statement
+     about adoption wearing performance's clothes. */
+  var members = all.filter(function(m){ return m.adopted; });
+  var notStarted = all.filter(function(m){ return !m.adopted; });
 
   members.sort(function(a, b){
     var ra = TEAM_STATE_ORDER.indexOf(a.state), rb = TEAM_STATE_ORDER.indexOf(b.state);
@@ -4027,12 +4048,19 @@ function teamOverview(rows, now){
     return String(a.name).localeCompare(String(b.name));
   });
 
+  notStarted.sort(function(a, b){ return b.upcoming - a.upcoming; });
+
   var working = members.filter(function(m){ return m.state === 'working'; });
   var idle = members.filter(function(m){ return m.needsAttention; });
   var strandedWork = idle.reduce(function(n, m){ return n + m.upcoming; }, 0);
 
   return {
     members: members,
+    notStarted: notStarted,
+    /* Booked work sitting with people who have never used the product. Real,
+       and worth a line, but a different problem from the team's own backlog
+       so it is counted apart rather than folded in. */
+    notStartedUpcoming: notStarted.reduce(function(n, m){ return n + m.upcoming; }, 0),
     total: members.length,
     working: working.length,
     needsAttention: idle.length,

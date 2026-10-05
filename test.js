@@ -6451,10 +6451,12 @@ console.log('\n--- the team view ---');
   });
 
   test('the worst problem is listed first, measured by booked work going cold', () => {
+    // All three have used the product, or they would be split out below as
+    // an onboarding problem rather than ranked as a performance one.
     const o = GB.teamOverview([
-      row({name:'works',  sent7d:18, sentEver:19, upcoming:26}),
-      row({name:'small',  sent7d:0, sentEver:0, upcoming:4}),
-      row({name:'big',    sent7d:0, sentEver:0, upcoming:135}),
+      row({name:'works',  sent7d:18, sentEver:19,  upcoming:26}),
+      row({name:'small',  sent7d:0,  sentEver:40,  upcoming:4}),
+      row({name:'big',    sent7d:0,  sentEver:40,  upcoming:135}),
     ], now);
     assert.deepStrictEqual(o.members.map(m => m.name), ['big', 'small', 'works']);
     assert.strictEqual(o.working, 1);
@@ -6492,7 +6494,7 @@ console.log('\n--- the team view ---');
     const o = GB.teamOverview([
       row({name:'a', repliesMeasured:true, sentEver:100, replies:11}),
       row({name:'b', repliesMeasured:false, sentEver:19}),
-      row({name:'c', repliesMeasured:false, sentEver:0}),
+      row({name:'c', repliesMeasured:false, sentEver:3}),
     ], now);
     assert.strictEqual(o.replyRateMeasuredFor, 1);
     assert.strictEqual(o.total, 3);
@@ -6794,7 +6796,7 @@ console.log('\n--- the team view ---');
     const o = GB.teamOverview([
       row({name:'a', sent7d:49, sentEver:800, lastSync: fresh(at), upcomingList:[
         {clientId:'x', name:'Pat', when: dayAt(at, 13), sent:0}]}),
-      row({name:'b', sent7d:0, sentEver:0, lastSync: fresh(at), upcomingList:[
+      row({name:'b', sent7d:0, sentEver:40, lastSync: fresh(at), upcomingList:[
         {clientId:'y', name:'Dana', when: dayAt(at, 15), sent:0}]})
     ], at);
     assert.strictEqual(o.todayUntouched, 2,
@@ -6896,6 +6898,49 @@ console.log('\n--- the team view ---');
     const block = logic.slice(logic.indexOf('touchesPerCall:') - 400, logic.indexOf('touchesPerCall:'));
     assert.ok(/not cause|Activity, not cause/i.test(block),
       'the comment no longer warns that this is not a causal figure');
+  });
+
+  test('people who have never used it are split out, not ranked', () => {
+    /* Three of six accounts have never tracked anything. Ranked by booked
+       work they sat at the top of the list every day and buried the people
+       actually using the product — an onboarding problem wearing a
+       performance problem's clothes. */
+    const o = GB.teamOverview([
+      row({name:'uses it',   sent7d:18, sentEver:19, upcoming:11}),
+      row({name:'never has', sent7d:0,  sentEver:0,  upcoming:135, pastCalls:117, unlogged:117})
+    ], now);
+    assert.deepStrictEqual(o.members.map(m => m.name), ['uses it'],
+      'somebody who has never used it was ranked as a performance problem');
+    assert.deepStrictEqual(o.notStarted.map(m => m.name), ['never has']);
+    assert.strictEqual(o.total, 1, 'the headline counts the team being managed');
+    assert.strictEqual(o.notStartedUpcoming, 135,
+      'their booked work is still counted, just counted apart');
+  });
+
+  test('a handful of old clicks is not "using it"', () => {
+    /* Chase has logged five outcomes out of seventy-eight and sent nothing.
+       An any-trace-at-all test let him through as an adopted user, which put
+       him straight back at the top of the ranking. */
+    const barely = GB.teamMemberState(row({sentEver:0, pastCalls:78, unlogged:73}), now);
+    assert.strictEqual(barely.adopted, false, 'five logged outcomes out of 78 is not tracking');
+
+    const logsDiligently = GB.teamMemberState(row({sentEver:0, pastCalls:40, unlogged:4}), now);
+    assert.strictEqual(logsDiligently.adopted, true,
+      'somebody who logs outcomes properly is using it, even having sent nothing');
+
+    const sends = GB.teamMemberState(row({sentEver:3, pastCalls:0, unlogged:0}), now);
+    assert.strictEqual(sends.adopted, true, 'one sent message counts as using it');
+  });
+
+  test('the tab shows them rather than hiding them', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    assert.ok(/o\.notStarted\.length/.test(fn), 'the not-started group is never rendered');
+    assert.ok(/notStartedUpcoming/.test(fn),
+      'their booked work is not surfaced, so it would silently disappear');
+    assert.ok(fn.indexOf('o.notStarted.forEach') > fn.indexOf('o.members.forEach'),
+      'they must render below the team being managed, not above it');
   });
 
   test('an empty team does not throw', () => {

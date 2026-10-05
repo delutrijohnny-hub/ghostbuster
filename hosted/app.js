@@ -390,6 +390,40 @@ function renderTeamTab(){
     }
   });
 
+  /* People who have never used Ghost Recall, kept out of the ranking above.
+
+     They are an onboarding problem, not a performance one, and ranked by
+     booked work they would sit at the top every single day and bury the team
+     actually being managed. Shown, with their counts, so nothing is hidden —
+     just not treated as the same question. */
+  if(o.notStarted.length){
+    box.appendChild(h('div',{class:'team-notstarted-head'},[
+      'Not using it yet \u2014 ' + o.notStarted.length + ' ' +
+      (o.notStarted.length === 1 ? 'person' : 'people') +
+      (o.notStartedUpcoming
+        ? ', holding ' + o.notStartedUpcoming + ' booked ' +
+          (o.notStartedUpcoming === 1 ? termLower('appointment') : termLower('appointmentPlural'))
+        : '')
+    ]));
+    o.notStarted.forEach(function(m){
+      box.appendChild(h('div',{class:'team-row is-dormant'},[
+        h('div',{class:'team-who'},[
+          h('span',{class:'team-name'},[m.name]),
+          h('span',{class:'team-why'},[
+            m.daysSinceSignIn === null ? 'Never signed in.'
+              : m.daysSinceSignIn >= 7 ? 'Last opened the app ' + m.daysSinceSignIn + ' days ago.'
+              : 'Signing in, but has never sent or logged anything.'
+          ])
+        ]),
+        h('span',{class:'team-state s-setup'},['not started']),
+        h('div',{class:'team-nums'},[
+          h('div',{},[h('b',{},[String(m.upcoming)]), 'booked']),
+          h('div',{},[h('b',{},[String(m.unlogged)]), 'unlogged'])
+        ])
+      ]));
+    });
+  }
+
   if(o.replyRateMeasuredFor < o.total){
     box.appendChild(h('div',{class:'team-note'},[
       'Reply rate is only shown for the ' + o.replyRateMeasuredFor + ' of ' + o.total +
