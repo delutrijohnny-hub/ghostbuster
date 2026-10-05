@@ -3883,11 +3883,31 @@ function teamMemberState(m, now){
     why = sent7d + ' sent in the last ' + TEAM_IDLE_DAYS + ' days.';
   }
 
+  /* The appointments behind the number.
+
+     "Ethan has 11 booked and sent nothing" is a statistic. "Ethan has Dana on
+     Thursday and nobody has spoken to her" is something you act on, so the
+     list travels with the row and the untouched count is pulled out, because
+     that is the subset worth a conversation. */
+  var queue = (m.upcomingList || []).map(function(x){
+    return {
+      clientId: x.clientId || null,
+      name: x.name || 'Unknown',
+      when: x.when || null,
+      status: x.status || 'Booked',
+      sent: Number(x.sent) || 0,
+      untouched: (Number(x.sent) || 0) === 0
+    };
+  });
+  var untouched = queue.filter(function(x){ return x.untouched; }).length;
+
   return {
     id: m.id || null,
     name: m.name || m.email || 'Unknown',
     contacts: contacts,
     upcoming: upcoming,
+    queue: queue,
+    untouched: untouched,
     sent7d: sent7d,
     sentEver: sentEver,
     completed: Number(m.completed) || 0,

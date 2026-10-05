@@ -150,6 +150,19 @@ var TEAM_STATE_CLASS = {
    rows. A manager tab that appears for everybody and shows an empty table is
    worse than no tab: it reads as "your team has no activity" rather than
    "this is not for you". */
+var TEAM_OPEN = null;   // which teammate's queue is expanded
+
+// Day and time in the viewer's own zone. A manager is deciding whether to
+// chase somebody today, so the weekday matters more than the date.
+function fmtDayTime(iso){
+  var d = iso ? new Date(iso) : null;
+  if(!d || isNaN(d.getTime())) return 'no date';
+  try{
+    return new Intl.DateTimeFormat('en-US',
+      {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}).format(d);
+  }catch(e){ return d.toDateString(); }
+}
+
 function renderTeamTab(){
   var box = el('team-view');
   var btn = el('tab-btn-team');
@@ -197,14 +210,40 @@ function renderTeamTab(){
         m.replyRate === null ? '' : 'replies'
       ])
     ];
-    box.appendChild(h('div',{class:'team-row' + (m.needsAttention ? '' : ' is-ok')},[
+    var open = TEAM_OPEN === m.name;
+    var row = h('div',{class:'team-row' + (m.needsAttention ? '' : ' is-ok') + (m.queue.length ? ' can-open' : '') + (open ? ' is-open' : ''),
+                       'data-action': m.queue.length ? 'team-toggle' : '', 'data-who': m.name},[
       h('div',{class:'team-who'},[
-        h('span',{class:'team-name'},[m.name]),
+        h('span',{class:'team-name'},[
+          m.queue.length ? (open ? '\u25be ' : '\u25b8 ') : '', m.name
+        ]),
         h('span',{class:'team-why'},[m.why])
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
       h('div',{class:'team-nums'}, nums)
-    ]));
+    ]);
+    box.appendChild(row);
+
+    /* The appointments behind the number. "11 booked and nothing sent" is a
+       statistic; "Dana Reyes, Thursday, nobody has spoken to her" is something
+       you can act on, so the untouched ones are marked and listed first. */
+    if(open){
+      var list = h('div',{class:'team-queue'},[]);
+      if(m.untouched){
+        list.appendChild(h('div',{class:'team-queue-head'},[
+          m.untouched + ' of ' + m.queue.length + ' with nothing sent yet'
+        ]));
+      }
+      m.queue.forEach(function(q){
+        list.appendChild(h('div',{class:'tq-row' + (q.untouched ? ' tq-untouched' : '')},[
+          h('span',{class:'tq-when'},[fmtDayTime(q.when)]),
+          h('span',{class:'tq-name'},[q.name]),
+          h('span',{class:'tq-status'},[q.status]),
+          h('span',{class:'tq-sent'},[q.untouched ? 'nothing sent' : q.sent + ' sent'])
+        ]));
+      });
+      box.appendChild(list);
+    }
   });
 
   if(o.replyRateMeasuredFor < o.total){
@@ -3309,6 +3348,12 @@ document.addEventListener('click', function(ev){
       STATE.emailLibrary.push(fresh);
       LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
       renderEmailLibrary();
+      break;
+    }
+    case 'team-toggle': {
+      var who = target.getAttribute('data-who');
+      TEAM_OPEN = (TEAM_OPEN === who) ? null : who;
+      renderTeamTab();
       break;
     }
     case 'email-lib-starters': {

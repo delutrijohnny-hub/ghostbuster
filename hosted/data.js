@@ -78,14 +78,19 @@ async function loadTeamRows(sb, uid){
     });
 
     var cRes = await sb.from('clients')
-      .select('id, user_id, call_date_time, status, created_at');
+      .select('id, user_id, name, call_date_time, status, created_at');
     if(cRes.error || !cRes.data) return [];
 
     var ownerOf = {}, agg = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
-        rescheduled:0, connectedCalendars:0, lastSync:null, lastSentAt:null};
+        rescheduled:0, connectedCalendars:0, lastSync:null, lastSentAt:null,
+        /* The appointments behind the number, so a manager can see WHICH calls
+           somebody is sitting on rather than only how many. Deliberately only
+           on the team rows: the owner view looks at other businesses and must
+           never carry a contact's name. */
+        upcomingList: []};
       return agg[u];
     }
     Object.keys(peers).forEach(bucket);
@@ -96,11 +101,19 @@ async function loadTeamRows(sb, uid){
       var b = bucket(c.user_id);
       b.contacts++;
       var t = c.call_date_time ? Date.parse(c.call_date_time) : NaN;
-      if(!isNaN(t) && t >= now) b.upcoming++;
+      if(!isNaN(t) && t >= now){
+        b.upcoming++;
+        // A fortnight is as far as anybody acts on; beyond that it is noise.
+        if(t - now <= 14 * 86400000){
+          b.upcomingList.push({clientId: c.id, name: c.name || 'Unknown',
+                               when: c.call_date_time, status: c.status, sent: 0});
+        }
+      }
       if(c.status === 'Completed') b.completed++;
       if(c.status === 'No-show') b.noshows++;
     });
 
+    var sentPer = {};
     var mRes = await sb.from('message_log').select('client_id, sent_at, responded');
     ((mRes && mRes.data) || []).forEach(function(m){
       var u = ownerOf[m.client_id];
@@ -112,6 +125,7 @@ async function loadTeamRows(sb, uid){
       if(isNaN(t)) return;
       if(now - t <= 7 * 86400000) b.sent7d++;
       if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
+      sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
     });
 
     /* Sync health comes through a function, not the table.
@@ -137,6 +151,8 @@ async function loadTeamRows(sb, uid){
     return Object.keys(agg).map(function(u){
       var b = agg[u];
       b.name = nameFor[u] || b.name || 'teammate';
+      b.upcomingList.forEach(function(x){ x.sent = sentPer[x.clientId] || 0; });
+      b.upcomingList.sort(function(x, y){ return Date.parse(x.when) - Date.parse(y.when); });
       b.idleDays = b.lastSentAt === null ? null : Math.floor((now - b.lastSentAt) / 86400000);
       /* Only an account with at least one recorded reply can have a reply RATE.
          Zero recorded replies is genuinely ambiguous - nobody answered, or

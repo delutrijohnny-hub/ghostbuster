@@ -6538,6 +6538,59 @@ console.log('\n--- the team view ---');
     assert.ok(/renderTeamTab\(\)/.test(fn), 'renderAll never calls renderTeamTab');
   });
 
+  test('the appointments behind the number travel with the row', () => {
+    /* "11 booked and nothing sent" is a statistic. "Dana Reyes, Thursday,
+       nobody has spoken to her" is something a manager can act on. */
+    const m = GB.teamMemberState(row({sent7d:0, sentEver:0, upcoming:2, upcomingList:[
+      {clientId:'a', name:'Dana Reyes', when:'2026-10-08T15:00:00Z', status:'Booked', sent:0},
+      {clientId:'b', name:'Sam Okafor', when:'2026-10-09T16:00:00Z', status:'Confirmed', sent:2}
+    ]}), now);
+    assert.strictEqual(m.queue.length, 2);
+    assert.strictEqual(m.untouched, 1, 'only the one with no messages counts as untouched');
+    assert.strictEqual(m.queue[0].untouched, true);
+    assert.strictEqual(m.queue[1].untouched, false);
+  });
+
+  test('a member with no list still works', () => {
+    const m = GB.teamMemberState(row({}), now);
+    assert.deepStrictEqual(m.queue, []);
+    assert.strictEqual(m.untouched, 0);
+  });
+
+  test('the owner view still cannot see a single contact name', () => {
+    /* The boundary that now matters more, because team rows DO carry contact
+       names. Feed the owner view rows that contain a full queue and it must
+       throw every bit of it away: it looks at other businesses, and an
+       appointment list is exactly what it must never carry. */
+    const withQueue = {
+      name:'someone', signedUp:'2026-08-01', lastSignIn:'2026-10-02',
+      contacts:40, upcoming:2, sentEver:0, connectedCalendars:1,
+      lastSync:'2026-10-05T11:00:00Z',
+      upcomingList:[{clientId:'a', name:'Dana Reyes', when:'2026-10-08T15:00:00Z',
+                     status:'Booked', sent:0}]
+    };
+    const d = GB.accountDiagnosis(withQueue, now);
+    assert.ok(!('queue' in d), 'the owner diagnosis carried the appointment list through');
+    assert.ok(!('upcomingList' in d), 'the owner diagnosis kept the raw list');
+    assert.ok(JSON.stringify(d).indexOf('Dana') === -1,
+      'a contact name reached the owner view: ' + JSON.stringify(d));
+
+    const o = GB.platformOverview([withQueue], now);
+    assert.ok(JSON.stringify(o).indexOf('Dana') === -1,
+      'a contact name reached the platform overview');
+  });
+
+  test('the team tab can open a person, and only when there is something to show', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                         app.indexOf('\nfunction ', app.indexOf('function renderTeamTab()') + 10));
+    assert.ok(/'team-toggle'/.test(fn), 'nothing makes a row openable');
+    assert.ok(/m\.queue\.length \?/.test(fn),
+      'rows are made clickable even when the person has nothing booked');
+    assert.ok(/case 'team-toggle'/.test(app), 'the toggle has no handler');
+    assert.ok(/nothing sent/.test(fn), 'an untouched appointment is not called out');
+  });
+
   test('an empty team does not throw', () => {
     const o = GB.teamOverview([], now);
     assert.deepStrictEqual(o.members, []);
