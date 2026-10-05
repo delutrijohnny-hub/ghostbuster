@@ -6690,7 +6690,9 @@ test('a manager gets a row per person, aggregated from the visible rows', async 
       {org_id:'o2', user_id:'u2', role:'owner'},
       {org_id:'o2', user_id:'u1', role:'admin'}
     ], error: null},
-    organizations: {data: [{id:'o1', name:'johnny'}, {id:'o2', name:'ethan'}], error: null},
+    organizations: {data: [{id:'o1', name:'Market Maker Management'}], error: null},
+    app_settings: {data: [{user_id:'u1', sender_name:'johnny'},
+                          {user_id:'u2', sender_name:'ethan'}], error: null},
     clients: {data: [
       {id:'c1', user_id:'u1', call_date_time: soon, status:'Booked'},
       {id:'c2', user_id:'u2', call_date_time: soon, status:'Completed'},
@@ -6727,7 +6729,9 @@ test('a reply rate is claimed only where a reply was actually seen', async () =>
       {org_id:'o2', user_id:'u2', role:'owner'},
       {org_id:'o2', user_id:'u1', role:'admin'}
     ], error: null},
-    organizations: {data: [{id:'o1',name:'johnny'},{id:'o2',name:'ethan'}], error: null},
+    organizations: {data: [{id:'o1',name:'Market Maker Management'}], error: null},
+    app_settings: {data: [{user_id:'u1', sender_name:'johnny'},
+                          {user_id:'u2', sender_name:'ethan'}], error: null},
     clients: {data: [{id:'c1',user_id:'u1',status:'Booked'},{id:'c2',user_id:'u2',status:'Booked'}], error: null},
     message_log: {data: [
       {client_id:'c1', sent_at: now, responded: true},
@@ -6740,6 +6744,45 @@ test('a reply rate is claimed only where a reply was actually seen', async () =>
   assert.strictEqual(byName.ethan.repliesMeasured, false,
     'an account with no seen reply must not claim a measured rate');
   assert.strictEqual(GB.teamReplyRate(byName.ethan), null);
+});
+
+test('a shared organisation still gives everybody their own name', async () => {
+  /* The bug the org merge introduced, and the reason this test exists.
+
+     Names used to come from the organisation, which worked only while each
+     account sat alone in a one-person org named after them. The moment the
+     team shared one organisation, every row was labelled "Market Maker
+     Management" and the tab showed six identical people. Nothing failed; it
+     just quietly became useless. */
+  const now = new Date().toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'mm', user_id:'u1', role:'admin'},
+      {org_id:'mm', user_id:'u2', role:'member'},
+      {org_id:'mm', user_id:'u3', role:'member'}
+    ], error: null},
+    organizations: {data: [{id:'mm', name:'Market Maker Management'}], error: null},
+    // u3 never set a sender name, so it must fall back to the calendar.
+    app_settings: {data: [{user_id:'u1', sender_name:'Johnny'},
+                          {user_id:'u2', sender_name:'Ethan'},
+                          {user_id:'u3', sender_name:''}], error: null},
+    clients: {data: [{id:'c1', user_id:'u1', status:'Booked'},
+                     {id:'c2', user_id:'u2', status:'Booked'},
+                     {id:'c3', user_id:'u3', status:'Booked'}], error: null},
+    team_calendar_health: {data: [
+      {user_id:'u1', calendar_id:'john@marketmakermgmt.com', last_sync: now},
+      {user_id:'u2', calendar_id:'ethan@marketmakermgmt.com', last_sync: now},
+      {user_id:'u3', calendar_id:'zachary.l@marketmakermgmt.com', last_sync: now}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const names = rows.map(r => r.name).sort();
+  assert.strictEqual(new Set(names).size, 3,
+    'the team is not distinguishable: ' + JSON.stringify(names));
+  assert.ok(names.indexOf('Market Maker Management') === -1,
+    'somebody is labelled with the organisation name: ' + JSON.stringify(names));
+  assert.deepStrictEqual(names, ['Ethan', 'Johnny', 'zachary.l'],
+    'got ' + JSON.stringify(names));
 });
 
 test('a team view that cannot load costs a tab, never the app', async () => {

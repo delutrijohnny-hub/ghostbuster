@@ -58,21 +58,24 @@ async function loadTeamRows(sb, uid){
     mems.forEach(function(m){ peers[m.user_id] = true; });
     if(Object.keys(peers).length < 2) return [];
 
-    var orgRes = await sb.from('organizations').select('id, name');
-    var orgName = {};
-    ((orgRes && orgRes.data) || []).forEach(function(o){ orgName[o.id] = o.name; });
+    /* A readable name per person.
 
-    /* A readable name per person. auth.users is not reachable from the
-       browser, and it should not be: the org each account was created with is
-       named after them, which is enough to label a row without exposing login
-       addresses to anyone who can see the team. */
+       This used to come from the organisation's name, which worked only while
+       every account sat alone in a one-person org named after them. The moment
+       a real team shares one organisation, that labels everybody "Market Maker
+       Management" and the tab shows six identical rows. Found by looking at
+       it, not by anything failing.
+
+       sender_name is what they already sign their messages with, so it is the
+       name they would recognise. Where it is blank, the local part of their
+       connected calendar address is a decent stand-in, and auth.users stays
+       unreachable from the browser either way. */
     var nameFor = {};
-    mems.forEach(function(m){
-      if(nameFor[m.user_id]) return;
-      if(m.role === 'admin' || m.role === 'owner') return;   // a manager's membership, not their own org
-      nameFor[m.user_id] = orgName[m.org_id] || 'teammate';
+    var sRes = await sb.from('app_settings').select('user_id, sender_name');
+    ((sRes && sRes.data) || []).forEach(function(r){
+      var n = String(r.sender_name || '').trim();
+      if(n) nameFor[r.user_id] = n;
     });
-    mems.forEach(function(m){ if(!nameFor[m.user_id]) nameFor[m.user_id] = orgName[m.org_id] || 'teammate'; });
 
     var cRes = await sb.from('clients')
       .select('id, user_id, call_date_time, status, created_at');
@@ -121,6 +124,11 @@ async function loadTeamRows(sb, uid){
     var tRes = await sb.rpc('team_calendar_health');
     ((tRes && tRes.data) || []).forEach(function(r){
       var b = bucket(r.user_id);
+      // Fallback label for anybody who never set a sender name.
+      if(!nameFor[r.user_id] && r.calendar_id){
+        nameFor[r.user_id] = String(r.calendar_id).split('@')[0];
+        b.name = nameFor[r.user_id];
+      }
       b.connectedCalendars++;
       var t = r.last_sync ? Date.parse(r.last_sync) : NaN;
       if(!isNaN(t) && (b.lastSync === null || t > Date.parse(b.lastSync))) b.lastSync = r.last_sync;
@@ -128,6 +136,7 @@ async function loadTeamRows(sb, uid){
 
     return Object.keys(agg).map(function(u){
       var b = agg[u];
+      b.name = nameFor[u] || b.name || 'teammate';
       b.idleDays = b.lastSentAt === null ? null : Math.floor((now - b.lastSentAt) / 86400000);
       /* Only an account with at least one recorded reply can have a reply RATE.
          Zero recorded replies is genuinely ambiguous - nobody answered, or
