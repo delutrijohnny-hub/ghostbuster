@@ -1,5 +1,34 @@
 # Moving Ghost Recall to a new domain
 
+> **DONE — 5 October 2026.** Live on `www.ghostrecallcrm.com`. All three old
+> entry points 308 to it in a single hop, and `ghostbustercrm.com/app` still
+> resolves through to the app. Kept below as the record, including the two
+> things this document got wrong, because they are the parts worth knowing if
+> it is ever done again.
+>
+> **What the plan got wrong, both found while doing it:**
+>
+> 1. **It blamed the wrong console.** This said Google's allow-list was what
+>    could lock everyone out. It is Supabase's. Google's authorised redirect
+>    URI is Supabase's callback and a domain move never touches it. Following
+>    the original would have meant time spent in Google Cloud Console, a
+>    confident "done", and then nobody able to sign in.
+>
+> 2. **Vercel refuses to redirect a domain that something else redirects TO.**
+>    `ghostbustercrm.com` pointed at `www.ghostbustercrm.com`, so the www could
+>    not itself be made a redirect until the apex was repointed first. The
+>    error names this clearly but only after you try, so do the apex first.
+>
+> **Two traps in the Vercel UI, neither of which errors:**
+>
+> - The Edit panel pre-fills the redirect target with the *other* existing
+>   domain, which makes pointing the NEW domain at the OLD one look correct.
+>   The row being edited is the one that gets sent away. Check the Domain field
+>   at the top before changing anything.
+> - It defaults to **307 Temporary**. For a rename you want **308 Permanent**,
+>   or the old name never actually retires and search ranking does not move.
+
+
 No code change is needed. Verified on 2026-10-02: the only place the app cared
 about its own address was the Google sign-in redirect, and that reads
 `window.location.origin`, so it follows whatever domain serves the page. The
