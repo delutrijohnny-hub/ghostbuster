@@ -190,6 +190,10 @@ async function syncOneCalendar(
         youtube_link: parsed.youtubeLink || existingByEvent.youtube_link,
         meet_link: parsed.meetLink || existingByEvent.meet_link,
         organizer_email: parsed.organizerEmail,
+        // Renaming an event in the calendar is a real edit, so the title
+        // follows it. Falls back rather than nulling: a sync that somehow
+        // reads an empty summary must not erase a title already recorded.
+        event_title: parsed.eventTitle || existingByEvent.event_title || null,
         // Never overwrite an existing zone on re-sync: it may have been
         // corrected by hand in the client modal, and the app self-heals a
         // stale one from the area code on load anyway.
@@ -243,6 +247,7 @@ async function syncOneCalendar(
         user_id: userId,
         google_event_id: parsed.googleEventId,
         organizer_email: parsed.organizerEmail,
+        event_title: parsed.eventTitle || null,
         name: parsed.name, phone: parsed.phone, email: parsed.email,
         youtube_link: parsed.youtubeLink, meet_link: parsed.meetLink,
         call_date_time: parsed.callDateTime, booked_date: parsed.bookedDate,

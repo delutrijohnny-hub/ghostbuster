@@ -2895,6 +2895,15 @@ function openClientModal(clientId){
 
   openModalHtml(
     '<div class="modal-head"><h2>' + escapeHtml(c.name) + '</h2><button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
+    /* What the booking is actually called in the calendar.
+
+       Only when there is one. Every row imported before titles were kept
+       stores null, and printing an empty line for those would suggest the
+       event had no title rather than that we never recorded it. */
+    (c.eventTitle
+      ? '<div class="ev-title" title="The calendar event this came from">' +
+        escapeHtml(c.eventTitle) + '</div>'
+      : '') +
     '<div class="two-col">' +
       '<div class="field-row"><label>Call date &amp; time <span style="text-transform:none;font-weight:400;color:var(--ink-faint);">(' + escapeHtml(c.timezone||'America/New_York') + ')</span></label><input id="cf-call" data-action="save-client-field" data-cid="'+c.id+'" data-field="callDateTime" type="datetime-local" value="'+callVal+'"></div>' +
       '<div class="field-row"><label>Phone</label><input id="cf-phone" data-action="save-client-field" data-cid="'+c.id+'" data-field="phone" type="text" value="'+escapeHtml(c.phone)+'"></div>' +

@@ -509,6 +509,7 @@ async function loadState(){
     state.clients[row.id] = {
       id: row.id,
       googleEventId: row.google_event_id,
+      eventTitle: row.event_title || null,
       organizerEmail: row.organizer_email,
       emailStatus: row.email_status || 'ok',
       name: row.name, phone: row.phone, email: row.email,
@@ -748,6 +749,9 @@ function rowClient(c, uid){
   return {
     id: c.id, user_id: uid, google_event_id: c.googleEventId || null,
     organizer_email: c.organizerEmail || null,
+    // null, never '': a row imported before titles were kept must stay
+    // distinguishable from an event genuinely titled nothing.
+    event_title: c.eventTitle || null,
     email_status: c.emailStatus || 'ok',
     name: c.name, phone: c.phone, email: c.email,
     youtube_link: c.youtubeLink, meet_link: c.meetLink,

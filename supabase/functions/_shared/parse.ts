@@ -89,6 +89,15 @@ export interface GCalEvent {
 export interface ParsedClient {
   googleEventId: string;
   organizerEmail: string | null;
+  /* The event's title, kept as it was written.
+
+     The name in the parentheses was being extracted and the rest thrown away,
+     so nothing in the product has ever known whether a booking was a "Second
+     Call | Strategy Session" or a "Discovery". That makes two questions
+     unanswerable rather than merely under-powered: what kind of appointment
+     a call actually is, and whether show-up rates move with how the booking
+     tool names things. */
+  eventTitle: string;
   name: string;
   phone: string;
   email: string;
@@ -354,6 +363,7 @@ export function clientFromGCalEvent(
   return {
     googleEventId: ev.id,
     organizerEmail: ev.organizer?.email || null,
+    eventTitle: summary,
     name,
     phone,
     email: emails[0] || '',

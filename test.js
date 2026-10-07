@@ -8657,6 +8657,85 @@ test('the shipped copy is not sales-specific, apart from the channel lines', () 
       + 'it would be sent to a recruiter’s candidates: ' + offenders.join(' | '));
 });
 
+console.log('\n--- keeping the calendar title ---');
+
+/* The title was read for the name in the parentheses and then discarded, and
+   no table has ever held it. That is why "can show-up rates be explained by
+   changes in calendar titles" was not a thin-sample problem but an
+   unanswerable one — there was nothing to count.
+
+   Null and '' have to stay distinguishable: every row imported before this
+   means "never recorded", which is a different claim from "an event with a
+   blank title", and the difference is the whole value of the column. */
+
+test('the title survives an import', () => {
+  const ics = [
+    'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:t-1',
+    'DTSTART;TZID=America/New_York:20261008T150000',
+    'SUMMARY:Second Call | Youtube Strategy Session (Nick McDonald)',
+    'ATTENDEE;CN=nick@goasknick.com:mailto:nick@goasknick.com',
+    'END:VEVENT','END:VCALENDAR'].join('\r\n');
+  const c = GB.clientFromICSEvent(GB.parseICS(ics)[0]);
+  assert.ok(c, 'the booking did not import');
+  assert.strictEqual(c.eventTitle, 'Second Call | Youtube Strategy Session (Nick McDonald)',
+    'the calendar title was discarded again');
+  // The name still comes out of the parentheses; the title is kept as well as,
+  // not instead of.
+  assert.strictEqual(c.name, 'Nick McDonald');
+});
+
+test('a row with no title reads as unrecorded, not as blank', () => {
+  const c = GB.sanitizeClient({name: 'A', eventTitle: ''}, 'x1');
+  assert.strictEqual(c.eventTitle, null,
+    'an empty title must normalise to null, or "we never kept this" becomes '
+      + 'indistinguishable from "the event was genuinely untitled"');
+  assert.strictEqual(GB.sanitizeClient({name: 'B'}, 'x2').eventTitle, null);
+  assert.strictEqual(GB.sanitizeClient({name: 'C', eventTitle: 'Discovery'}, 'x3').eventTitle,
+    'Discovery', 'a real title did not survive sanitising');
+});
+
+test('a title survives a save and load round trip', () => {
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const row = data.slice(data.indexOf('function rowClient'), data.indexOf('function rowMessage'));
+  assert.ok(/event_title: c\.eventTitle \|\| null/.test(row),
+    'rowClient does not write the title, so it is forgotten on the next save');
+  assert.ok(/eventTitle: row\.event_title \|\| null/.test(data),
+    'the loader drops the title, so it is written and never read back');
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.ok(/add column if not exists event_title/.test(sql),
+    'nothing adds the column, so every save would error');
+});
+
+test('the live import path keeps it too', () => {
+  /* parse.ts is what actually runs for everyone; logic.js is the local build.
+     A fix landing only in logic.js would store nothing in production. */
+  const parse = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', '_shared', 'parse.ts'), 'utf8');
+  assert.ok(/eventTitle: string;/.test(parse), 'ParsedClient has no title field');
+  assert.ok(/eventTitle: summary,/.test(parse),
+    'clientFromGCalEvent does not carry the summary through');
+  const sync = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/event_title: parsed\.eventTitle \|\| null,/.test(sync),
+    'the sync never writes the title on a new booking');
+  assert.ok(/event_title: parsed\.eventTitle \|\| existingByEvent\.event_title \|\| null,/.test(sync),
+    'a re-sync either ignores a renamed event or erases a title it already '
+      + 'had. Renaming is a real edit and should follow; an empty summary '
+      + 'must not wipe what is recorded.');
+});
+
+test('the contact shows it, and shows nothing when there is none', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function openClientModal'), app.indexOf('function openClientModal') + 3000);
+  assert.ok(/c\.eventTitle\s*\?/.test(fn),
+    'the title is printed unconditionally, so every pre-existing contact gets '
+      + 'an empty line suggesting its event had no title');
+  assert.ok(/escapeHtml\(c\.eventTitle\)/.test(fn),
+    'the calendar title goes into the page unescaped — it is text somebody '
+      + 'else wrote in their own calendar');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

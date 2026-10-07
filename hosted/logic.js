@@ -1259,6 +1259,13 @@ function sanitizeClient(raw, fallbackId){
     id: id,
     googleEventId: typeof raw.googleEventId === 'string' ? raw.googleEventId : null,
     organizerEmail: typeof raw.organizerEmail === 'string' ? raw.organizerEmail : null,
+    /* The calendar event's title, as written.
+
+       Null rather than '' when absent, and absent is the normal state for
+       every row imported before this was kept. The two have to stay
+       distinguishable: '' would read as "an event with a blank title", which
+       is a different claim from "we never recorded it". */
+    eventTitle: typeof raw.eventTitle === 'string' && raw.eventTitle ? raw.eventTitle : null,
     emailStatus: typeof raw.emailStatus === 'string' ? raw.emailStatus : 'ok',
     name: (typeof raw.name === 'string' && raw.name.trim()) ? raw.name.trim() : 'Unknown',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
@@ -3426,6 +3433,7 @@ function clientFromICSEvent(ev, ownerEmail){
   var bookedDate = ev.created ? (parseICSDate(ev.created) || nowISO()) : nowISO();
   return {
     googleEventId: ev.uid || null,
+    eventTitle: (ev.summary || '') || null,
     name: name, phone: phone, email: email,
     youtubeLink: extractYoutube(ev.description),
     meetLink: meetLinkFromEvent(ev),
