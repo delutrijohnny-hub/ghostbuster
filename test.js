@@ -8238,6 +8238,119 @@ test('the loader no longer tests status strings by hand', () => {
       + 'falls back to the default pipeline against the real database');
 });
 
+console.log('\n--- a colleague is never a customer ---');
+
+/* Taken from production, 2026-10-07. A standing internal meeting organised
+   from somebody's personal Gmail put `vionna@marketmakermgmt.com` — a
+   colleague — into three people's lists AS A CLIENT, with a fresh occurrence
+   arriving every day. For one of them, a new hire on his first morning, it
+   was his entire pipeline.
+
+   The cause: attendees mode asked only whether a guest was outside the
+   ORGANIZER's domain, and internalDomain() returns '' for a personal inbox.
+   So `!organizer` was true, every colleague counted as an outside guest, and
+   the meeting read as a booking.
+
+   The calendar owner's own domain is the missing reference point: it is their
+   calendar, so their colleagues are internal to them whoever organised. */
+
+function icsFor(attendees, organizer){
+  return [
+    'BEGIN:VCALENDAR','BEGIN:VEVENT','UID:standing-1',
+    'DTSTART;TZID=America/New_York:20261008T150000',
+    'SUMMARY:Youtube Strategy Session (Weekly Sync)',
+    'ORGANIZER;CN=' + organizer + ':mailto:' + organizer
+  ].concat(attendees.map(function(a){
+    return 'ATTENDEE;CN=' + a + ';PARTSTAT=NEEDS-ACTION:mailto:' + a;
+  })).concat(['END:VEVENT','END:VCALENDAR']).join('\r\n');
+}
+
+test('a colleague is not saved as the customer', () => {
+  // Organiser on a personal inbox, every guest a colleague.
+  const ev = GB.parseICS(icsFor(
+    ['vionna@marketmakermgmt.com', 'tanner.b@marketmakermgmt.com'],
+    'gauravbatra791@gmail.com'))[0];
+  const withoutOwner = GB.clientFromICSEvent(ev);
+  const withOwner    = GB.clientFromICSEvent(ev, 'tanner.b@marketmakermgmt.com');
+  assert.strictEqual(withoutOwner && withoutOwner.email, 'vionna@marketmakermgmt.com',
+    'pre-fix behaviour should still be reproducible, or this test proves nothing');
+  assert.ok(withOwner && withOwner.email !== 'vionna@marketmakermgmt.com',
+    'a colleague is still saved as the client’s address — which is also '
+      + 'where the follow-up email would be sent');
+});
+
+test('the customer is still picked out of a mixed guest list', () => {
+  const ev = GB.parseICS(icsFor(
+    ['vionna@marketmakermgmt.com', 'kelly.arthur@expreality.com'],
+    'gauravbatra791@gmail.com'))[0];
+  const c = GB.clientFromICSEvent(ev, 'tanner.b@marketmakermgmt.com');
+  assert.ok(c, 'a real booking was dropped');
+  assert.strictEqual(c.email, 'kelly.arthur@expreality.com',
+    'the colleague won over the actual customer');
+});
+
+test('the owner themself is never the customer', () => {
+  const ev = GB.parseICS(icsFor(
+    ['tanner.b@marketmakermgmt.com', 'buyer@acme.com'], 'someone@else.com'))[0];
+  const c = GB.clientFromICSEvent(ev, 'tanner.b@marketmakermgmt.com');
+  assert.strictEqual(c.email, 'buyer@acme.com', 'the owner was saved as their own client');
+});
+
+test('a solo operator on Gmail keeps their bookings', () => {
+  // No company domain, so there are no colleagues to exclude and nothing may
+  // change. This is the case the old hard-coded domain strip got wrong.
+  const ev = GB.parseICS(icsFor(['buyer@acme.com'], 'solo@gmail.com'))[0];
+  const c = GB.clientFromICSEvent(ev, 'solo@gmail.com');
+  assert.ok(c && c.email === 'buyer@acme.com',
+    'a solo operator on Gmail stopped importing their own bookings');
+});
+
+test('the Edge Function passes the calendar owner through', () => {
+  /* parse.ts is the live import path for everyone — the ICS version above is
+     the local build. A fix that lands only in logic.js would leave production
+     importing colleagues exactly as before. */
+  const parse = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', '_shared', 'parse.ts'), 'utf8');
+  assert.ok(/export function matchesCalendarFilter\([\s\S]{0,200}ownerEmail\?: string/.test(parse),
+    'matchesCalendarFilter in parse.ts takes no owner');
+  assert.ok(/export function clientFromGCalEvent\([\s\S]{0,200}ownerEmail\?: string/.test(parse),
+    'clientFromGCalEvent in parse.ts takes no owner');
+  assert.ok(/matchesCalendarFilter\(ev, filter, ownerEmail\)/.test(parse),
+    'clientFromGCalEvent calls the filter without the owner, so the event is '
+      + 'still admitted even though the contact would be dropped');
+
+  /* The logic itself, line by line.
+
+     These are source assertions, not behaviour: the suite is deliberately
+     dependency-free and cannot execute TypeScript, so parse.ts is never run
+     here. The behaviour is covered against its twin in logic.js above, which
+     has the same two rules. Checking only the signatures was not enough —
+     deleting either rule left every signature intact and the tests green. */
+  const attendeeBranch = parse.slice(parse.indexOf("if (f.mode === 'attendees')"),
+                                     parse.indexOf('for (const term of f.include'));
+  assert.ok(/const owner = internalDomain\(ownerEmail\)/.test(attendeeBranch),
+    'attendees mode no longer works out the calendar owner\u2019s domain');
+  assert.ok(/if \(owner && d === owner\) continue;/.test(attendeeBranch),
+    'attendees mode no longer skips the owner\u2019s own colleagues, so an '
+      + 'internal meeting organised from a personal inbox imports as a booking');
+  assert.ok(/if \(organizer && d === organizer\) continue;/.test(attendeeBranch),
+    'attendees mode no longer skips the organizer\u2019s colleagues');
+
+  const picker = parse.slice(parse.indexOf('export function clientFromGCalEvent'));
+  assert.ok(/const ownerDomain = internalDomain\(ownerEmail\)/.test(picker),
+    'the contact picker no longer knows the owner\u2019s domain');
+  assert.ok(/!ownerDomain \|\| domainOf\(e\) !== ownerDomain/.test(picker),
+    'the contact picker no longer excludes the owner\u2019s colleagues, so a '
+      + 'teammate is saved as the customer and the follow-up goes to them');
+  assert.ok(/e !== organizerSelf && e !== ownerSelf/.test(picker),
+    'the contact picker no longer excludes the owner\u2019s own address');
+  const sync = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/clientFromGCalEvent\(ev, calendarFilter, conn\.calendar_id\)/.test(sync),
+    'the sync does not pass the calendar being synced, so the parser has no '
+      + 'owner to compare against and the fix is inert in production');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

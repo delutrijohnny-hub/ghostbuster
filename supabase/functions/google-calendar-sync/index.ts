@@ -175,7 +175,10 @@ async function syncOneCalendar(
   for (const ev of keptEvents) {
     if (ev.status === 'cancelled') continue;
     scanned++;
-    const parsed = clientFromGCalEvent(ev, calendarFilter);
+    // conn.calendar_id is the address of the calendar being synced, i.e. the
+    // account owner — which is how a colleague is told apart from a customer
+    // when the organizer is on a personal inbox.
+    const parsed = clientFromGCalEvent(ev, calendarFilter, conn.calendar_id);
     if (!parsed) { filteredOut++; continue; }
 
     const existingByEvent = byEventId.get(parsed.googleEventId);

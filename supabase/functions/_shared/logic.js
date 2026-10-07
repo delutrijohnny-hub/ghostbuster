@@ -3173,7 +3173,7 @@ function internalDomain(email){
   return (!d || isSharedMailDomain(d)) ? '' : d;
 }
 
-function matchesCalendarFilter(ev, filter){
+function matchesCalendarFilter(ev, filter, ownerEmail){
   var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
   var title = (ev.summary || '').toLowerCase();
   var desc = (ev.description || '').toLowerCase();
@@ -3189,16 +3189,28 @@ function matchesCalendarFilter(ev, filter){
   if(f.mode === 'all') return true;
 
   if(f.mode === 'attendees'){
-    // internalDomain, not emailDomain: a personal-inbox organizer has no
-    // colleagues to exclude, so every named guest is an outside guest.
+    /* An outside guest is the signal, and "outside" has two reference points.
+
+       The organizer's domain was the only one, and internalDomain returns ''
+       for a personal inbox — so an internal meeting organised from somebody's
+       Gmail had no internal domain at all, every colleague on it counted as
+       an outside guest, and the meeting imported as a booking. One standing
+       meeting did exactly that across three accounts.
+
+       The calendar owner's domain closes it: this is their calendar, so their
+       colleagues are internal to them whoever organised. An owner on a
+       personal inbox is unchanged — they have no colleagues to exclude. */
     var organizer = internalDomain(ev.organizer && ev.organizer.email);
+    var owner = internalDomain(ownerEmail);
     var guests = ev.attendees || [];
     for(i = 0; i < guests.length; i++){
       var g = guests[i];
       if(!g || g.self || g.resource) continue;      // you, and meeting rooms
       var d = emailDomain(g.email);
       if(!d) continue;
-      if(!organizer || d !== organizer) return true;
+      if(organizer && d === organizer) continue;    // the organizer's colleague
+      if(owner && d === owner) continue;            // your colleague
+      return true;
     }
     return false;
   }
@@ -3300,7 +3312,7 @@ function extractAttendeeEmails(lines){
   return out;
 }
 
-function clientFromICSEvent(ev){
+function clientFromICSEvent(ev, ownerEmail){
   if(!isStrategySessionEvent(ev)) return null;
   var dtISO = parseICSDate(ev.dtstartRaw, ev.dtstartTzid);
   if(!dtISO) return null;
@@ -3332,13 +3344,21 @@ function clientFromICSEvent(ev){
        filter uses to decide what counts as a booking. */
     var organizerSelf = String(ev.organizerEmail || ev.organizer || '').toLowerCase();
     var organizerDomain = internalDomain(ev.organizerEmail || ev.organizer);
+    // The owner's own domain is internal too — see matchesCalendarFilter.
+    // Without it, a meeting organised from a personal inbox saves whichever
+    // colleague happens to be listed first as the customer.
+    var ownerSelf = String(ownerEmail || '').toLowerCase();
+    var ownerDomain = internalDomain(ownerEmail);
     var emails = extractAttendeeEmails(ev.attendeeLines).filter(function(e){
       // The organizer is never the customer, whatever their domain. Dropping
       // only the domain comparison was not enough: on a personal inbox it
       // leaves the organizer first in the list, so the booking imports with
       // the agent's own address as the client's.
       if(organizerSelf && e === organizerSelf) return false;
-      return !organizerDomain || emailDomain(e) !== organizerDomain;
+      if(ownerSelf && e === ownerSelf) return false;
+      if(organizerDomain && emailDomain(e) === organizerDomain) return false;
+      if(ownerDomain && emailDomain(e) === ownerDomain) return false;
+      return true;
     });
     email = emails[0] || '';
   }

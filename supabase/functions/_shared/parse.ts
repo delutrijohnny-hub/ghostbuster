@@ -175,7 +175,11 @@ function internalDomain(email?: string): string {
    booked appointment does. Title matching only works for businesses whose
    booking tool names events predictably, which is a thing you have to know
    about yourself before you can configure it. */
-export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): boolean {
+export function matchesCalendarFilter(
+  ev: GCalEvent,
+  filter?: CalendarFilter,
+  ownerEmail?: string,
+): boolean {
   const f = filter && filter.mode ? filter : DEFAULT_FILTER;
   const title = (ev.summary || '').toLowerCase();
   const desc = (ev.description || '').toLowerCase();
@@ -189,16 +193,28 @@ export function matchesCalendarFilter(ev: GCalEvent, filter?: CalendarFilter): b
   if (f.mode === 'all') return true;
 
   if (f.mode === 'attendees') {
-    // internalDomain, not domainOf: a personal-inbox organizer has no
-    // colleagues to exclude, so every named guest is an outside guest.
+    /* An outside guest is the signal, and "outside" has two reference points.
+
+       The organizer's domain was the only one used, and internalDomain
+       returns '' for a personal inbox — so an internal meeting organised from
+       somebody's Gmail had no internal domain, every colleague on it counted
+       as an outside guest, and the meeting imported as a booking. That is how
+       one standing meeting became a daily stream of contacts in three
+       people's lists.
+
+       The calendar owner's domain closes it: this is their calendar, so their
+       colleagues are internal to them regardless of who organised. An owner on
+       a personal inbox is unchanged — they have no colleagues to exclude. */
     const organizer = internalDomain((ev as any).organizer?.email);
+    const owner = internalDomain(ownerEmail);
     const guests = ((ev as any).attendees || []) as Array<{ email?: string; self?: boolean; resource?: boolean }>;
     for (const g of guests) {
       if (g.self || g.resource) continue;          // you, and meeting rooms
       const d = domainOf(g.email);
       if (!d) continue;
-      // An outside guest is the signal. Same-domain guests are colleagues.
-      if (!organizer || d !== organizer) return true;
+      if (organizer && d === organizer) continue;  // the organizer's colleague
+      if (owner && d === owner) continue;          // your colleague
+      return true;
     }
     return false;
   }
@@ -275,8 +291,12 @@ export function collapseRecurringSeries(events: GCalEvent[], now?: string | numb
 // Mirrors extractAttendeeEmails(...).filter(excludes @marketmakermgmt.com)
 // from clientFromICSEvent, but reads the structured attendees array instead
 // of scraping ATTENDEE lines out of raw ICS text.
-export function clientFromGCalEvent(ev: GCalEvent, filter?: CalendarFilter): ParsedClient | null {
-  if (!matchesCalendarFilter(ev, filter)) return null;
+export function clientFromGCalEvent(
+  ev: GCalEvent,
+  filter?: CalendarFilter,
+  ownerEmail?: string,
+): ParsedClient | null {
+  if (!matchesCalendarFilter(ev, filter, ownerEmail)) return null;
   const dt = ev.start?.dateTime || null;
   if (!dt) return null; // all-day events are never a call booking
 
@@ -305,14 +325,31 @@ export function clientFromGCalEvent(ev: GCalEvent, filter?: CalendarFilter): Par
      booking, so the two now agree. */
   const organizerSelf = (ev.organizer?.email || '').toLowerCase();
   const organizerDomain = internalDomain(ev.organizer?.email);
+  /* The calendar owner's own domain counts as internal too.
+
+     The organizer's domain alone is not enough, and the gap is not
+     hypothetical: an internal recurring meeting organised from somebody's
+     personal Gmail has no internal domain at all, so `!organizerDomain` was
+     true and EVERY named guest passed — including colleagues. One such
+     meeting put `vionna@marketmakermgmt.com` into three people's lists as a
+     client, new occurrences arriving daily, and for a new joiner it was his
+     entire pipeline on day one.
+
+     Who is a colleague is knowable from the account doing the syncing: this
+     is their calendar, so their domain is internal to them whatever the
+     organizer is on. A personal-inbox owner still gets nothing extra excluded
+     here, which is correct — they have no colleagues to confuse. */
+  const ownerDomain = internalDomain(ownerEmail);
+  const ownerSelf = (ownerEmail || '').toLowerCase();
   const emails = (ev.attendees || [])
     .filter((a) => !(a as { self?: boolean }).self && !(a as { resource?: boolean }).resource)
     .map((a) => (a.email || '').toLowerCase())
     // The organizer is never the customer, whatever their domain. On a
     // personal inbox the domain comparison does nothing, which would leave the
     // organizer first in the list and save their address as the client's.
-    .filter((e) => e && e !== organizerSelf)
-    .filter((e) => !organizerDomain || domainOf(e) !== organizerDomain);
+    .filter((e) => e && e !== organizerSelf && e !== ownerSelf)
+    .filter((e) => !organizerDomain || domainOf(e) !== organizerDomain)
+    .filter((e) => !ownerDomain || domainOf(e) !== ownerDomain);
 
   return {
     googleEventId: ev.id,
