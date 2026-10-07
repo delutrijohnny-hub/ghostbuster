@@ -146,6 +146,36 @@ async function loadSentInvites(sb, uid){
   }catch(e){ return []; }
 }
 
+/* Hand over several appointments at once, when somebody is away.
+
+   One at a time is right for a single call that needs a different owner. It is
+   the wrong tool for covering a fortnight's absence: three people here are
+   holding 43 booked appointments between them and have sent nothing in a week,
+   and clicking 43 pickers is not a plan.
+
+   Sequential rather than Promise.all, deliberately. The partial result has to
+   be truthful — RLS can refuse an individual row, and a parallel run makes
+   "moved 12 of 17" unreliable about WHICH 12. It also keeps a burst of writes
+   off the database for what is a once-in-a-while action.
+
+   Never throws. A caller gets counts and the first reason, so a half-finished
+   move is reported as a half-finished move rather than as success. */
+async function reassignMany(clientIds, toUserId){
+  var ids = Array.isArray(clientIds) ? clientIds : [];
+  var moved = 0, failed = 0, firstError = null;
+  for(var i = 0; i < ids.length; i++){
+    try{
+      var r = await reassignClient(ids[i], toUserId);
+      if(r && r.ok){ moved++; }
+      else { failed++; if(!firstError) firstError = (r && r.error) || 'refused'; }
+    }catch(e){
+      failed++;
+      if(!firstError) firstError = String(e);
+    }
+  }
+  return {moved: moved, failed: failed, error: firstError};
+}
+
 /* Appoint or stand down another manager.
 
    The rules live in set_member_role, not here: a manager may only change

@@ -8834,6 +8834,74 @@ test('the picker is offered in settings and only remaps on save', () => {
     'the save path does not remap against the stages it is about to commit');
 });
 
+console.log('\n--- covering for somebody who is away ---');
+
+/* One picker per appointment is right for a single call with the wrong owner.
+   It is the wrong tool for a fortnight's absence: three people on this book
+   hold 43 booked appointments between them and have sent nothing in a week,
+   and clicking 43 pickers is not a plan.
+
+   The thing to get right is the partial result. RLS refuses an individual row
+   by returning zero rows rather than an error, so "moved 12 of 17" has to be
+   reportable — rounding that up to success is how somebody believes a handover
+   happened that did not. */
+
+test('a clean sweep reports what it moved', async () => {
+  const d = makeLoadCtx({clients: {data: [{id:'c1'}], error: null}});
+  const r = await d.run('reassignMany(["c1","c2","c3"], "u2")');
+  assert.strictEqual(r.moved, 3);
+  assert.strictEqual(r.failed, 0);
+});
+
+test('a refusal partway through is reported, not rounded up', async () => {
+  // RLS refusing shows up as zero rows returned, not as an error.
+  const d = makeLoadCtx({clients: {data: [], error: null}});
+  const r = await d.run('reassignMany(["c1","c2"], "u2")');
+  assert.strictEqual(r.moved, 0, 'a refused move was counted as a success');
+  assert.strictEqual(r.failed, 2);
+  assert.ok(r.error, 'no reason was carried back for the toast');
+});
+
+test('an empty or odd list does not throw', async () => {
+  const d = makeLoadCtx({});
+  assert.strictEqual((await d.run('reassignMany([], "u2")')).moved, 0);
+  assert.strictEqual((await d.run('reassignMany(null, "u2")')).failed, 0);
+});
+
+test('bulk cover is only offered where it is the actual problem', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/m\.queue\.length > 1 && m\.needsAttention/.test(code),
+    'a bulk handover is offered on a row that is ticking along, where it is '
+      + 'far more likely to be a slip than an intention');
+  assert.ok(/x\.userId === m\.userId\) return;/.test(code),
+    'the person being covered for is offered as a destination, so the whole '
+      + 'queue can be moved to where it already is');
+});
+
+test('the confirmation names the count, both people, and the mid-conversation ones', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'bulk-assign':"), app.indexOf("case 'set-role':"));
+  // Not just the word: `if(false && !confirm(...))` still contains it and
+  // asks nobody anything.
+  assert.ok(/if\(!confirm\(/.test(h),
+    'dozens of appointments move without asking, or the confirmation has been '
+      + 'short-circuited so it never runs');
+  assert.ok(/already have messages sent/.test(h),
+    'the confirmation no longer says how many are being taken over '
+      + 'mid-conversation, which is the part somebody would regret');
+  assert.ok(/move any of them back individually/.test(h),
+    'the confirmation no longer says it is reversible');
+  assert.ok(/'Moved ' \+ r\.moved \+ ' of ' \+ \(r\.moved \+ r\.failed\)/.test(h),
+    'a partial move is reported as a complete one — somebody would believe a '
+      + 'handover happened that did not');
+  assert.ok(/if\(!r\.moved\)\{/.test(h), 'a total refusal still claims success');
+  assert.ok(/init\(\)/.test(h),
+    'the contacts changed owner; both rows have to reload rather than be patched');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

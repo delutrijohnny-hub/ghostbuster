@@ -474,6 +474,34 @@ function renderTeamTab(){
           m.untouched + ' of ' + m.queue.length + ' with nothing sent yet'
         ]));
       }
+      /* Covering for somebody, rather than clicking every row.
+
+         One picker per appointment is right for a single call with the wrong
+         owner. It is the wrong tool for a fortnight's absence: three people
+         here hold 43 booked appointments between them and have sent nothing
+         in a week.
+
+         Only offered where it is the actual problem — somebody who is not
+         working their list. On a row that is ticking along, a bulk handover
+         is far more likely to be a slip than an intention. */
+      if(m.queue.length > 1 && m.needsAttention && o.members.length > 1){
+        var bulkSel = h('select',{class:'tq-assign','data-bulk-to':m.name},[]);
+        o.members.forEach(function(x){
+          if(!x.userId || x.userId === m.userId) return;
+          bulkSel.appendChild(h('option',{value:x.userId},
+            [x.userId === STATE.userId ? 'me' : x.name]));
+        });
+        if(bulkSel.childNodes.length){
+          var withHistory = m.queue.filter(function(q){ return !q.untouched; }).length;
+          list.appendChild(h('div',{class:'tq-bulk'},[
+            h('span',{},['Cover all ' + m.queue.length + ':']),
+            bulkSel,
+            h('button',{class:'btn btn-sm','data-action':'bulk-assign',
+              'data-who':m.name, 'data-n':String(m.queue.length),
+              'data-hist':String(withHistory)},['Move them'])
+          ]));
+        }
+      }
       m.queue.forEach(function(q){
         list.appendChild(h('div',{class:'tq-row' + (q.untouched ? ' tq-untouched' : '')
                                    + (q.today && q.untouched ? ' tq-today' : '')},[
@@ -3815,6 +3843,39 @@ document.addEventListener('click', function(ev){
       STATE.emailLibrary.push(fresh);
       LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
       renderEmailLibrary();
+      break;
+    }
+    case 'bulk-assign': {
+      var bWho = target.getAttribute('data-who');
+      var bN = parseInt(target.getAttribute('data-n'), 10) || 0;
+      var bHist = parseInt(target.getAttribute('data-hist'), 10) || 0;
+      var bSel = document.querySelector('[data-bulk-to="' + bWho + '"]');
+      if(!bSel || !bSel.value) break;
+      var bTo = bSel.options[bSel.selectedIndex].text;
+      var bMember = (STATE.team || []).filter(function(x){ return x.name === bWho; })[0];
+      if(!bMember) break;
+      /* Named, counted, and honest about the ones already in conversation —
+         taking those over mid-thread is the part somebody would regret. */
+      if(!confirm('Move ' + bN + ' upcoming from ' + bWho + ' to ' + bTo + '?' +
+        (bHist ? '\n\n' + bHist + ' already have messages sent, so those are being '
+               + 'taken over mid-conversation.' : '') +
+        '\n\nYou can move any of them back individually afterwards.')) break;
+      target.disabled = true;
+      target.textContent = 'Moving...';
+      reassignMany(bMember.queue.map(function(q){ return q.clientId; }), bSel.value)
+        .then(function(r){
+          if(!r.moved){
+            showToast('Nothing moved: ' + (r.error || 'refused'));
+            target.disabled = false;
+            target.textContent = 'Move them';
+            return;
+          }
+          // Partial results are reported as partial, never rounded up.
+          showToast(r.failed
+            ? 'Moved ' + r.moved + ' of ' + (r.moved + r.failed) + '. ' + (r.error || '')
+            : 'Moved ' + r.moved + ' to ' + bTo + '.');
+          init();
+        });
       break;
     }
     case 'set-role': {
