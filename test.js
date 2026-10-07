@@ -8162,6 +8162,49 @@ test('a team on a custom pipeline gets real numbers, not zeroes', async () => {
   assert.strictEqual(sam.upcoming, 1);
 });
 
+test('a recruiter on the same team gets real numbers too', async () => {
+  /* Colin runs hiring rather than sales, on the built-in recruiting template:
+     Candidates and Interviews, closing as "Screen Completed" rather than
+     "Completed". Under the old literal matching that word matched neither
+     bucket, so every interview he finished counted as one nobody had logged
+     and his show-up rate read 0% — on the screen his own manager judges him
+     by. One team, two pipelines, and the roll-up has to be right for both. */
+  const now = Date.now();
+  const past = new Date(now - 3*86400000).toISOString();
+  const rec = GB.buildIndustryTemplates().filter(t => t.key === 'recruiting')[0];
+  const sales = GB.buildIndustryTemplates().filter(t => t.key === 'agency')[0];
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [
+      {user_id:'u1', sender_name:'Johnny', pipeline: sales.pipeline},
+      {user_id:'u2', sender_name:'Colin',  pipeline: rec.pipeline}
+    ], error: null},
+    clients: {data: [
+      {id:'k1', user_id:'u2', name:'A', call_date_time:past, status:'Screen Completed'},
+      {id:'k2', user_id:'u2', name:'B', call_date_time:past, status:'Screen Completed'},
+      {id:'k3', user_id:'u2', name:'C', call_date_time:past, status:'No-show'},
+      {id:'k4', user_id:'u2', name:'D', call_date_time:past, status:'Awaiting Decision'},
+      {id:'k5', user_id:'u2', name:'E', call_date_time:past, status:'Screen Scheduled'},
+      {id:'s1', user_id:'u1', name:'F', call_date_time:past, status:'Completed'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const colin = rows.filter(r => r.name === 'Colin')[0];
+  assert.ok(colin, 'the recruiter is missing from the team');
+  assert.strictEqual(colin.completed, 2,
+    'a finished interview closed as "Screen Completed" was not counted');
+  assert.strictEqual(colin.noshows, 1, 'a candidate no-show was miscounted');
+  assert.strictEqual(colin.rescheduled, 1, '"Awaiting Decision" is a stalled stage');
+  assert.strictEqual(colin.unlogged, 1,
+    'only the one still on an open stage is genuinely unlogged');
+  // And the salesperson beside him is unaffected by his pipeline.
+  const johnny = rows.filter(r => r.name === 'Johnny')[0];
+  assert.strictEqual(johnny.completed, 1, 'the sales pipeline broke when a recruiter joined');
+});
+
 test('the same shapes still work on the default pipeline', async () => {
   const now = Date.now();
   const past = new Date(now - 3*86400000).toISOString();
