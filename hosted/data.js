@@ -146,6 +146,21 @@ async function loadSentInvites(sb, uid){
   }catch(e){ return []; }
 }
 
+/* Appoint or stand down another manager.
+
+   The rules live in set_member_role, not here: a manager may only change
+   somebody in an organisation they manage, and NOBODY may change their own
+   role. That second rule is what makes locking an organisation out
+   impossible — demotion only ever applies to someone else, so whoever does it
+   is still a manager afterwards, with no counting and no race. */
+async function setMemberRole(userId, role){
+  var res = await window.GB_SUPABASE.rpc('set_member_role',
+    {target: userId, new_role: role});
+  if(res.error) return {ok:false, error: res.error.message || String(res.error)};
+  var r = res.data || {};
+  return r.ok ? {ok:true, role:r.role} : {ok:false, error: r.error || 'could not change role'};
+}
+
 /* Move one appointment to a different person on the team.
 
    The case this exists for: somebody has booked calls in the diary and has
@@ -184,8 +199,13 @@ async function loadTeamRows(sb, uid){
     var mems = memRes.data;
 
     // Only the caller showing up means a one-person account: no team, no tab.
-    var peers = {};
-    mems.forEach(function(m){ peers[m.user_id] = true; });
+    var peers = {}, orgRoleOf = {};
+    mems.forEach(function(m){
+      peers[m.user_id] = true;
+      // 'admin'/'owner' vs 'member' — not the pipeline stage role below, which
+      // is a different thing entirely that happens to share the word.
+      orgRoleOf[m.user_id] = m.role;
+    });
     if(Object.keys(peers).length < 2) return [];
 
     /* A readable name per person.
@@ -345,6 +365,8 @@ async function loadTeamRows(sb, uid){
     return Object.keys(agg).map(function(u){
       var b = agg[u];
       b.name = nameFor[u] || b.name || 'teammate';
+      b.orgRole = orgRoleOf[u] || 'member';
+      b.isManager = b.orgRole === 'admin' || b.orgRole === 'owner';
       b.upcomingList.forEach(function(x){ x.sent = sentPer[x.clientId] || 0; });
       b.upcomingList.sort(function(x, y){ return Date.parse(x.when) - Date.parse(y.when); });
       b.idleDays = b.lastSentAt === null ? null : Math.floor((now - b.lastSentAt) / 86400000);

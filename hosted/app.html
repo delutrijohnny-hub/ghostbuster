@@ -355,6 +355,14 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .variant-retired{opacity:.55;}
 .variant-retired .v-text{text-decoration:line-through;}
 .v-retired-tag{color:var(--ink-faint);font-style:italic;font-size:11px;}
+/* Manager badge and the appoint/stand-down control on a team row. */
+.team-role{display:flex;align-items:center;gap:7px;justify-content:flex-end;min-width:118px;}
+.role-badge{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;
+  padding:2px 7px;border-radius:99px;background:var(--brass);color:#fff;white-space:nowrap;}
+.role-self{font-size:11px;color:var(--ink-faint);font-style:italic;}
+.role-btn{font-size:11px;white-space:nowrap;opacity:0;transition:opacity .12s;}
+.team-row:hover .role-btn,.role-btn:focus{opacity:1;}
+@media (hover:none){.role-btn{opacity:1;}}
 .team-notstarted-head{font-size:11.5px;font-weight:700;text-transform:uppercase;
   letter-spacing:.04em;color:var(--ink-faint);margin:18px 0 8px;padding-top:12px;
   border-top:1px solid var(--border);}

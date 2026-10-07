@@ -275,6 +275,40 @@ function invitePanel(){
   return add;
 }
 
+/* Appointing another manager, on the row of the person being appointed.
+
+   Only shown to someone who can already manage, and never on their own row:
+   set_member_role refuses a self-change, because that refusal is the whole
+   reason an organisation cannot be left with no manager at all. Offering a
+   button that always fails would be worse than offering none, so the row the
+   manager is standing on simply says so.
+
+   A manager badge still shows for everyone, including yourself, because "who
+   else can see all this" is a reasonable thing to be able to check. */
+function roleControl(m){
+  var wrap = h('div',{class:'team-role'},[]);
+  if(m.isManager){
+    wrap.appendChild(h('span',{class:'role-badge', title:'Can see the whole team'},['manager']));
+  }
+  if(!STATE.canInvite) return wrap;
+  if(m.userId === STATE.userId){
+    // Not a button. See above: it could only ever be refused.
+    wrap.appendChild(h('span',{class:'role-self', title:
+      'Nobody can change their own role \u2014 it is what stops a team being '
+      + 'left with no manager. Another manager can change yours.'},['you']));
+    return wrap;
+  }
+  wrap.appendChild(h('button',{
+    class:'btn btn-sm btn-ghost role-btn',
+    'data-action':'set-role', 'data-uid':m.userId,
+    'data-role': m.isManager ? 'member' : 'admin',
+    title: m.isManager
+      ? 'Stand ' + m.name + ' down to an ordinary member'
+      : m.name + ' will see everyone\u2019s numbers and be able to invite people'},
+    [m.isManager ? 'Remove manager' : 'Make manager']));
+  return wrap;
+}
+
 function renderTeamTab(){
   var box = el('team-view');
   var btn = el('tab-btn-team');
@@ -421,7 +455,8 @@ function renderTeamTab(){
           [' \u00b7 ' + m.unlogged + ' unlogged']) : ''
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
-      h('div',{class:'team-nums'}, nums)
+      h('div',{class:'team-nums'}, nums),
+      roleControl(m)
     ]);
     box.appendChild(row);
 
@@ -3723,6 +3758,29 @@ document.addEventListener('click', function(ev){
       STATE.emailLibrary.push(fresh);
       LIB_OPEN = fresh.id;          // opened straight into edit; nobody adds one to look at it
       renderEmailLibrary();
+      break;
+    }
+    case 'set-role': {
+      var ruid = target.getAttribute('data-uid');
+      var rnew = target.getAttribute('data-role');
+      var rname = target.getAttribute('title') || '';
+      /* Promoting is a real handover: they see every teammate's contacts,
+         messages and numbers. Worth one confirmation rather than a stray
+         click on a dense row. */
+      if(rnew === 'admin' && !confirm(
+        'Make this person a manager?\n\nThey will see every teammate\u2019s '
+        + 'contacts, appointments and numbers, and be able to invite people.\n\n'
+        + 'They will not get access to anyone\u2019s Google account.')) break;
+      target.disabled = true;
+      setMemberRole(ruid, rnew).then(function(r){
+        if(!r.ok){
+          showToast('Could not change role: ' + r.error);
+          target.disabled = false;
+          return;
+        }
+        showToast(rnew === 'admin' ? 'They are a manager now.' : 'Manager access removed.');
+        init();   // what they can see changed; reload rather than patch
+      });
       break;
     }
     case 'invite-send': {

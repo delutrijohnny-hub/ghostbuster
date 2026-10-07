@@ -8351,6 +8351,113 @@ test('the Edge Function passes the calendar owner through', () => {
       + 'owner to compare against and the fix is inert in production');
 });
 
+console.log('\n--- a second manager ---');
+
+/* Asked for: the actual sales manager should be able to use the manager role
+   too. The policies already allowed it — user_managed_org_ids accepts
+   ('owner','admin') and nothing assumed one of them — so the gap was only
+   that role lived in the database and every change was a hand-written UPDATE.
+
+   The thing worth defending is lockout. An organisation with no manager
+   cannot recover from inside the product: nobody can invite, nobody can
+   appoint, the team view belongs to nobody. The guard is NOT a count of
+   remaining managers, which races with a second manager doing the same thing.
+   It is that nobody may change their OWN role, so a demotion always leaves
+   its author in place. */
+
+test('the role rules live in the database, not in the button', () => {
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  const fn = sql.slice(sql.indexOf('function public.set_member_role'));
+  assert.ok(fn.length, 'set_member_role is not defined in any migration');
+  const body = fn.slice(0, fn.indexOf('$$;') + 3);
+
+  assert.ok(/if target = me then/.test(body),
+    'the self-change guard is gone. It is the only thing standing between a '
+      + 'tidy-up and an organisation with no manager at all, and a count-based '
+      + 'check would not replace it — two managers demoting each other at once '
+      + 'can both pass a count.');
+  assert.ok(/user_managed_org_ids\(\)/.test(body),
+    'set_member_role no longer checks the caller manages the target\u2019s org');
+  assert.ok(/new_role not in \('member', 'admin'\)/.test(body),
+    'any string can be written as a role');
+  assert.ok(/security definer/i.test(fn),
+    'memberships has no UPDATE policy, so this has to run as definer');
+  // The self-check must come FIRST: if the org check ran first, the error
+  // would differ for someone you manage versus someone you do not, which
+  // tells a caller which addresses are on the team.
+  assert.ok(body.indexOf('if target = me then') < body.indexOf('user_managed_org_ids'),
+    'the self-check must precede the org check, or the error message leaks '
+      + 'whether a given person is on your team');
+  assert.ok(!/delete from public\.memberships/.test(body),
+    'set_member_role removes people from the organisation. Leaving is not the '
+      + 'inverse of joining — accepting re-stamps org_id across eight tables — '
+      + 'so removal needs its own decision, not a role dropdown.');
+});
+
+test('the control is never offered where it could only fail', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function roleControl('), app.indexOf('function renderTeamTab()'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/if\(!STATE\.canInvite\) return wrap;/.test(code),
+    'an ordinary member is offered a button that RLS will refuse');
+  assert.ok(/m\.userId === STATE\.userId/.test(code),
+    'the manager is offered the control on their own row, where the database '
+      + 'will always refuse it');
+  assert.ok(/role-badge/.test(code), 'there is no way to see who the managers are');
+});
+
+test('promoting asks first, and says what it actually grants', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'set-role':"), app.indexOf("case 'invite-send':"));
+  assert.ok(/confirm\(/.test(h), 'a stray click on a dense row hands over the whole team');
+  assert.ok(/rnew === 'admin' && !confirm/.test(h),
+    'standing somebody down should not need the same confirmation as promoting');
+  assert.ok(/contacts, appointments and numbers/.test(h),
+    'the confirmation no longer says what a manager can actually see');
+  assert.ok(/not get access to anyone\\u2019s Google account|Google account/.test(h),
+    'the confirmation no longer says what a manager does NOT get. Tokens stay '
+      + 'owner-only and somebody deciding this should know that.');
+  assert.ok(/init\(\)/.test(h),
+    'what that person can see just changed; the view has to reload rather than patch');
+  assert.ok(/showToast\('Could not change role/.test(h), 'a refusal is swallowed');
+});
+
+test('the team rows carry the org role, and it is not confused with a stage role', async () => {
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'},
+      {org_id:'o1', user_id:'u3', role:'owner'}
+    ], error: null},
+    app_settings: {data: [
+      {user_id:'u1', sender_name:'Boss'},
+      {user_id:'u2', sender_name:'Rep'},
+      {user_id:'u3', sender_name:'Founder'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const by = {};
+  rows.forEach(r => { by[r.name] = r; });
+  assert.strictEqual(by.Boss.isManager, true, 'an admin is not marked as a manager');
+  assert.strictEqual(by.Founder.isManager, true, 'an owner is not marked as a manager');
+  assert.strictEqual(by.Rep.isManager, false, 'an ordinary member is marked as a manager');
+  assert.strictEqual(by.Rep.orgRole, 'member');
+});
+
+test('setMemberRole reports a refusal rather than claiming success', async () => {
+  // set_member_role returns {ok:false} in the body rather than raising, so a
+  // wrapper checking only res.error would say "they are a manager now" to
+  // somebody who is not.
+  const d = makeLoadCtx({
+    set_member_role: {data: {ok:false, error:'not someone you manage'}, error: null}
+  });
+  const r = await d.run('setMemberRole("u9","admin")');
+  assert.strictEqual(r.ok, false, 'a refusal was reported as success');
+  assert.ok(/not someone/.test(r.error), 'the reason was lost: ' + r.error);
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
