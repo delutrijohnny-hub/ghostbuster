@@ -5808,6 +5808,7 @@ function makeLoadCtx(tableResults){
       Object.prototype.hasOwnProperty.call(results, name) ? results[name] : {data: [], error: null});
     const chain = {
       eq(){ return chain; }, order(){ return chain; }, not(){ return chain; },
+      is(){ return chain; },
       // update().eq().select() has to resolve the same way a read does, or
       // reassignClient cannot be tested at all.
       select(){ return chain; },
@@ -7484,6 +7485,758 @@ console.log('\n--- Google refresh tokens stay with their owner ---');
     assert.ok(/excluded|tightened/i.test(plan), 'the plan does not record the exclusion');
   });
 }
+
+console.log('\n--- building a team: invites need consent, and a door ---');
+
+/* The invite flow, which is what made every manager feature sellable rather
+   than demonstrable. Two things are being defended here.
+
+   CONSENT. Accepting an invite re-stamps org_id across the joiner's contacts,
+   messages and settings — that is what makes them visible to a manager, and it
+   is the point. Which means a one-sided "add by email" is a complete data
+   breach reachable from a text input: type a stranger's address, absorb their
+   book. The database enforces this (accept_org_invite checks the email on the
+   caller's own token) and these tests hold the client to telling the truth
+   about it.
+
+   A DOOR. The team tab hides itself when handed fewer than two people and the
+   invite box used to live inside it, so a brand-new customer — always alone on
+   day one — had no way to add their first colleague. The database was never
+   the problem: provision_org_for_new_user makes every signup an 'owner', which
+   user_managed_org_ids accepts. */
+
+// The shared makeLoadCtx stub returns `chain` from eq()/is() and throws the
+// arguments away, so a filter assertion against it would pass with the filter
+// deleted. This one records every call instead.
+function makeInviteCtx(opts){
+  const o = opts || {};
+  const calls = [];
+  function table(name){
+    const filters = [];
+    const res = () => Promise.resolve(
+      Object.prototype.hasOwnProperty.call(o, name) ? o[name] : {data: [], error: null});
+    const chain = {
+      eq(col, val){ filters.push(['eq', col, val]); return chain; },
+      is(col, val){ filters.push(['is', col, val]); return chain; },
+      order(){ return chain; }, not(){ return chain; },
+      select(){ return chain; },
+      maybeSingle(){ return res(); },
+      then(ok, bad){ return res().then(ok, bad); }
+    };
+    return {
+      select(cols){ calls.push({table:name, op:'select', cols:cols, filters:filters}); return chain; },
+      insert(row){
+        calls.push({table:name, op:'insert', row:row, filters:filters});
+        return {select(){ return chain; }, then(ok,bad){ return res().then(ok,bad); }};
+      },
+      update(row){ calls.push({table:name, op:'update', row:row, filters:filters}); return chain; },
+      upsert(){ return chain; }, delete(){ return chain; }
+    };
+  }
+  function rpc(name, args){
+    calls.push({rpc:name, args:args});
+    return Promise.resolve(
+      Object.prototype.hasOwnProperty.call(o, name) ? o[name] : {data: [], error: null});
+  }
+  const sandbox = {
+    console, JSON, Date, Math, Promise, Object, Array, String, Number, isNaN,
+    parseInt, parseFloat, Set,
+    crypto: { randomUUID: () => 'uuid-x' },
+    window: { GB_SUPABASE: {
+      auth: { getUser: async () => ({data:{user:{id: o.uid || 'u1', email: o.email || 'boss@acme.com'}}}) },
+      from: table, rpc } }
+  };
+  sandbox.window.window = sandbox.window;
+  const ctx = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','logic.js'),'utf8'), ctx, {filename:'hosted/logic.js'});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'hosted','data.js'),'utf8'), ctx, {filename:'hosted/data.js'});
+  return {ctx, calls, run: (src) => vm.runInContext(src, ctx)};
+}
+
+test('a new customer who is alone can still invite their first colleague', async () => {
+  // The exact day-one shape: one membership, role owner, no team.
+  const d = makeInviteCtx({
+    memberships: {data: [{org_id:'o1', role:'owner', organizations:{name:'Acme'}}], error: null}
+  });
+  const r = await d.run('loadOrgRole(window.GB_SUPABASE, "u1")');
+  assert.strictEqual(r.canInvite, true, 'a brand-new owner cannot build a team');
+  assert.strictEqual(r.orgName, 'Acme');
+});
+
+test('an ordinary member is not offered the invite box', async () => {
+  const d = makeInviteCtx({
+    memberships: {data: [{org_id:'o1', role:'member', organizations:{name:'Acme'}}], error: null}
+  });
+  const r = await d.run('loadOrgRole(window.GB_SUPABASE, "u1")');
+  assert.strictEqual(r.canInvite, false, 'a rank-and-file member was offered the invite box');
+});
+
+test('the roles the client trusts are the roles the database trusts', () => {
+  // If these drift, the button appears and the insert is refused by RLS: a
+  // confusing failure rather than an unsafe one, but still a broken promise.
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  /* Split on the name, then keep only the chunks that actually carry a body:
+     the revoke and grant lines name the function too, so taking the last
+     chunk lands on `to authenticated;` and the assertion fails for a reason
+     that has nothing to do with roles. */
+  const defs = sql.split(/create or replace function public\.user_managed_org_ids/).slice(1)
+    .map(c => c.slice(0, c.indexOf('$$;') + 3))
+    .filter(c => /role in \(/.test(c));
+  assert.ok(defs.length, 'no definition of user_managed_org_ids tests a role at all');
+  // The last definition wins at runtime, so that is the one to check.
+  const roles = defs[defs.length - 1];
+  assert.ok(/'owner'/.test(roles) && /'admin'/.test(roles),
+    'user_managed_org_ids no longer accepts owner and admin');
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const role = data.slice(data.indexOf('async function loadOrgRole'),
+                          data.indexOf('async function loadPendingInvites'));
+  assert.ok(/'owner'/.test(role) && /'admin'/.test(role),
+    'loadOrgRole and user_managed_org_ids disagree about who manages');
+});
+
+test('a malformed address never reaches the database', async () => {
+  const d = makeInviteCtx({});
+  const r = await d.run('inviteToOrg("not-an-address", "member")');
+  assert.strictEqual(r.ok, false);
+  assert.ok(/email/i.test(r.error), 'the refusal does not say what was wrong: ' + r.error);
+  assert.strictEqual(d.calls.length, 0, 'a typo still hit the database');
+});
+
+test('a member cannot invite, and nothing is written when they try', async () => {
+  const d = makeInviteCtx({
+    memberships: {data: [{org_id:'o1', role:'member'}], error: null}
+  });
+  const r = await d.run('inviteToOrg("new@acme.com", "admin")');
+  assert.strictEqual(r.ok, false);
+  assert.ok(/manager/i.test(r.error), 'the refusal is not explained: ' + r.error);
+  assert.ok(!d.calls.some(c => c.table === 'org_invites' && c.op === 'insert'),
+    'a plain member got an invite row written — RLS would refuse it, but the '
+      + 'client must not be the only thing that knows that');
+});
+
+test('an invite records the inviting org, the sender, and a normalised address', async () => {
+  const d = makeInviteCtx({
+    uid: 'boss',
+    memberships: {data: [{org_id:'org-9', role:'owner'}], error: null},
+    org_invites: {data: [{id:'i1'}], error: null}
+  });
+  const r = await d.run('inviteToOrg("  New.Person@ACME.com ", "member")');
+  assert.strictEqual(r.ok, true, 'a manager could not invite: ' + r.error);
+  const ins = d.calls.find(c => c.table === 'org_invites' && c.op === 'insert');
+  assert.ok(ins, 'no invite was written');
+  assert.strictEqual(ins.row.email, 'new.person@acme.com',
+    'the address was not trimmed and lowercased, so the unique index and the '
+      + 'token comparison in accept_org_invite will both miss');
+  assert.strictEqual(ins.row.org_id, 'org-9', 'the invite went to the wrong organisation');
+  assert.strictEqual(ins.row.invited_by, 'boss',
+    'invited_by must be the sender — the policy with-check requires it');
+});
+
+test('an unknown role is coerced rather than passed through', async () => {
+  const d = makeInviteCtx({
+    memberships: {data: [{org_id:'o1', role:'owner'}], error: null},
+    org_invites: {data: [{id:'i1'}], error: null}
+  });
+  await d.run('inviteToOrg("x@acme.com", "superuser")');
+  const ins = d.calls.find(c => c.table === 'org_invites' && c.op === 'insert');
+  assert.strictEqual(ins.row.role, 'member',
+    'a role the check constraint would reject was sent straight through');
+});
+
+test('inviting the same person twice says so in words', async () => {
+  const d = makeInviteCtx({
+    memberships: {data: [{org_id:'o1', role:'owner'}], error: null},
+    org_invites: {data: null, error: {message:
+      'duplicate key value violates unique constraint "org_invites_pending"'}}
+  });
+  const r = await d.run('inviteToOrg("x@acme.com", "member")');
+  assert.strictEqual(r.ok, false);
+  assert.ok(/already invited/i.test(r.error), 'the user is shown a constraint name: ' + r.error);
+});
+
+test('the outstanding list is the ones you sent, not the ones sent to you', async () => {
+  /* org_invites carries a second policy so an invited person can read the
+     invite addressed to them. Without the invited_by filter, a manager who
+     had themselves been invited by another company would see that invite
+     listed under "you invited" — somebody else's organisation, inside their
+     own team tab. */
+  const d = makeInviteCtx({
+    org_invites: {data: [{id:'i1', email:'a@acme.com', created_at:'2026-10-01'}], error: null}
+  });
+  const rows = await d.run('loadSentInvites(window.GB_SUPABASE, "boss")');
+  assert.strictEqual(rows.length, 1);
+  const sel = d.calls.find(c => c.table === 'org_invites' && c.op === 'select');
+  const f = JSON.stringify(sel.filters);
+  assert.ok(/\["eq","invited_by","boss"\]/.test(f),
+    'sent invites are not filtered to the sender: ' + f);
+  assert.ok(/\["is","accepted_at",null\]/.test(f), 'accepted invites still show as outstanding');
+  assert.ok(/\["is","revoked_at",null\]/.test(f), 'a revoked invite still shows as outstanding');
+});
+
+test('with no signed-in id, nothing is listed rather than everything', async () => {
+  const d = makeInviteCtx({
+    org_invites: {data: [{id:'i1', email:'a@acme.com'}], error: null}
+  });
+  const rows = await d.run('loadSentInvites(window.GB_SUPABASE, null)');
+  assert.strictEqual(rows.length, 0, 'a missing uid dropped the filter and listed everything');
+});
+
+test('a refused acceptance is reported, not swallowed', async () => {
+  // accept_org_invite returns {ok:false} in the body rather than raising, so a
+  // wrapper that only checked res.error would report success and the UI would
+  // say "you are on the team" to somebody who is not.
+  const d = makeInviteCtx({accept_org_invite: {data: {ok:false, error:'invite not found or already used'}, error: null}});
+  const r = await d.run('acceptOrgInvite("i1")');
+  assert.strictEqual(r.ok, false, 'a refusal was reported as success');
+  assert.ok(/not found/.test(r.error), 'the reason was lost: ' + r.error);
+});
+
+test('a successful acceptance goes through the function, never a direct write', async () => {
+  const d = makeInviteCtx({accept_org_invite: {data: {ok:true, org_id:'o2'}, error: null}});
+  const r = await d.run('acceptOrgInvite("i1")');
+  assert.strictEqual(r.ok, true);
+  const call = d.calls.find(c => c.rpc === 'accept_org_invite');
+  assert.ok(call, 'acceptance did not go through accept_org_invite');
+  assert.strictEqual(call.args.invite, 'i1');
+  assert.ok(!d.calls.some(c => c.table === 'memberships' && (c.op === 'insert' || c.op === 'update')),
+    'the client wrote a membership itself, bypassing the consent check');
+});
+
+test('a broken invite table costs the invite box, not the morning', async () => {
+  const d = makeInviteCtx({
+    my_pending_invites: {data: null, error: {message: 'function public.my_pending_invites() does not exist'}}
+  });
+  const rows = await d.run('loadPendingInvites(window.GB_SUPABASE)');
+  assert.strictEqual(rows.length, 0, 'a code deploy ahead of its migration would break the app');
+});
+
+test('the solo-owner door exists, and the banner states what accepting does', () => {
+  // Source level: the DOM stub cannot see appended trees or class changes —
+  // established earlier in this file by deleting a hide and watching an
+  // innerHTML assertion still pass.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'));
+  const guard = fn.slice(0, fn.indexOf('teamOverview('));
+  assert.ok(/canInvite/.test(guard),
+    'renderTeamTab hides itself on an empty team without checking canInvite, so '
+      + 'a one-person account — every new customer on day one — has no way to '
+      + 'add anybody and the whole manager story is unreachable');
+  assert.ok(/invitePanel\(\)/.test(guard), 'the empty-team case shows no invite box');
+
+  const banner = app.slice(app.indexOf('function renderPendingInvites()'),
+                           app.indexOf('function invitePanel()'));
+  assert.ok(/move into their|move across|messages and settings/.test(banner),
+    'the accept banner no longer says that accepting moves your own records '
+      + 'into somebody else’s account — that is the one thing the person '
+      + 'being asked has to know');
+
+  const panel = app.slice(app.indexOf('function invitePanel()'),
+                          app.indexOf('function renderTeamTab()'));
+  assert.ok(/moves across until they do/.test(panel),
+    'the invite box no longer tells the manager that nothing moves until the '
+      + 'person accepts, which invites them to expect otherwise');
+});
+
+test('both invite actions are wired to the click dispatcher', () => {
+  /* Not theoretical: team-assign was first put in the click dispatcher when
+     the control is a <select>, which fires change. A handler nothing can
+     reach is worse than a missing one, because the button is right there. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(/case 'invite-send':/.test(app), 'nothing handles invite-send');
+  assert.ok(/case 'invite-accept':/.test(app), 'nothing handles invite-accept');
+  const renderAll = app.slice(app.indexOf('function renderAll()'),
+                              app.indexOf('\n}', app.indexOf('function renderAll()')));
+  assert.ok(/renderPendingInvites\(\)/.test(renderAll),
+    'renderAll never calls renderPendingInvites, so an invite is invisible');
+});
+
+test('acceptance reloads rather than patching state in place', () => {
+  // Accepting changes org_id on eight tables. Every cached row in STATE was
+  // read under the old organisation, so patching a field and re-rendering
+  // would show a mix of both.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'invite-accept':"), app.indexOf("case 'team-toggle':"));
+  assert.ok(/init\(\)/.test(h), 'acceptance does not reload the account');
+  assert.ok(/showToast\('Could not join/.test(h), 'a failed join says nothing to the person');
+});
+
+test('the migration records why acceptance cannot be one-sided', () => {
+  const f = path.join(__dirname, 'supabase', 'migrations', '20261005210000_org_invites.sql');
+  const sql = fs.readFileSync(f, 'utf8');
+  assert.ok(/auth\.jwt\(\) ->> 'email'/.test(sql),
+    'acceptance no longer verifies against the email on the caller’s own token');
+  assert.ok(/breach|consent|NOT OPTIONAL/i.test(sql),
+    'the reason acceptance is required is no longer written down, so the next '
+      + 'person to want a quicker onboarding will remove it');
+  const accept = sql.slice(sql.indexOf('function public.accept_org_invite'));
+  assert.ok(/me\b/.test(accept) && /where x\.user_id = \$2|user_id = me/.test(accept),
+    'accept_org_invite no longer limits its writes to the caller’s own rows');
+});
+
+/* Copy assertions have to run against code with the comments taken out.
+
+   A test for "the card still explains X" passed with the user-visible string
+   replaced by 'edited', because the slice it searched also contained the
+   comment above that code explaining X. The comment is not the product. */
+function codeOnly(src){
+  return String(src)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+}
+
+console.log('\n--- rewording a variant without corrupting what it learned ---');
+
+/* The whole point of the variant table is that a reply rate means something.
+   A variant's number is earned by its exact words, so rewording one in place
+   would hand 12 replies out of 40 to copy that never sent a single message —
+   and pickVariant would go on preferring it on that record. Nothing would look
+   wrong; the app would simply be optimising against a number that had stopped
+   meaning anything. So editVariant forks once there is anything to protect. */
+
+test('rewording a variant nobody has sent just replaces the words', () => {
+  const state = GB.buildDefaultState();
+  const before = state.variants.welcome.length;
+  const v = state.variants.welcome[0];
+  state.variantStats.welcome[v.id] = {sends: 0, responses: 0};
+  const r = GB.editVariant(state, 'welcome', v.id, 'Hi {name}, brand new wording.');
+  assert.strictEqual(r.ok, true, r.error);
+  assert.strictEqual(r.action, 'edited', 'a variant with no history should not fork');
+  assert.strictEqual(state.variants.welcome.length, before, 'a pointless second row was created');
+  assert.strictEqual(state.variants.welcome[0].text, 'Hi {name}, brand new wording.');
+  assert.ok(!state.variants.welcome[0].retired, 'it retired a variant for no reason');
+});
+
+test('rewording a variant that has sends forks it, and the old record stays with the old words', () => {
+  const state = GB.buildDefaultState();
+  const v = state.variants.welcome[0];
+  const oldText = v.text;
+  state.variantStats.welcome[v.id] = {sends: 40, responses: 12};
+  const r = GB.editVariant(state, 'welcome', v.id, 'Hey {name}, reworded.');
+  assert.strictEqual(r.action, 'forked', 'a variant with 40 sends was overwritten in place');
+  assert.strictEqual(r.keptSends, 40);
+
+  const old = state.variants.welcome.filter(x => x.id === v.id)[0];
+  assert.ok(old, 'the original was deleted rather than retired — its record is gone');
+  assert.strictEqual(old.text, oldText,
+    'the original’s text changed, so its 12 replies now describe words it never sent');
+  assert.strictEqual(old.retired, true, 'the replaced wording is still in the running');
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 40, 'the old record was altered');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 12, 'the old record was altered');
+
+  const made = state.variants.welcome.filter(x => x.id === r.id)[0];
+  assert.ok(made, 'the new wording was not added');
+  assert.strictEqual(made.text, 'Hey {name}, reworded.');
+  assert.strictEqual(state.variantStats.welcome[r.id].sends, 0,
+    'the new wording inherited a send count it did not earn');
+  assert.strictEqual(state.variantStats.welcome[r.id].responses, 0,
+    'the new wording inherited replies it did not earn');
+});
+
+test('a retired variant is never sent again', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({});
+  const doomed = state.variants.welcome[0].id;
+  state.variantStats.welcome[doomed] = {sends: 5, responses: 5};  // would be champion
+  GB.editVariant(state, 'welcome', doomed, 'Hi {name}, the replacement.');
+  for (let i = 0; i < 60; i++) {
+    const got = GB.pickVariant(state, 'welcome', c, {forceReroll: true});
+    assert.notStrictEqual(got.id, doomed,
+      'a retired variant was picked — and with a 100% reply rate on it, it '
+        + 'would be picked almost every time');
+  }
+});
+
+test('a stage whose variants are all retired still has something to send', () => {
+  const state = GB.buildDefaultState();
+  const c = freshClient({});
+  state.variants.welcome.forEach(v => { v.retired = true; });
+  const got = GB.pickVariant(state, 'welcome', c);
+  assert.ok(got && typeof got.text === 'string' && got.text.length,
+    'retiring everything left the stage with nothing to send');
+});
+
+test('editVariant refuses the cases that would quietly do nothing', () => {
+  const state = GB.buildDefaultState();
+  const v = state.variants.welcome[0];
+  assert.strictEqual(GB.editVariant(state, 'welcome', v.id, '   ').ok, false, 'empty text accepted');
+  assert.strictEqual(GB.editVariant(state, 'welcome', v.id, v.text).ok, false, 'unchanged text accepted');
+  assert.strictEqual(GB.editVariant(state, 'welcome', 'nope', 'x').ok, false, 'unknown id accepted');
+  assert.strictEqual(GB.editVariant(state, 'nostage', v.id, 'x').ok, false, 'unknown stage accepted');
+  assert.strictEqual(state.variants.welcome[0].text, v.text, 'a refused edit still changed the text');
+});
+
+test('a reworded variant does not come back to life on the next load', () => {
+  /* Two paths, and the builtin one was wrong first time round: builtins are
+     rebuilt from code on every load rather than read back, which is what keeps
+     a shipped template improvable — and which also threw the retirement away.
+     The variant returned live, competing again on a reply rate belonging to
+     wording that is no longer sent. */
+  const state = GB.buildDefaultState();
+  const builtin = state.variants.welcome.filter(v => v.builtin)[0];
+  assert.ok(builtin, 'no builtin variant to test with');
+  state.variantStats.welcome[builtin.id] = {sends: 9, responses: 3};
+  GB.editVariant(state, 'welcome', builtin.id, 'Hi {name}, replaced builtin.');
+  state.variants.welcome.push({id:'cust1', text:'custom one', builtin:false, retired:true});
+
+  const back = GB.migrateState(JSON.parse(JSON.stringify(state)));
+  const b2 = back.variants.welcome.filter(v => v.id === builtin.id)[0];
+  assert.ok(b2, 'the builtin vanished');
+  assert.strictEqual(b2.retired, true,
+    'a reworded builtin came back live after a reload, competing on a reply '
+      + 'rate that belongs to wording nobody sends any more');
+  const c2 = back.variants.welcome.filter(v => v.id === 'cust1')[0];
+  assert.ok(c2 && c2.retired === true, 'a retired custom variant came back live');
+});
+
+test('retired survives the database round trip', () => {
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const row = data.slice(data.indexOf('function rowVariant'), data.indexOf('function rowEmailVariant'));
+  assert.ok(/retired/.test(row),
+    'rowVariant does not write retired, so a rework is forgotten on the next save');
+  const load = data.slice(data.indexOf("state.variants[row.stage].push("),
+                          data.indexOf("state.variants[row.stage].push(") + 400);
+  assert.ok(/retired/.test(load),
+    'the loader drops retired, so every reworded variant returns to the running '
+      + 'at the next sign-in');
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.ok(/add column if not exists retired/.test(sql),
+    'nothing adds the retired column, so saving one would error');
+});
+
+console.log('\n--- stepping between a contact’s touches ---');
+
+test('pendingStages is what has not gone out, in sequence order', () => {
+  const now = new Date();
+  const c = freshClient({callDateTime: new Date(now.getTime() + 4*86400000).toISOString()});
+  const prog0 = GB.cadenceProgress(c, now);
+  assert.ok(prog0.pendingStages.length > 1, 'a fresh contact should have several touches pending');
+  assert.strictEqual(prog0.pendingStages.length, prog0.total, 'nothing is sent yet');
+  // Order must follow the sequence, not the order anything happened.
+  const seq = prog0.touches;
+  const idxs = prog0.pendingStages.map(st => seq.indexOf(st));
+  assert.deepStrictEqual(idxs.slice().sort((a,b) => a-b), idxs,
+    'pendingStages is out of sequence order, so the arrows would jump about');
+
+  GB.markSent(state0ForTouches(c), c.id, prog0.pendingStages[0], 'anything');
+  const prog1 = GB.cadenceProgress(c, now);
+  assert.strictEqual(prog1.pendingStages.indexOf(prog0.pendingStages[0]), -1,
+    'a touch that has been sent is still offered, so the arrows can land on it '
+      + 'and the same message can go out twice for one appointment');
+});
+
+function state0ForTouches(c){
+  const st = GB.buildDefaultState();
+  st.clients[c.id] = c;
+  return st;
+}
+
+test('cadenceProgress stays serialisable', () => {
+  // It gets cloned and compared. A function on it survives neither.
+  const c = freshClient({});
+  const prog = GB.cadenceProgress(c, new Date());
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(prog)));
+  Object.keys(prog).forEach(k => {
+    assert.notStrictEqual(typeof prog[k], 'function', k + ' is a function');
+  });
+});
+
+test('the arrows step through pending touches only, and never re-send one', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const handler = app.slice(app.indexOf("case 'touch-prev':"), app.indexOf("case 'add-variant':"));
+  assert.ok(/pendingStages/.test(handler),
+    'the arrows walk a list other than pendingStages, so they can land on a '
+      + 'touch already sent for this appointment');
+  assert.ok(/if\(to < 0 \|\| to >= tpend\.length\) break;/.test(handler),
+    'nothing stops the arrows walking off either end of the list');
+  assert.ok(/renderCallsBoard\(\)/.test(handler),
+    'the card is patched rather than rebuilt — every control on it carries '
+      + 'data-stage, so a half-swapped card sends one touch and logs another');
+
+  const board = app.slice(app.indexOf('function renderCallsBoard()'));
+  const apply = board.slice(0, board.indexOf('var countToday'));
+  assert.ok(/delete UI\.touchPick/.test(apply),
+    'a stale pick is never dropped, so a card can sit on a touch that has '
+      + 'already been sent');
+  assert.ok(/pendingStages/.test(apply), 'the pick is honoured without checking it is still pending');
+});
+
+test('the card says a hand-edit is kept out of the comparison', () => {
+  /* markSent has always logged an edited send against 'custom' rather than
+     crediting the template it started from. That safeguard was invisible,
+     which is close to not having it: somebody who assumes their rewrite is
+     being scored will read the league table as though it included them. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const note = codeOnly(app.slice(app.indexOf('if(isEdited){'),
+                                  app.indexOf('var actions = document.createElement')));
+  assert.ok(/kept out of the template comparison/.test(note),
+    'the label on an edited card no longer says the edit is kept out of the '
+      + 'template comparison');
+  assert.ok(/does not add to or/.test(note),
+    'the hover text explaining why no longer survives');
+
+  // And the behaviour it describes must actually hold.
+  const state = GB.buildDefaultState();
+  const c = freshClient({id:'ed9', callDateTime: null});
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  state.variantStats.welcome[v.id] = {sends: 7, responses: 3};
+  GB.markSent(state, c.id, 'welcome', 'something I typed myself');
+  assert.strictEqual(c.messageLog[0].variantId, 'custom',
+    'a hand-edited send was credited to the template it started from');
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 7, 'the template’s record moved');
+});
+
+test('a retired variant is neither champion nor charted', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const tab = app.slice(app.indexOf('function renderVariantsTab()'),
+                        app.indexOf('function renderVariantBarChart'));
+  const champ = tab.slice(0, tab.indexOf('var block ='));
+  assert.ok(/if\(v\.retired\) return;/.test(champ),
+    'a retired variant can still be crowned champion, pointing the reader at '
+      + 'copy the app has stopped sending');
+  const chart = app.slice(app.indexOf('function renderVariantBarChart'),
+                          app.indexOf("/* ---- weekly tab ---- */"));
+  assert.ok(/!v\.retired/.test(chart), 'retired variants are still charted as if live');
+});
+
+test('the editor says which of the two things saving will do, before it happens', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const raw = app.slice(app.indexOf('function renderVariantsTab()'),
+                        app.indexOf('function renderVariantBarChart'));
+  const tab = codeOnly(raw);
+  assert.ok(/s\.sends > 0/.test(tab), 'the editor does not distinguish the two cases at all');
+  // The fork branch has to name all three consequences: the new wording starts
+  // from zero, this version retires, and its rate stays with its own words.
+  assert.ok(/starts the new wording from zero/.test(tab),
+    'the editor no longer says the new wording starts from zero');
+  assert.ok(/retires this/.test(tab), 'it never says that saving retires this version');
+  assert.ok(/stays attached to the words that/.test(tab),
+    'it no longer says the old reply rate stays with the old wording, which is '
+      + 'the reason the fork happens at all');
+  assert.ok(/just replaced/.test(tab), 'it never says the no-history case simply replaces the text');
+  // Reword must not be offered on a retired row: editing it would make its
+  // numbers describe words it never sent.
+  assert.ok(/if\(!v\.retired\)\{/.test(tab), 'Reword is offered on retired variants too');
+});
+
+console.log('\n--- a new table is not reachable from the browser by accident ---');
+
+/* A table created in the public schema is served by PostgREST to anyone
+   holding the anon key, and the anon key ships inside the app's JavaScript.
+   RLS is what stops that, and the default grants are what make it moot.
+
+   This is not hypothetical. Three cleanup scripts snapshotted rows into
+   archive tables with a plain CREATE TABLE, and for two days
+   google_oauth_tokens_archive served three Google refresh tokens — live
+   credentials, not records — plus 47 real client rows out of clients_archive,
+   to unauthenticated callers. The live tables were locked the whole time, so
+   nothing looked wrong anywhere.
+
+   Checked against the SQL rather than the database because the suite is
+   offline. It catches the thing that actually went wrong: writing CREATE TABLE
+   and moving on. */
+test('every table created in SQL here also gets RLS turned on', () => {
+  const roots = ['supabase/migrations', 'scripts'];
+  const created = {};   // table -> file that created it
+  const guarded = {};
+  roots.forEach(rel => {
+    const dir = path.join(__dirname, rel);
+    if (!fs.existsSync(dir)) return;
+    fs.readdirSync(dir).filter(f => f.endsWith('.sql')).forEach(f => {
+      const sql = fs.readFileSync(path.join(dir, f), 'utf8')
+        // Comments explain these tables at length; don't read them as code.
+        .replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+      let m;
+      const re = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z0-9_]+)/gi;
+      while ((m = re.exec(sql)) !== null) {
+        // Temporary tables live inside one transaction and are never served.
+        const before = sql.slice(Math.max(0, m.index - 30), m.index);
+        if (/\b(temp|temporary)\b/i.test(before)) continue;
+        if (!created[m[1]]) created[m[1]] = rel + '/' + f;
+      }
+      const re2 = /alter\s+table\s+(?:public\.)?([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
+      while ((m = re2.exec(sql)) !== null) guarded[m[1]] = true;
+    });
+  });
+  assert.ok(Object.keys(created).length > 0, 'no CREATE TABLE found — the scan is broken');
+  const naked = Object.keys(created).filter(t => !guarded[t]);
+  assert.deepStrictEqual(naked, [],
+    'these tables are created without RLS being enabled anywhere: '
+      + naked.map(t => t + ' (' + created[t] + ')').join(', ')
+      + '. A public table with no RLS is readable by anyone with the anon key, '
+      + 'which ships in the app’s JavaScript.');
+});
+
+test('the archive tables are closed, and the migration says why', () => {
+  const f = path.join(__dirname, 'supabase', 'migrations',
+                      '20261007170000_lock_down_archive_tables.sql');
+  const sql = fs.readFileSync(f, 'utf8');
+  ['google_oauth_tokens_archive', 'clients_archive', 'message_log_archive',
+   'org_merge_backup'].forEach(t => {
+    assert.ok(new RegExp('alter table public\\.' + t + '\\s+enable row level security').test(sql),
+      t + ' no longer has RLS enabled');
+    assert.ok(new RegExp('revoke all on public\\.' + t + '\\s+from anon, authenticated').test(sql),
+      t + ' no longer has its anon grant revoked');
+  });
+  assert.ok(/refresh_token/.test(sql),
+    'the migration no longer records that a refresh token is a live credential, '
+      + 'which is the reason this was urgent rather than tidy-up');
+});
+
+console.log('\n--- the team view reads each person\u2019s own pipeline ---');
+
+/* The team loader tested for the literal strings 'Completed' and 'No-show'.
+   Those are the DEFAULT pipeline's words. A real estate team closes a call as
+   'Showing Completed' and an HVAC firm as 'Walkthrough Done', so on any
+   template but the default every finished call counted as one nobody had
+   logged and every show-up rate read 0%.
+
+   It was invisible on the live account because that team is on the default
+   pipeline, where the literal strings happen to be right. It would have
+   surfaced on the first customer who picked an industry template — as a
+   specific wrong number, not a blank. */
+
+test('pipelineRoleMap falls back rather than returning nothing useful', () => {
+  const def = GB.pipelineRoleMap(null);
+  assert.strictEqual(def['Completed'], 'won');
+  assert.strictEqual(def['No-show'], 'missed');
+  assert.strictEqual(def['Booked'], 'open');
+  // A corrupt setting must not read as "every status is open", which would
+  // report a whole team as having logged nothing.
+  assert.strictEqual(GB.pipelineRoleMap([]).Completed, 'won', 'empty pipeline lost the defaults');
+  assert.strictEqual(GB.pipelineRoleMap([{nope:1}]).Completed, 'won', 'junk pipeline lost the defaults');
+  assert.strictEqual(GB.pipelineRoleMap('garbage').Completed, 'won', 'non-array lost the defaults');
+});
+
+test('a custom pipeline maps onto the same roles', () => {
+  const re = GB.buildIndustryTemplates().filter(t => t.key === 'real_estate')[0];
+  const map = GB.pipelineRoleMap(re.pipeline);
+  assert.strictEqual(map['Showing Completed'], 'won');
+  assert.strictEqual(map['No-show'], 'missed');
+  assert.strictEqual(map['New Lead'], 'open');
+  assert.strictEqual(map['Completed'], undefined,
+    'the real estate pipeline should not know the default template\u2019s words');
+});
+
+test('a team on a custom pipeline gets real numbers, not zeroes', async () => {
+  const now = Date.now();
+  const past = new Date(now - 3*86400000).toISOString();
+  const soon = new Date(now + 3*86400000).toISOString();
+  const re = GB.buildIndustryTemplates().filter(t => t.key === 'real_estate')[0];
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [
+      {user_id:'u1', sender_name:'Dana', pipeline: re.pipeline},
+      {user_id:'u2', sender_name:'Sam',  pipeline: re.pipeline}
+    ], error: null},
+    clients: {data: [
+      // Sam: three showings that happened — two attended, one missed.
+      {id:'c1', user_id:'u2', name:'A', call_date_time:past, status:'Showing Completed'},
+      {id:'c2', user_id:'u2', name:'B', call_date_time:past, status:'Showing Completed'},
+      {id:'c3', user_id:'u2', name:'C', call_date_time:past, status:'No-show'},
+      // ...one that happened and still sits open: genuinely unlogged.
+      {id:'c4', user_id:'u2', name:'D', call_date_time:past, status:'New Lead'},
+      // ...one stalled, and one still to come.
+      {id:'c5', user_id:'u2', name:'E', call_date_time:past, status:'Thinking It Over'},
+      {id:'c6', user_id:'u2', name:'F', call_date_time:soon, status:'Showing Scheduled'},
+      {id:'c7', user_id:'u1', name:'G', call_date_time:past, status:'Showing Completed'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const sam = rows.filter(r => r.name === 'Sam')[0];
+  assert.ok(sam, 'Sam is missing from the team rows');
+  assert.strictEqual(sam.completed, 2,
+    'a showing closed as "Showing Completed" was not counted as attended — '
+      + 'this is the bug: the loader was looking for the word "Completed"');
+  assert.strictEqual(sam.noshows, 1, 'no-shows miscounted');
+  assert.strictEqual(sam.rescheduled, 1,
+    '"Thinking It Over" is a stalled stage and was never counted at all');
+  assert.strictEqual(sam.unlogged, 1,
+    'only the one still sitting on an open stage is genuinely unlogged');
+  assert.strictEqual(sam.pastCalls, 5);
+  assert.strictEqual(sam.upcoming, 1);
+});
+
+test('the same shapes still work on the default pipeline', async () => {
+  const now = Date.now();
+  const past = new Date(now - 3*86400000).toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Sam', pipeline: null}], error: null},
+    clients: {data: [
+      {id:'c1', user_id:'u2', name:'A', call_date_time:past, status:'Completed'},
+      {id:'c2', user_id:'u2', name:'B', call_date_time:past, status:'No-show'},
+      {id:'c3', user_id:'u2', name:'C', call_date_time:past, status:'Booked'},
+      {id:'c4', user_id:'u2', name:'D', call_date_time:past, status:'Rescheduled'},
+      {id:'c5', user_id:'u2', name:'E', call_date_time:past, status:'Ghosted'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const sam = rows.filter(r => r.name === 'Sam')[0];
+  assert.strictEqual(sam.completed, 1);
+  assert.strictEqual(sam.noshows, 1);
+  assert.strictEqual(sam.rescheduled, 1);
+  // Ghosted is 'lost' — an outcome somebody recorded, so not unlogged.
+  assert.strictEqual(sam.unlogged, 1, 'a Ghosted call was counted as never logged');
+});
+
+test('a status the pipeline no longer has counts as work, never as a win', async () => {
+  /* Someone edits their pipeline and drops a stage; the contacts sitting on
+     it keep that status. Reading an unrecognised stage as 'won' would quietly
+     inflate the show-up rate with calls nobody recorded an outcome for, which
+     is worse than useless on the one screen a manager judges people by. */
+  const past = new Date(Date.now() - 3*86400000).toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Sam', pipeline: null}], error: null},
+    clients: {data: [
+      {id:'c1', user_id:'u2', name:'A', call_date_time:past, status:'Some Deleted Stage'},
+      {id:'c2', user_id:'u2', name:'B', call_date_time:past, status:'Completed'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const sam = rows.filter(r => r.name === 'Sam')[0];
+  assert.strictEqual(sam.completed, 1, 'an unknown status was counted as an attended call');
+  assert.strictEqual(sam.noshows, 0);
+  assert.strictEqual(sam.unlogged, 1, 'an unknown status should read as still needing an outcome');
+});
+
+test('the loader no longer tests status strings by hand', () => {
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const fn = data.slice(data.indexOf('async function loadTeamRows'),
+                        data.indexOf('async function fetchClientEvents') > -1
+                          ? data.indexOf('async function fetchClientEvents')
+                          : data.length);
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  ["'Completed'", "'No-show'", "'Booked'", "'Confirmed'", "'Reminded'"].forEach(lit => {
+    assert.ok(!code.includes('status === ' + lit),
+      'loadTeamRows compares status against ' + lit + ' again. Those are the '
+        + 'default pipeline\u2019s words; use the role from pipelineRoleMap so '
+        + 'a customer on an industry template is not told 0%.');
+  });
+  assert.ok(/pipelineRoleMap\(r\.pipeline\)/.test(code),
+    'each teammate is no longer read against their own pipeline');
+  /* The column has to be ASKED for. The test stub returns whole fixture rows
+     whatever you select, so dropping 'pipeline' from the query passes every
+     behavioural test here and then reads undefined against the real database —
+     which silently falls back to the default pipeline for everyone, i.e.
+     exactly the bug this replaced. */
+  assert.ok(/app_settings'\)\s*\.select\('user_id, sender_name, pipeline'\)/.test(code),
+    'loadTeamRows no longer selects the pipeline column, so every teammate '
+      + 'falls back to the default pipeline against the real database');
+});
 
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');

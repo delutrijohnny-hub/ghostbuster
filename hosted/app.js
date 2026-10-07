@@ -74,7 +74,7 @@ function slimerSvg(size){
 
 var STATE = null;
 
-var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
+var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touchPick:{}, clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -220,6 +220,61 @@ function assignPicker(q, member, members){
   return sel;
 }
 
+/* An invite waiting for you, shown above everything regardless of tab.
+   Accepting moves your contacts into their organisation, so the banner says
+   that in words rather than hiding it behind a friendly verb. */
+function renderPendingInvites(){
+  var box = el('pending-invites');
+  if(!box) return;
+  var invites = (STATE && STATE.pendingInvites) || [];
+  box.innerHTML = '';
+  if(!invites.length){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  invites.forEach(function(inv){
+    box.appendChild(h('div',{class:'invite-row'},[
+      h('div',{},[
+        h('strong',{},[inv.orgName]),
+        ' invited you to join their team',
+        inv.role === 'admin' ? ' as a manager' : '',
+        h('div',{class:'invite-note'},[
+          'Your ' + termLower('contactPlural') + ', messages and settings move into their ' +
+          'account, and a manager there will be able to see them.'
+        ])
+      ]),
+      h('div',{class:'invite-acts'},[
+        h('button',{class:'btn btn-green btn-sm','data-action':'invite-accept','data-id':inv.id},
+          ['Join ' + inv.orgName])
+      ])
+    ]));
+  });
+}
+
+/* Adding somebody to the team.
+
+   Shared by two callers on purpose. It sits at the bottom of a populated team
+   view, because building the team is a once-in-a-while act and working it is
+   daily — but it is also the WHOLE of the tab for an account that is still one
+   person, since that account is where every new customer starts. */
+function invitePanel(){
+  var add = h('div',{class:'team-invite'},[]);
+  add.appendChild(h('div',{class:'team-notstarted-head'},['Add someone']));
+  add.appendChild(h('div',{class:'invite-form'},[
+    h('input',{type:'email', id:'invite-email', placeholder:'their work email', class:'lib-input'}),
+    h('button',{class:'btn btn-sm btn-green','data-action':'invite-send'},['Invite'])
+  ]));
+  add.appendChild(h('div',{class:'invite-note'},[
+    'They sign in with Google and accept the invite themselves. Nothing of ' +
+    'theirs moves across until they do, and you will not see anything of ' +
+    'theirs before then.'
+  ]));
+  (STATE.sentInvites || []).forEach(function(inv){
+    add.appendChild(h('div',{class:'invite-pending'},[
+      inv.email + ' \u2014 invited, not accepted yet'
+    ]));
+  });
+  return add;
+}
+
 function renderTeamTab(){
   var box = el('team-view');
   var btn = el('tab-btn-team');
@@ -227,8 +282,22 @@ function renderTeamTab(){
 
   var rows = STATE && STATE.team;
   if(!rows || !rows.length){
-    if(btn) btn.classList.add('hidden');
     box.innerHTML = '';
+    /* One person is not a team, so there is nothing to report — but it is
+       exactly where a new customer sits, and hiding the tab here is what
+       previously left them with no way to add their first colleague. So the
+       tab stays if they could invite, carrying only the invite box. */
+    if(!STATE || !STATE.canInvite){
+      if(btn) btn.classList.add('hidden');
+      return;
+    }
+    if(btn) btn.classList.remove('hidden');
+    box.appendChild(h('div',{class:'invite-note'},[
+      'It is just you in ' + (STATE.orgName || 'this account') + ' so far. Add ' +
+      'somebody and this tab starts showing who is working their list, who has ' +
+      'gone quiet, and where calls are being booked but not followed up.'
+    ]));
+    box.appendChild(invitePanel());
     return;
   }
   if(btn) btn.classList.remove('hidden');
@@ -424,6 +493,8 @@ function renderTeamTab(){
     });
   }
 
+  if(STATE.canInvite) box.appendChild(invitePanel());
+
   if(o.replyRateMeasuredFor < o.total){
     box.appendChild(h('div',{class:'team-note'},[
       'Reply rate is only shown for the ' + o.replyRateMeasuredFor + ' of ' + o.total +
@@ -516,6 +587,7 @@ function renderAll(){
   renderVariantPerformance();
   renderWeeklyTab();
   renderCalendarTab();
+  renderPendingInvites();
   renderTeamTab();
   renderOwnerTab();
   renderClosedTab();
@@ -758,8 +830,42 @@ function buildTouchCard(client, stage, now){
   // Where this sits in the run-up to the call, so the card reads as a step in
   // a sequence rather than a standalone task.
   var prog = cadenceProgress(client, now);
-  var progChip = h('span',{class:'touch-chip', title:'Sent so far: ' + (prog.sentStages.join(', ') || 'nothing yet')},
-    ['Touch ' + (prog.done + 1) + ' of ' + prog.total]);
+  /* Arrows to move between this person's touches.
+
+     The list only ever shows the one touch that is due, which is right nearly
+     always and wrong exactly when the salesperson knows something the cadence
+     does not — the introduction is redundant because they spoke yesterday, so
+     what they actually want to send is the check-in. Until now the only way
+     past a touch was to snooze it every morning or skip it for good.
+
+     The arrows step through prog.pendingStages, so they can never land on a
+     touch already sent for this appointment: re-sending the same message to
+     the same person about the same call is the one mistake a follow-up tool
+     must not make by accident.
+
+     Moving forward does NOT skip the touch you moved past. It stays due
+     tomorrow, which is what you want when you are reordering rather than
+     refusing; 'Skip' below is still how you refuse one for good. */
+  var pend = prog.pendingStages || [];
+  var pos = pend.indexOf(stage);
+  var progChip = h('span',{class:'touch-step',
+    title:'Sent so far: ' + (prog.sentStages.join(', ') || 'nothing yet')},[]);
+  var stepNo = prog.touches.indexOf(stage) + 1;
+  if(pend.length > 1 && pos !== -1){
+    var back = h('button',{class:'ts-arrow','data-action':'touch-prev','data-cid':client.id,
+      'data-stage':stage, title: pos > 0 ? 'Send ' + touchLabel(pend[pos-1]) + ' instead' : ''},['\u2039']);
+    if(pos === 0) back.disabled = true;
+    var fwd = h('button',{class:'ts-arrow','data-action':'touch-next','data-cid':client.id,
+      'data-stage':stage, title: pos < pend.length-1 ? 'Send ' + touchLabel(pend[pos+1]) + ' instead' : ''},['\u203a']);
+    if(pos === pend.length - 1) fwd.disabled = true;
+    progChip.appendChild(back);
+    progChip.appendChild(h('span',{class:'ts-label'},
+      ['Touch ' + (stepNo || '?') + ' of ' + prog.total]));
+    progChip.appendChild(fwd);
+  } else {
+    progChip.className = 'touch-chip';
+    progChip.appendChild(document.createTextNode('Touch ' + (stepNo || prog.done + 1) + ' of ' + prog.total));
+  }
   var tzChip = h('span',{class:'tz-chip' + (tzInfo.warn?' tz-warn':'')},[tzInfo.timeLabel + ' their time']);
   top.appendChild(nameEl); top.appendChild(progChip); top.appendChild(tzChip);
   /* Why this person, why now -- on the card rather than behind it.
@@ -773,6 +879,15 @@ function buildTouchCard(client, stage, now){
      checked against the timeline below it. */
   card.appendChild(top);
   card.appendChild(h('div',{class:'why'},[explainDue(client, stage, now)]));
+  /* Looking at a touch you arrowed to rather than the one that came up. Said
+     plainly, because the 'why this person, why now' line above is written for
+     the due touch and would otherwise read as though this were it. */
+  if(UI.touchPick[client.id] === stage && prog.nextStage && prog.nextStage !== stage){
+    card.appendChild(h('div',{class:'ts-moved'},[
+      'You moved to this one. ' + touchLabel(prog.nextStage) +
+      ' is still due and will be back tomorrow \u2014 use Skip to drop it for good.'
+    ]));
+  }
 
   if(tzInfo.warn){
     card.appendChild(h('div',{class:'tz-warn-text'},['⚠ It\'s outside normal hours for ' + client.name + ' right now.']));
@@ -799,9 +914,20 @@ function buildTouchCard(client, stage, now){
   card.appendChild(ta);
 
   if(isEdited){
-    var note = h('div',{class:'edited-note'},['edited']);
+    /* Say what a hand-edit does to the comparison.
+
+       markSent already logs an edited send against 'custom' rather than
+       crediting or debiting the template it started from — otherwise one
+       person's rewrite would move the numbers for copy nobody sent. That was
+       true before this note existed and the note is the point: an invisible
+       safeguard is indistinguishable from no safeguard, and somebody who
+       assumes their edit is being scored will draw conclusions from a league
+       table it was deliberately kept out of. */
+    var note = h('div',{class:'edited-note', title:
+      'Edited texts are logged separately, so your wording does not add to or '
+      + 'subtract from the template\u2019s reply rate.'},['edited \u2014 sent as a one-off, kept out of the template comparison']);
     var resetBtn = h('button',{'data-action':'reset-text','data-cid':client.id,'data-stage':stage},['reset']);
-    note.appendChild(document.createTextNode(' · '));
+    note.appendChild(document.createTextNode(' \u00b7 '));
     note.appendChild(resetBtn);
     card.appendChild(note);
   }
@@ -1101,7 +1227,20 @@ function renderCallsBoard(){
        welcomes first through the cold chasing last, without anything cutting
        across it. */
     shown.forEach(function(it){
-      todayCol.appendChild(buildTouchCard(it.client, it.stage, now));
+      /* Honour an arrow press, but only while it still makes sense.
+
+         The pick is dropped the moment that touch is no longer pending —
+         because it was sent, or because the appointment moved and the cadence
+         was recomputed. Without that, a card would sit on a touch already
+         gone out and the next press of 'check once sent' would log it twice. */
+      var stage = it.stage;
+      var picked = UI.touchPick[it.client.id];
+      if(picked){
+        var pending = cadenceProgress(it.client, now).pendingStages || [];
+        if(pending.indexOf(picked) !== -1) stage = picked;
+        else delete UI.touchPick[it.client.id];
+      }
+      todayCol.appendChild(buildTouchCard(it.client, stage, now));
     });
   }
   var countToday = el('count-today'); if(countToday) countToday.textContent = '(' + textToday.length + ')';
@@ -2073,6 +2212,9 @@ function renderVariantsTab(){
     var stats = STATE.variantStats[stage] || {};
     var championId = null, championRate = -1;
     list.forEach(function(v){
+      // A retired variant cannot be the champion: it is never sent again, so
+      // crowning it would point at copy the app has stopped using.
+      if(v.retired) return;
       var s = stats[v.id] || {sends:0,responses:0};
       var rate = (s.responses+1)/(s.sends+2);
       if(rate > championRate){ championRate = rate; championId = v.id; }
@@ -2102,8 +2244,59 @@ function renderVariantsTab(){
       var s = stats[v.id] || {sends:0,responses:0};
       var rate = s.sends>0 ? Math.round((s.responses/s.sends)*100)+'%' : '—';
       var tr = document.createElement('tr');
-      var star = v.id===championId ? '<span class="champion">★</span> ' : '';
-      tr.innerHTML = '<td>' + star + escapeHtml(v.id) + (v.needsChannel?' <em style="color:var(--ink-faint)">(needs channel)</em>':'') + '<div style="color:var(--ink-faint);font-size:11.5px;max-width:420px;">' + escapeHtml(v.text) + '</div></td><td>'+s.sends+'</td><td>'+s.responses+'</td><td>'+rate+'</td>';
+      if(v.retired) tr.className = 'variant-retired';
+      var star = v.id===championId && !v.retired ? '<span class="champion">★</span> ' : '';
+      var tag = v.retired
+        ? ' <em class="v-retired-tag">retired \u2014 replaced, kept for its record</em>'
+        : (v.needsChannel ? ' <em style="color:var(--ink-faint)">(needs channel)</em>' : '');
+      /* The first cell is built as an element rather than written as a string.
+
+         It used to be innerHTML and then reached back into via tr.firstChild,
+         which works in a browser and returns null under the test's DOM stub —
+         so the whole render pass threw and five unrelated tests failed. The
+         editor below has to be appended to something real either way. */
+      var cell = document.createElement('td');
+      cell.innerHTML = star + escapeHtml(v.id) + tag
+        + '<div class="v-text">' + escapeHtml(v.text) + '</div>';
+      tr.appendChild(cell);
+      ['' + s.sends, '' + s.responses, rate].forEach(function(val){
+        tr.appendChild(h('td',{},[val]));
+      });
+      /* Rewording a variant, which is not the same as replacing it.
+
+         Offered on live variants only. A retired one is a record of what was
+         tried and how it did; editing it would make its numbers describe
+         words it never sent. */
+      if(!v.retired){
+        cell.appendChild(h('button',{class:'v-edit','data-action':'edit-variant',
+          'data-stage':stage,'data-id':v.id},['Reword']));
+        var editor = h('div',{class:'v-editor hidden','data-editor':stage + '|' + v.id},[]);
+        var tx = h('textarea',{class:'v-ta'},[]);
+        tx.value = v.text;
+        editor.appendChild(tx);
+        /* Say which of the two things saving will do, BEFORE it happens.
+
+           With sends on the clock the text is forked and this one retires, so
+           the new wording starts from zero rather than inheriting a reply rate
+           it did not earn. With nothing sent yet there is nothing to protect
+           and the text is simply replaced. Both are reasonable; being
+           surprised by either is not. */
+        editor.appendChild(h('div',{class:'v-editor-note'},[
+          s.sends > 0
+            ? 'This one has ' + s.sends + ' reviewed send' + (s.sends === 1 ? '' : 's')
+              + '. Saving starts the new wording from zero and retires this '
+              + 'version, so its reply rate stays attached to the words that '
+              + 'earned it.'
+            : 'Nothing has been sent with this one yet, so the wording is just replaced.'
+        ]));
+        editor.appendChild(h('div',{class:'v-editor-acts'},[
+          h('button',{class:'btn btn-sm btn-green','data-action':'save-variant',
+            'data-stage':stage,'data-id':v.id},[s.sends > 0 ? 'Save as new wording' : 'Save']),
+          h('button',{class:'btn btn-sm btn-ghost','data-action':'cancel-variant',
+            'data-stage':stage,'data-id':v.id},['Cancel'])
+        ]));
+        cell.appendChild(editor);
+      }
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -2129,6 +2322,10 @@ function renderVariantBarChart(stage, list, stats, championId){
   if(!canvas || typeof Chart === 'undefined') return;
   var key = 'variant-' + stage;
   if(chartInstances[key]){ try{ chartInstances[key].destroy(); }catch(e){} }
+  // Retired variants are left off the chart. The table keeps them, because
+  // that is the record; the chart is "what should I send", and the answer
+  // never includes something that will not be sent.
+  list = list.filter(function(v){ return !v.retired; });
   var sorted = list.slice().sort(function(a,b){
     var sa = stats[a.id]||{sends:0,responses:0}, sb = stats[b.id]||{sends:0,responses:0};
     var ra = (sa.responses+1)/(sa.sends+2), rb = (sb.responses+1)/(sb.sends+2);
@@ -3528,6 +3725,35 @@ document.addEventListener('click', function(ev){
       renderEmailLibrary();
       break;
     }
+    case 'invite-send': {
+      var emailEl = el('invite-email');
+      var addr = emailEl ? emailEl.value : '';
+      target.disabled = true;
+      inviteToOrg(addr, 'member').then(function(r){
+        target.disabled = false;
+        if(!r.ok){ showToast('Could not invite: ' + r.error); return; }
+        showToast('Invited ' + addr + '. They join once they accept.');
+        if(emailEl) emailEl.value = '';
+        init();
+      });
+      break;
+    }
+    case 'invite-accept': {
+      var invId = target.getAttribute('data-id');
+      target.disabled = true;
+      target.textContent = 'Joining...';
+      acceptOrgInvite(invId).then(function(r){
+        if(!r.ok){
+          showToast('Could not join: ' + r.error);
+          target.disabled = false;
+          renderPendingInvites();
+          return;
+        }
+        showToast('You are on the team.');
+        init();   // everything moved organisation; reload rather than patch
+      });
+      break;
+    }
     case 'team-toggle': {
       var who = target.getAttribute('data-who');
       TEAM_OPEN = (TEAM_OPEN === who) ? null : who;
@@ -3836,6 +4062,53 @@ document.addEventListener('click', function(ev){
       if(target.__undoJson) restoreSnapshot(target.__undoJson);
       target.closest('.toast').remove();
       break;
+    case 'edit-variant': {
+      var ed = document.querySelector('[data-editor="' + target.getAttribute('data-stage')
+        + '|' + target.getAttribute('data-id') + '"]');
+      if(ed) ed.classList.toggle('hidden');
+      break;
+    }
+    case 'cancel-variant': {
+      renderVariantsTab();
+      break;
+    }
+    case 'save-variant': {
+      var vstage = target.getAttribute('data-stage');
+      var vid = target.getAttribute('data-id');
+      var ed2 = document.querySelector('[data-editor="' + vstage + '|' + vid + '"]');
+      var ta2 = ed2 && ed2.querySelector('textarea');
+      var r = editVariant(STATE, vstage, vid, ta2 ? ta2.value : '');
+      if(!r.ok){
+        // 'unchanged' is not a failure worth a red bar, but silence after
+        // pressing Save reads as a bug.
+        showToast(r.error === 'unchanged' ? 'That is the same wording.' : 'Could not save: ' + r.error);
+        break;
+      }
+      saveState(STATE);
+      renderVariantsTab();
+      showToast(r.action === 'forked'
+        ? 'Saved as a new wording, starting from zero. The old one kept its '
+          + r.keptSends + ' sends and retired.'
+        : 'Wording updated.');
+      break;
+    }
+    case 'touch-prev':
+    case 'touch-next': {
+      var tcid = target.getAttribute('data-cid');
+      var tclient = STATE.clients[tcid];
+      if(!tclient) break;
+      var tpend = (cadenceProgress(tclient, new Date()).pendingStages) || [];
+      var at = tpend.indexOf(target.getAttribute('data-stage'));
+      if(at === -1) break;
+      var to = at + (action === 'touch-next' ? 1 : -1);
+      if(to < 0 || to >= tpend.length) break;
+      UI.touchPick[tcid] = tpend[to];
+      // Re-render rather than patch: the card's every control carries
+      // data-stage, and a half-swapped card would send one touch while
+      // logging another.
+      renderCallsBoard();
+      break;
+    }
     case 'add-variant': {
       var stg = target.getAttribute('data-stage');
       var input2 = document.querySelector('[data-stage-input="'+stg+'"]');

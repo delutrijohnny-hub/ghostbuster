@@ -47,6 +47,105 @@ function deriveSenderName(email){
    is a nice-to-have; the email library taught this codebase once already that
    a secondary panel which throws takes the whole app down with it, and nobody
    should lose their morning list because a manager widget could not load. */
+/* Building a team: invite, accept, and see what is outstanding.
+
+   An invite is only ever a request. Accepting re-stamps the joiner's contacts,
+   messages and settings into the new organisation — that is what makes them
+   visible to their manager — so a one-sided "add by email" would let anybody
+   type a stranger's address and absorb their entire book. Nothing moves until
+   the person whose data it is accepts, and the database verifies that against
+   the email on their own token. These are thin wrappers; the rules live in
+   accept_org_invite and the policies on org_invites. */
+async function inviteToOrg(email, role){
+  var sb = window.GB_SUPABASE;
+  var clean = String(email || '').trim().toLowerCase();
+  if(!clean || clean.indexOf('@') === -1) return {ok:false, error:'that is not an email address'};
+  var who = await sb.auth.getUser();
+  var me = who && who.data && who.data.user;
+  if(!me) return {ok:false, error:'not signed in'};
+  var mine = await sb.from('memberships').select('org_id, role').eq('user_id', me.id);
+  var managed = ((mine && mine.data) || []).filter(function(m){
+    return m.role === 'admin' || m.role === 'owner'; })[0];
+  if(!managed) return {ok:false, error:'only a manager can invite people'};
+  var res = await sb.from('org_invites')
+    .insert({org_id: managed.org_id, email: clean,
+             role: (role === 'admin' ? 'admin' : 'member'), invited_by: me.id})
+    .select('id');
+  if(res.error){
+    // The unique index on (org, email) is the common case, and "already
+    // invited" is friendlier than a constraint name.
+    if(/duplicate|unique/i.test(res.error.message || '')) return {ok:false, error:'already invited'};
+    return {ok:false, error: res.error.message || 'could not invite'};
+  }
+  return {ok:true};
+}
+
+async function acceptOrgInvite(id){
+  var res = await window.GB_SUPABASE.rpc('accept_org_invite', {invite: id});
+  if(res.error) return {ok:false, error: res.error.message || String(res.error)};
+  var r = res.data || {};
+  return r.ok ? {ok:true} : {ok:false, error: r.error || 'could not accept'};
+}
+
+/* Whether this person can build a team at all, and what their organisation is
+   called.
+
+   This exists because of a gap that made every manager feature unsellable: the
+   team tab hides itself when handed fewer than two people, and the invite box
+   lived inside it. So a brand-new customer — who is always alone on day one —
+   had no way to add their first colleague. The database was never the problem;
+   provision_org_for_new_user makes every signup an 'owner', which
+   user_managed_org_ids accepts. The only thing missing was a door.
+
+   Role names are kept in step with user_managed_org_ids ('owner','admin') on
+   purpose. If they drift, the button appears and the insert is refused by RLS,
+   which is a confusing failure rather than an unsafe one. */
+async function loadOrgRole(sb, uid){
+  try{
+    if(!uid) return {canInvite:false, orgName:''};
+    var res = await sb.from('memberships')
+      .select('role, org_id, organizations(name)')
+      .eq('user_id', uid);
+    var row = ((res && res.data) || [])[0];
+    if(!row) return {canInvite:false, orgName:''};
+    return {
+      canInvite: row.role === 'owner' || row.role === 'admin',
+      orgName: (row.organizations && row.organizations.name) || ''
+    };
+  }catch(e){ return {canInvite:false, orgName:''}; }
+}
+
+async function loadPendingInvites(sb){
+  try{
+    var res = await sb.rpc('my_pending_invites');
+    if(res.error || !res.data) return [];
+    return res.data.map(function(r){
+      return {id: r.id, orgName: r.org_name || 'a team', role: r.role, invitedAt: r.created_at};
+    });
+  }catch(e){ return []; }
+}
+
+/* Invites THIS person sent and nobody has taken up yet.
+
+   Filtered on invited_by deliberately. org_invites carries a second policy so
+   an invited person can see the invite addressed to them, which means a plain
+   select here would also return a manager's own incoming invite from some
+   other company and list it under "you invited". */
+async function loadSentInvites(sb, uid){
+  try{
+    if(!uid) return [];
+    var res = await sb.from('org_invites')
+      .select('id, email, role, created_at, accepted_at')
+      .eq('invited_by', uid)
+      .is('accepted_at', null)
+      .is('revoked_at', null);
+    if(res.error || !res.data) return [];
+    return res.data.map(function(r){
+      return {id: r.id, email: r.email, role: r.role, sentAt: r.created_at};
+    });
+  }catch(e){ return []; }
+}
+
 /* Move one appointment to a different person on the team.
 
    The case this exists for: somebody has booked calls in the diary and has
@@ -101,12 +200,29 @@ async function loadTeamRows(sb, uid){
        name they would recognise. Where it is blank, the local part of their
        connected calendar address is a decent stand-in, and auth.users stays
        unreachable from the browser either way. */
-    var nameFor = {};
-    var sRes = await sb.from('app_settings').select('user_id, sender_name');
+    var nameFor = {}, rolesFor = {};
+    var sRes = await sb.from('app_settings').select('user_id, sender_name, pipeline');
     ((sRes && sRes.data) || []).forEach(function(r){
       var n = String(r.sender_name || '').trim();
       if(n) nameFor[r.user_id] = n;
+      /* Each person read against their OWN stage names.
+
+         This counted the literal strings 'Completed' and 'No-show', which are
+         the default pipeline's words. A real estate team closes a call as
+         'Showing Completed'; an HVAC firm as 'Walkthrough Done'. On any
+         template but the default, every finished call would have been counted
+         as one nobody logged, and every show-up rate would have read 0% — a
+         confident, specific, wrong number rather than a blank. */
+      rolesFor[r.user_id] = pipelineRoleMap(r.pipeline);
     });
+    var defaultRoles = pipelineRoleMap(null);
+    function roleOf(userId, status){
+      var m = rolesFor[userId] || defaultRoles;
+      // An unknown status is one the pipeline was edited to drop. Treating it
+      // as still open is the safe reading: it shows up as work needing an
+      // outcome rather than silently counting as a win.
+      return m[status] || 'open';
+    }
 
     var cRes = await sb.from('clients')
       .select('id, user_id, name, call_date_time, status, created_at, ignored');
@@ -146,8 +262,12 @@ async function loadTeamRows(sb, uid){
                                when: c.call_date_time, status: c.status, sent: 0});
         }
       }
-      if(c.status === 'Completed') b.completed++;
-      if(c.status === 'No-show') b.noshows++;
+      var role = roleOf(c.user_id, c.status);
+      if(role === 'won') b.completed++;
+      else if(role === 'missed') b.noshows++;
+      // Declared in the bucket and surfaced by teamMemberState, but nothing
+      // ever incremented it, so every team row reported zero reschedules.
+      else if(role === 'stalled') b.rescheduled++;
       /* A call that has happened and still sits on a booked-ish status is one
          nobody recorded the outcome of. It is the denominator for every
          performance figure on this screen, so it is counted rather than
@@ -155,7 +275,10 @@ async function loadTeamRows(sb, uid){
       if(!isNaN(t)) callTimeOf[c.id] = t;
       if(!isNaN(t) && t < now){
         b.pastCalls++;
-        if(c.status === 'Booked' || c.status === 'Confirmed' || c.status === 'Reminded') b.unlogged++;
+        // 'open' is exactly Booked/Confirmed/Reminded on the default pipeline,
+        // and the equivalent three on every other template. A 'lost' status is
+        // an outcome somebody recorded, so it is not unlogged.
+        if(role === 'open') b.unlogged++;
       }
     });
 
@@ -414,7 +537,11 @@ async function loadState(){
         return;
       }
       if(!state.variants[row.stage]) state.variants[row.stage] = [];
-      state.variants[row.stage].push({id: row.variant_key, text: row.text, builtin: !!row.builtin, needsChannel: !!row.needs_channel});
+      // retired survives the round trip or a reworded variant comes back from
+      // the dead on the next sign-in, quietly competing again on a reply rate
+      // that belongs to wording nobody sends any more.
+      state.variants[row.stage].push({id: row.variant_key, text: row.text, builtin: !!row.builtin,
+                                      needsChannel: !!row.needs_channel, retired: !!row.retired});
     });
 
     // An account seeded before a new built-in stage existed has variant rows,
@@ -525,6 +652,13 @@ async function loadState(){
      never sees them. */
   state.team = await loadTeamRows(sb, uid);
   state.platform = state.team;
+  // An invite waiting for you, and the ones you have sent that nobody has
+  // taken up. Both degrade to empty rather than failing the load.
+  var orgRole = await loadOrgRole(sb, uid);
+  state.canInvite = orgRole.canInvite;
+  state.orgName = orgRole.orgName;
+  state.pendingInvites = await loadPendingInvites(sb);
+  state.sentInvites = state.canInvite ? await loadSentInvites(sb, uid) : [];
 
   SYNCED = buildSyncSnapshot(state, uid);
 
@@ -613,7 +747,7 @@ function rowTodo(t, uid){
 }
 function rowVariant(v, stage, uid){
   return {user_id: uid, stage: stage, variant_key: v.id, text: v.text, builtin: !!v.builtin,
-          needs_channel: !!v.needsChannel, channel: 'sms'};
+          needs_channel: !!v.needsChannel, channel: 'sms', retired: !!v.retired};
 }
 function rowEmailVariant(v, stage, uid){
   return {user_id: uid, stage: stage, variant_key: v.id, text: v.text,

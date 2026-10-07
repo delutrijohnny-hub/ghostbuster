@@ -243,6 +243,36 @@ function pipelineHasStages(keys){
   return true;
 }
 
+/* A status -> role lookup for ONE person's pipeline.
+
+   stageRole() answers the same question, but only ever about ACTIVE_PIPELINE —
+   the signed-in person's own. That is right everywhere in the app and wrong in
+   exactly one place: the team view, which aggregates several people at once
+   and must read each of them against their own stage names.
+
+   This exists because the team loader tested for the literal strings
+   'Completed' and 'No-show'. Those are the default pipeline's words. A real
+   estate team closes a call as 'Showing Completed' and an HVAC firm as
+   'Walkthrough Done', so for any customer not on the default template every
+   show-up rate would have been 0% and every finished call would have been
+   counted as never logged. Not an error, not a blank — a confident, specific,
+   wrong number, which is the failure mode this codebase keeps trying to avoid.
+
+   Roles are the stable thing: every template maps onto open / won / missed /
+   stalled / lost, which is why one cadence engine drives all of them. */
+function pipelineRoleMap(pipeline){
+  var list = (Array.isArray(pipeline) && pipeline.length) ? pipeline : buildDefaultPipeline();
+  var map = {};
+  list.forEach(function(st){
+    if(st && typeof st.key === 'string' && st.key) map[st.key] = st.role || 'open';
+  });
+  // A pipeline that parsed but yielded nothing usable is corrupt rather than
+  // empty, and silently counting everything as 'open' would read as "nobody
+  // has logged anything". Fall back to the defaults instead.
+  if(!Object.keys(map).length) return pipelineRoleMap(null);
+  return map;
+}
+
 function stageRole(status){
   for(var i=0;i<ACTIVE_PIPELINE.length;i++){
     if(ACTIVE_PIPELINE[i].key === status) return ACTIVE_PIPELINE[i].role || 'open';
@@ -1284,8 +1314,22 @@ function migrateState(raw){
     Object.keys(state.variants).forEach(function(stage){
       var rawArr = Array.isArray(raw.variants[stage]) ? raw.variants[stage] : [];
       rawArr.forEach(function(v){
-        if(v && typeof v === 'object' && typeof v.id === 'string' && typeof v.text === 'string' && !builtinIds[stage][v.id]){
-          state.variants[stage].push({id:v.id, text:v.text, needsChannel: !!v.needsChannel, builtin:false});
+        if(!v || typeof v !== 'object' || typeof v.id !== 'string' || typeof v.text !== 'string') return;
+        if(!builtinIds[stage][v.id]){
+          state.variants[stage].push({id:v.id, text:v.text, needsChannel: !!v.needsChannel, builtin:false, retired: !!v.retired});
+          return;
+        }
+        /* A builtin that was reworded, and so retired.
+
+           Builtins are rebuilt from code on every load rather than read back,
+           which is what keeps a shipped template improvable. But that rebuild
+           also discarded `retired`, so a builtin somebody had replaced came
+           back live on the next load — competing again, on a reply rate
+           belonging to wording that is no longer sent. The text still comes
+           from code; only the retirement is restored. */
+        if(v.retired){
+          var mine = state.variants[stage].filter(function(b){ return b.id === v.id; })[0];
+          if(mine) mine.retired = true;
         }
       });
     });
@@ -1738,8 +1782,60 @@ function extractChannelHandle(youtubeLink){
 function eligibleVariants(state, stage, client){
   var list = (state.variants && Array.isArray(state.variants[stage]) && state.variants[stage].length) ? state.variants[stage] : buildDefaultVariants()[stage];
   var hasChannel = !!extractChannelHandle(client.youtubeLink);
-  var filtered = list.filter(function(v){ return !(v.needsChannel && !hasChannel); });
-  return filtered.length ? filtered : list;
+  /* Retired variants are never sent again but are never deleted either.
+
+     A variant carries its own reply history, so rewriting one whose wording
+     already earned 12 replies out of 40 would hand those 12 replies to copy
+     that never earned them — the bandit would go on preferring the new text on
+     the strength of the old text's record. editVariant therefore forks instead
+     of overwriting, and the original is retired: out of the running, still in
+     the table, its numbers still attached to the words that produced them. */
+  var filtered = list.filter(function(v){
+    return !v.retired && !(v.needsChannel && !hasChannel);
+  });
+  // Never leave a stage with nothing to send. Falling back to the unretired
+  // set, then to the whole list, beats the 'fallback' stub text.
+  if(filtered.length) return filtered;
+  var unretired = list.filter(function(v){ return !v.retired; });
+  return unretired.length ? unretired : list;
+}
+
+/* Changing the wording of a variant without corrupting what it has learned.
+
+   Two cases, and the difference is whether there is anything to protect:
+
+     - no reviewed sends yet: nothing has been learned about this wording, so
+       the text is simply replaced.
+     - it has sends: the text is forked into a new variant starting from zero,
+       and the original is retired. The old row keeps its sends, its replies
+       and the words that earned them.
+
+   The alternative — edit in place and wipe the stats — loses the record of
+   what was tried and how it did, which is the only thing that makes the
+   comparison worth anything. */
+function editVariant(state, stage, id, newText){
+  var text = String(newText == null ? '' : newText).trim();
+  if(!text) return {ok:false, error:'a variant cannot be empty'};
+  var list = (state.variants && state.variants[stage]) || null;
+  if(!Array.isArray(list)) return {ok:false, error:'no such stage'};
+  var cur = list.filter(function(v){ return v.id === id; })[0];
+  if(!cur) return {ok:false, error:'no such variant'};
+  if(text === cur.text) return {ok:false, error:'unchanged'};
+
+  if(!state.variantStats[stage]) state.variantStats[stage] = {};
+  var sends = (state.variantStats[stage][id] || {}).sends || 0;
+
+  if(sends === 0){
+    cur.text = text;
+    cur.needsChannel = /\{channel\}/.test(text);
+    return {ok:true, action:'edited', id:id};
+  }
+
+  var newId = stage + '_edit_' + Date.now().toString(36);
+  list.push({id:newId, text:text, needsChannel: /\{channel\}/.test(text), builtin:false});
+  state.variantStats[stage][newId] = {sends:0, responses:0};
+  cur.retired = true;
+  return {ok:true, action:'forked', id:newId, retiredId:id, keptSends:sends};
 }
 
 
@@ -4363,6 +4459,17 @@ function cadenceProgress(client, now){
     done: done.length,
     total: touches.length,
     sentStages: done,
+    // The touches that have NOT gone out for this appointment, in sequence
+    // order. The card's arrows step through exactly this list, so that moving
+    // between touches can never land on one already sent.
+    pendingStages: pending,
+    /* The sequence itself, so a caller can say where a stage sits in it.
+
+       'Touch 3 of 5' means the third step, not the third thing sent. Those
+       differ the moment somebody skips one, and the position is the number
+       that stays true. An array rather than a lookup function: this object
+       gets compared and logged, and a function in it survives neither. */
+    touches: touches,
     nextStage: nextStage,
     // Is that next touch actually due now, or just not yet reached?
     nextIsDue: nextStage !== null && due.indexOf(nextStage) !== -1,
@@ -5033,6 +5140,8 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  pipelineRoleMap: pipelineRoleMap,
+  editVariant: editVariant,
   getTerminology: getTerminology, term: term, termLower: termLower,
   stageRole: stageRole, stageLabel: stageLabel, isWon: isWon, isMissed: isMissed,
   isStalledStage: isStalledStage, isOpenStage: isOpenStage, isResolvedStage: isResolvedStage,

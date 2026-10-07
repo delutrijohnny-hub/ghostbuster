@@ -323,6 +323,38 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .gt-head h3{display:flex;align-items:center;}
 
 /* team view */
+.invite-row{display:flex;justify-content:space-between;align-items:center;gap:14px;
+  background:var(--green-soft);border:1px solid var(--green);border-radius:var(--radius);
+  padding:12px 14px;margin-bottom:12px;flex-wrap:wrap;}
+.invite-note{font-size:12px;color:var(--ink-faint);margin-top:4px;}
+.invite-form{display:flex;gap:8px;align-items:center;max-width:420px;}
+.invite-form input{flex:1;}
+.invite-pending{font-size:12px;color:var(--ink-faint);margin-top:6px;}
+.team-invite{margin-top:4px;}
+/* The touch stepper, styled to match the .touch-chip it replaces: the arrows
+   sit inside the same pill so it reads as one control rather than two buttons
+   next to some text. */
+.card .touch-step{display:inline-flex;align-items:center;gap:1px;background:var(--bg);
+  border-radius:99px;padding:0 1px;vertical-align:middle;}
+.card .touch-step .ts-label{font-size:10px;font-weight:700;color:var(--ink-faint);
+  letter-spacing:.2px;white-space:nowrap;padding:2px 3px;}
+.card .touch-step .ts-arrow{border:0;background:none;cursor:pointer;color:var(--ink-soft);
+  font-size:14px;line-height:1;padding:1px 6px;border-radius:99px;font-family:inherit;}
+.card .touch-step .ts-arrow:hover:not(:disabled){background:var(--card);color:var(--ink);}
+.card .touch-step .ts-arrow:disabled{opacity:.25;cursor:default;}
+.ts-moved{font-size:12px;color:var(--ink-faint);margin:2px 0 6px;line-height:1.45;}
+/* Rewording a variant. */
+.v-text{color:var(--ink-faint);font-size:11.5px;max-width:420px;}
+.v-edit{border:0;background:none;padding:0;margin-top:4px;cursor:pointer;font-family:inherit;
+  font-size:11.5px;color:var(--brass);text-decoration:underline;}
+.v-editor{margin-top:8px;max-width:460px;}
+.v-ta{width:100%;font-family:inherit;font-size:12.5px;padding:7px 9px;min-height:62px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);}
+.v-editor-note{font-size:11.5px;color:var(--ink-faint);margin:5px 0 7px;line-height:1.45;}
+.v-editor-acts{display:flex;gap:6px;}
+.variant-retired{opacity:.55;}
+.variant-retired .v-text{text-decoration:line-through;}
+.v-retired-tag{color:var(--ink-faint);font-style:italic;font-size:11px;}
 .team-notstarted-head{font-size:11.5px;font-weight:700;text-transform:uppercase;
   letter-spacing:.04em;color:var(--ink-faint);margin:18px 0 8px;padding-top:12px;
   border-top:1px solid var(--border);}
@@ -1084,6 +1116,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <div id="app-root" class="hidden">
 
 <div id="save-health" class="save-health hidden" role="alert"></div>
+<!-- An invite waiting for you. Above the fold because accepting moves your
+     own records into somebody else's organisation. -->
+<div id="pending-invites" class="hidden"></div>
 <!-- A dead calendar connection stops every other thing in the app from
      working, so it sits above the fold rather than inside the collapsed
      alert summary. -->
