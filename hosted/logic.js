@@ -260,6 +260,37 @@ function pipelineHasStages(keys){
 
    Roles are the stable thing: every template maps onto open / won / missed /
    stalled / lost, which is why one cadence engine drives all of them. */
+/* What to call a booked appointment on the TEAM view specifically.
+
+   Terminology is per person, and every other screen shows one person their own
+   work, so their own word is always right there. The team view is the one
+   place that describes OTHER people's work — and once a team spans templates
+   the signed-in manager's vocabulary stops being true for everyone. A sales
+   manager who also runs hiring picks the recruiting template, and his team tab
+   then describes the sales team's calls as "Interviews".
+
+   The fix is not to go generic everywhere, which would be worse for the normal
+   case: a team all on one template has a shared vocabulary, and "12 booked
+   showings" reads better than "12 booked appointments" to an estate agency.
+
+   So: if everyone agrees, use their word. The moment two people differ, no
+   single template's word is true for the whole list, and a neutral one is.
+   Deliberately NOT the default terminology ('Call'), which is just the sales
+   template's word wearing a disguise. */
+function teamAppointmentWords(rows){
+  var def = buildDefaultTerminology();
+  var one = null, many = null, mixed = false;
+  (rows || []).forEach(function(r){
+    var t = (r && r.terminology) || {};
+    var o = String(t.appointment || def.appointment).toLowerCase();
+    var m = String(t.appointmentPlural || def.appointmentPlural).toLowerCase();
+    if(one === null){ one = o; many = m; return; }
+    if(o !== one || m !== many) mixed = true;
+  });
+  if(one === null || mixed) return {one: 'appointment', many: 'appointments', mixed: true};
+  return {one: one, many: many, mixed: false};
+}
+
 function pipelineRoleMap(pipeline){
   var list = (Array.isArray(pipeline) && pipeline.length) ? pipeline : buildDefaultPipeline();
   var map = {};
@@ -1813,6 +1844,36 @@ function eligibleVariants(state, stage, client){
    The alternative — edit in place and wipe the stats — loses the record of
    what was tried and how it did, which is the only thing that makes the
    comparison worth anything. */
+/* Stop sending one, or start again, without rewording it.
+
+   editVariant already retires the version it replaces, but that is the wrong
+   shape when the text is not being replaced at all — a recruiter whose list is
+   candidates does not want to REWORD the sales line about leverage points, he
+   wants it to stop going out while he writes his own.
+
+   The guard that matters: never retire the last live variant of a stage.
+   eligibleVariants falls back to the retired set rather than sending nothing,
+   so without this the stage would quietly go on sending the very copy somebody
+   just said to stop sending — the worst of both answers, and silent. */
+function retireVariant(state, stage, id, retired){
+  var list = (state.variants && state.variants[stage]) || null;
+  if(!Array.isArray(list)) return {ok:false, error:'no such stage'};
+  var cur = list.filter(function(v){ return v.id === id; })[0];
+  if(!cur) return {ok:false, error:'no such variant'};
+  var want = retired !== false;
+  if(!!cur.retired === want) return {ok:false, error:'unchanged'};
+
+  if(want){
+    var liveLeft = list.filter(function(v){ return !v.retired && v.id !== id; }).length;
+    if(!liveLeft){
+      return {ok:false, error:'That is the only one left for this touch. ' +
+                              'Add another before stopping this one.'};
+    }
+  }
+  cur.retired = want;
+  return {ok:true, retired: want};
+}
+
 function editVariant(state, stage, id, newText){
   var text = String(newText == null ? '' : newText).trim();
   if(!text) return {ok:false, error:'a variant cannot be empty'};
@@ -5160,7 +5221,9 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,
+  retireVariant: retireVariant,
   editVariant: editVariant,
   getTerminology: getTerminology, term: term, termLower: termLower,
   stageRole: stageRole, stageLabel: stageLabel, isWon: isWon, isMissed: isMissed,

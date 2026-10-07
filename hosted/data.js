@@ -220,8 +220,8 @@ async function loadTeamRows(sb, uid){
        name they would recognise. Where it is blank, the local part of their
        connected calendar address is a decent stand-in, and auth.users stays
        unreachable from the browser either way. */
-    var nameFor = {}, rolesFor = {};
-    var sRes = await sb.from('app_settings').select('user_id, sender_name, pipeline');
+    var nameFor = {}, rolesFor = {}, termsFor = {};
+    var sRes = await sb.from('app_settings').select('user_id, sender_name, pipeline, terminology');
     ((sRes && sRes.data) || []).forEach(function(r){
       var n = String(r.sender_name || '').trim();
       if(n) nameFor[r.user_id] = n;
@@ -234,6 +234,9 @@ async function loadTeamRows(sb, uid){
          as one nobody logged, and every show-up rate would have read 0% — a
          confident, specific, wrong number rather than a blank. */
       rolesFor[r.user_id] = pipelineRoleMap(r.pipeline);
+      // Their own vocabulary, so the team view can tell whether the team
+      // shares one or spans several — see teamAppointmentWords.
+      termsFor[r.user_id] = r.terminology || null;
     });
     var defaultRoles = pipelineRoleMap(null);
     function roleOf(userId, status){
@@ -365,6 +368,7 @@ async function loadTeamRows(sb, uid){
     return Object.keys(agg).map(function(u){
       var b = agg[u];
       b.name = nameFor[u] || b.name || 'teammate';
+      b.terminology = termsFor[u] || null;
       b.orgRole = orgRoleOf[u] || 'member';
       b.isManager = b.orgRole === 'admin' || b.orgRole === 'owner';
       b.upcomingList.forEach(function(x){ x.sent = sentPer[x.clientId] || 0; });

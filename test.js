@@ -8276,9 +8276,13 @@ test('the loader no longer tests status strings by hand', () => {
      behavioural test here and then reads undefined against the real database —
      which silently falls back to the default pipeline for everyone, i.e.
      exactly the bug this replaced. */
-  assert.ok(/app_settings'\)\s*\.select\('user_id, sender_name, pipeline'\)/.test(code),
+  assert.ok(/app_settings'\)\s*\.select\('[^']*\bpipeline\b[^']*'\)/.test(code),
     'loadTeamRows no longer selects the pipeline column, so every teammate '
       + 'falls back to the default pipeline against the real database');
+  assert.ok(/app_settings'\)\s*\.select\('[^']*\bterminology\b[^']*'\)/.test(code),
+    'loadTeamRows no longer selects terminology, so the team view cannot tell '
+      + 'whether the team shares a vocabulary and will use the signed-in '
+      + 'manager\u2019s words for everybody');
 });
 
 console.log('\n--- a colleague is never a customer ---');
@@ -8499,6 +8503,158 @@ test('setMemberRole reports a refusal rather than claiming success', async () =>
   const r = await d.run('setMemberRole("u9","admin")');
   assert.strictEqual(r.ok, false, 'a refusal was reported as success');
   assert.ok(/not someone/.test(r.error), 'the reason was lost: ' + r.error);
+});
+
+console.log('\n--- whose words the team view speaks in ---');
+
+/* Every other screen shows one person their own work, so their own vocabulary
+   is right there by construction. The team view is the one place describing
+   OTHER people's work, and it was using termLower() — the SIGNED-IN manager's
+   words, applied to everybody.
+
+   That is invisible while a team shares a template and wrong the moment it
+   does not: a sales manager who also runs hiring picks the recruiting
+   template, and his team tab starts calling the sales team's calls
+   "Interviews". */
+
+test('a team that shares a vocabulary keeps it', () => {
+  const w = GB.teamAppointmentWords([
+    {terminology: {appointment: 'Showing', appointmentPlural: 'Showings'}},
+    {terminology: {appointment: 'Showing', appointmentPlural: 'Showings'}}
+  ]);
+  assert.strictEqual(w.one, 'showing');
+  assert.strictEqual(w.many, 'showings');
+  assert.strictEqual(w.mixed, false,
+    'an agreeing team was treated as mixed and lost its own words');
+});
+
+test('a team spanning templates falls back to a neutral word', () => {
+  const w = GB.teamAppointmentWords([
+    {terminology: {appointment: 'Call', appointmentPlural: 'Calls'}},
+    {terminology: {appointment: 'Interview', appointmentPlural: 'Interviews'}}
+  ]);
+  assert.strictEqual(w.mixed, true);
+  assert.strictEqual(w.one, 'appointment');
+  assert.strictEqual(w.many, 'appointments');
+  // Not the default terminology, which is only the sales template's word
+  // wearing a disguise and would still read wrong to the recruiter.
+  assert.notStrictEqual(w.one, 'call');
+});
+
+test('somebody who has never set terminology counts as the default', () => {
+  // Null is what an account that skipped onboarding stores. It must compare
+  // equal to an explicit default, or a team where one person onboarded and
+  // one did not would wrongly read as mixed.
+  const def = GB.buildDefaultTerminology();
+  const w = GB.teamAppointmentWords([
+    {terminology: null},
+    {terminology: {appointment: def.appointment, appointmentPlural: def.appointmentPlural}}
+  ]);
+  assert.strictEqual(w.mixed, false, 'null and the explicit default read as different vocabularies');
+  assert.strictEqual(w.one, 'call');
+});
+
+test('an empty or missing team does not throw', () => {
+  assert.strictEqual(GB.teamAppointmentWords([]).one, 'appointment');
+  assert.strictEqual(GB.teamAppointmentWords(null).many, 'appointments');
+});
+
+test('the team view asks the team, not the signed-in manager', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                       app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/teamAppointmentWords\(rows\)/.test(code),
+    'the team view no longer works out the team\u2019s shared vocabulary');
+  assert.ok(!/termLower\('appointment/.test(code),
+    'the team view is back to using the signed-in manager\u2019s word for a '
+      + 'booking and applying it to everyone else\u2019s work');
+});
+
+console.log('\n--- writing your own texts for a different job ---');
+
+/* Colin's list is candidates, not clients. The shipped copy is written for
+   sales, so he needs to add his own AND stop the ones that do not fit.
+   editVariant retires the version it replaces, which is the wrong shape when
+   the text is not being replaced at all. */
+
+test('a variant can be stopped without rewording it, and brought back', () => {
+  const st = GB.buildDefaultState();
+  const id = st.variants.welcome[0].id;
+  assert.strictEqual(GB.retireVariant(st, 'welcome', id, true).ok, true);
+  assert.strictEqual(st.variants.welcome[0].retired, true);
+  assert.strictEqual(st.variants.welcome[0].text.length > 0, true, 'the text was destroyed');
+  assert.strictEqual(GB.retireVariant(st, 'welcome', id, false).ok, true);
+  assert.strictEqual(st.variants.welcome[0].retired, false, 'it could not be brought back');
+});
+
+test('a stopped variant is not sent', () => {
+  const st = GB.buildDefaultState();
+  const c = freshClient({});
+  const doomed = st.variants.welcome[0].id;
+  GB.retireVariant(st, 'welcome', doomed, true);
+  for (let i = 0; i < 60; i++) {
+    assert.notStrictEqual(GB.pickVariant(st, 'welcome', c, {forceReroll: true}).id, doomed,
+      'a variant somebody stopped is still going out');
+  }
+});
+
+test('the last one standing cannot be stopped', () => {
+  /* eligibleVariants falls back to the retired set rather than sending
+     nothing, so without this guard the stage would quietly go on sending the
+     exact copy somebody just stopped — silently, and the worst of both. */
+  const st = GB.buildDefaultState();
+  const ids = st.variants.welcome.map(v => v.id);
+  for (let i = 0; i < ids.length - 1; i++) {
+    assert.strictEqual(GB.retireVariant(st, 'welcome', ids[i], true).ok, true);
+  }
+  const last = GB.retireVariant(st, 'welcome', ids[ids.length - 1], true);
+  assert.strictEqual(last.ok, false, 'the final variant for a stage was stopped');
+  assert.ok(/only one left/i.test(last.error), 'the refusal does not explain itself: ' + last.error);
+  // And the stage must still send that one.
+  const c = freshClient({});
+  const got = GB.pickVariant(st, 'welcome', c, {forceReroll: true});
+  assert.strictEqual(got.id, ids[ids.length - 1]);
+  assert.ok(!got.retired, 'the stage is now sending retired copy');
+});
+
+test('stopping refuses the no-op cases', () => {
+  const st = GB.buildDefaultState();
+  const id = st.variants.welcome[0].id;
+  assert.strictEqual(GB.retireVariant(st, 'welcome', id, false).ok, false, 'already live');
+  assert.strictEqual(GB.retireVariant(st, 'nostage', id, true).ok, false, 'unknown stage');
+  assert.strictEqual(GB.retireVariant(st, 'welcome', 'nope', true).ok, false, 'unknown id');
+});
+
+test('both directions are wired up, and the refusal is shown', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const tab = app.slice(app.indexOf('function renderVariantsTab()'),
+                        app.indexOf('function renderVariantBarChart'));
+  assert.ok(/'data-want':'1'/.test(tab), 'nothing offers to stop a variant');
+  assert.ok(/'data-want':'0'/.test(tab), 'a stopped variant can never be brought back');
+  const h = app.slice(app.indexOf("case 'retire-variant':"), app.indexOf("case 'cancel-variant':"));
+  assert.ok(/if\(!qr\.ok\)\{ showToast\(qr\.error\); break; \}/.test(h),
+    'the refusal — including the last-one-standing guard — is swallowed, so '
+      + 'the button looks broken rather than explaining itself');
+  assert.ok(/saveState\(STATE\)/.test(h), 'the change is never persisted');
+});
+
+test('the shipped copy is not sales-specific, apart from the channel lines', () => {
+  /* Checked before writing recruiting copy, and the reason none was written:
+     25 of 28 default variants are job-neutral, and the 3 that are not all
+     need {channel}. eligibleVariants already drops needsChannel variants for
+     any contact without a readable handle, which a job candidate never has —
+     so they can never reach a candidate in the first place. */
+  const v = GB.buildDefaultVariants();
+  const salesy = /strategy|growth|revenue|channel|youtube|audit|funnel|campaign|roi/i;
+  const offenders = [];
+  Object.keys(v).forEach(st => v[st].forEach(x => {
+    if (salesy.test(x.text) && !x.needsChannel) offenders.push(st + ': ' + x.text.slice(0, 60));
+  }));
+  assert.deepStrictEqual(offenders, [],
+    'a default variant is sales-specific but NOT gated behind needsChannel, so '
+      + 'it would be sent to a recruiter’s candidates: ' + offenders.join(' | '));
 });
 
 Promise.all(pendingTests).then(() => {

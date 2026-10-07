@@ -337,6 +337,10 @@ function renderTeamTab(){
   if(btn) btn.classList.remove('hidden');
 
   var o = teamOverview(rows, new Date());
+  /* The team's own word for a booking, or a neutral one where they differ.
+     termLower() would give the SIGNED-IN manager's word and apply it to
+     everybody — which is wrong the moment the team spans templates. */
+  var tw = teamAppointmentWords(rows);
   box.innerHTML = '';
 
   box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['Your team']) ]));
@@ -392,7 +396,7 @@ function renderTeamTab(){
   } else {
     lead = h('p',{class:'team-lead', html:
       '<strong>' + o.strandedUpcoming + '</strong> booked ' +
-      (o.strandedUpcoming === 1 ? termLower('appointment') : termLower('appointmentPlural')) +
+      (o.strandedUpcoming === 1 ? tw.one : tw.many) +
       ' belong to someone who is not following anyone up. ' +
       o.working + ' of ' + o.total + ' are working their lists. ' +
       o.sent7d + ' messages sent this week.' + dir});
@@ -506,7 +510,7 @@ function renderTeamTab(){
       (o.notStarted.length === 1 ? 'person' : 'people') +
       (o.notStartedUpcoming
         ? ', holding ' + o.notStartedUpcoming + ' booked ' +
-          (o.notStartedUpcoming === 1 ? termLower('appointment') : termLower('appointmentPlural'))
+          (o.notStartedUpcoming === 1 ? tw.one : tw.many)
         : '')
     ]));
     o.notStarted.forEach(function(m){
@@ -2331,6 +2335,17 @@ function renderVariantsTab(){
             'data-stage':stage,'data-id':v.id},['Cancel'])
         ]));
         cell.appendChild(editor);
+        /* Stopping one without rewording it. The pair a person actually
+           needs when the shipped copy is for a different job than theirs:
+           write your own, stop the ones that do not fit. */
+        cell.appendChild(h('button',{class:'v-edit v-stop','data-action':'retire-variant',
+          'data-stage':stage,'data-id':v.id,'data-want':'1',
+          title:'Stop sending this one. It keeps its record and can come back.'},
+          ['Stop using']));
+      } else {
+        cell.appendChild(h('button',{class:'v-edit','data-action':'retire-variant',
+          'data-stage':stage,'data-id':v.id,'data-want':'0',
+          title:'Start sending this one again'},['Use again']));
       }
       tbody.appendChild(tr);
     });
@@ -4124,6 +4139,17 @@ document.addEventListener('click', function(ev){
       var ed = document.querySelector('[data-editor="' + target.getAttribute('data-stage')
         + '|' + target.getAttribute('data-id') + '"]');
       if(ed) ed.classList.toggle('hidden');
+      break;
+    }
+    case 'retire-variant': {
+      var qstage = target.getAttribute('data-stage');
+      var qid = target.getAttribute('data-id');
+      var qwant = target.getAttribute('data-want') === '1';
+      var qr = retireVariant(STATE, qstage, qid, qwant);
+      if(!qr.ok){ showToast(qr.error); break; }
+      saveState(STATE);
+      renderVariantsTab();
+      showToast(qwant ? 'Stopped. It keeps its record.' : 'Back in rotation.');
       break;
     }
     case 'cancel-variant': {
