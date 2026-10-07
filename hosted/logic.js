@@ -277,6 +277,51 @@ function pipelineHasStages(keys){
    single template's word is true for the whole list, and a neutral one is.
    Deliberately NOT the default terminology ('Call'), which is just the sales
    template's word wearing a disguise. */
+/* Carry every contact's status across when the whole pipeline is replaced.
+
+   Editing one stage at a time leaves orphaned statuses alone on purpose, and
+   the settings screen says so: an unrecognised stage behaves as 'open', so
+   those contacts keep being followed up rather than vanishing. That is the
+   right answer for a rename.
+
+   It is the wrong answer for swapping templates, where every stage changes at
+   once. Without this, an agency moving to the recruiting template would find
+   all 115 of its completed calls reading as open — back in the follow-up
+   cadence, chasing people who already showed up, and every rate on the team
+   view reset to "not enough logged".
+
+   Roles are what survives a rename, which is the whole reason they exist. A
+   'won' stage becomes the new pipeline's 'won' stage whatever either is
+   called. Where the new pipeline has no stage for a role at all, the first
+   open stage is the honest landing place — still followed up, nothing
+   claimed — and it is counted separately so the caller can say so. */
+function remapStatusesByRole(state, newStages){
+  var oldMap = pipelineRoleMap(state && state.pipeline);
+  var byRole = {}, valid = {};
+  (newStages || []).forEach(function(st){
+    if(!st || !st.key) return;
+    valid[st.key] = true;
+    var r = st.role || 'open';
+    if(!byRole[r]) byRole[r] = st.key;
+  });
+  var moved = 0, kept = 0, noCounterpart = 0;
+  var clients = (state && state.clients) || {};
+  Object.keys(clients).forEach(function(cid){
+    var c = clients[cid];
+    if(!c || typeof c.status !== 'string') return;
+    // A name that exists in both pipelines needs no help. 'No-show' is in
+    // nearly every template, so this is the common case rather than an edge.
+    if(valid[c.status]){ kept++; return; }
+    var role = oldMap[c.status] || 'open';
+    var to = byRole[role];
+    if(!to){ to = byRole.open; if(to) noCounterpart++; }
+    if(!to) return;                      // nothing sensible to move to
+    c.status = to;
+    moved++;
+  });
+  return {moved: moved, kept: kept, noCounterpart: noCounterpart};
+}
+
 function teamAppointmentWords(rows){
   var def = buildDefaultTerminology();
   var one = null, many = null, mixed = false;
@@ -5229,6 +5274,7 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  remapStatusesByRole: remapStatusesByRole,
   teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,
   retireVariant: retireVariant,

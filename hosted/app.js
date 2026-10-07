@@ -3210,6 +3210,27 @@ function renderSettingsModal(){
 
   openModalHtml(
     '<div class="modal-head"><h2>Business settings</h2><button class="btn-ghost btn" data-action="close-modal">✕</button></div>' +
+    /* Starting from a template, after the first run.
+
+       The nine templates were only ever offered in the onboarding wizard, and
+       that wizard never comes back: it is gated on a localStorage flag, so
+       anyone who clicked past it could never pick one. That is not
+       hypothetical — a sales manager who also runs hiring signed up, skipped
+       setup in seven seconds, and had no way to reach the recruiting template
+       from anywhere in the product. */
+    '<div class="set-section"><h3>Start from a template</h3>' +
+    '<div class="hint">Sets the stage names and wording below. Your ' +
+      escapeHtml(termLower('contactPlural')) + ' move across by what each stage ' +
+      '<em>means</em>, so a finished ' + escapeHtml(termLower('appointment')) +
+      ' stays finished even though the stage is called something new.</div>' +
+    '<div class="tpl-row">' +
+    buildIndustryTemplates().filter(function(t){ return t.key !== 'custom'; })
+      .map(function(t){
+        return '<button class="btn btn-sm tpl-btn" data-action="use-template" data-key="' +
+          escapeHtml(t.key) + '" title="' + escapeHtml(t.blurb) + '">' +
+          escapeHtml(t.label) + '</button>';
+      }).join('') +
+    '</div></div>' +
     '<div class="set-section"><h3>Pipeline stages</h3>' +
     '<div class="hint">The role is what Ghost Recall acts on, not the name — so an HVAC shop can call its won stage “Estimate Completed” and the cadence still stops there.</div>' +
     stageRows +
@@ -3360,6 +3381,16 @@ function saveSettingsDraft(){
     return;
   }
   // Email fields were edited live in STATE; persist them with the rest.
+  /* Only when a template was loaded. Editing stages by hand keeps its
+     documented behaviour — an orphaned status behaves as open and the warning
+     above says so — because a rename is a small change somebody is watching.
+     Swapping a template changes every stage at once, and leaving all of them
+     orphaned would put the whole book back into the follow-up cadence. */
+  var moved = null;
+  if(d.remap){
+    moved = remapStatusesByRole(STATE, stages);
+    d.remap = false;
+  }
   STATE.pipeline = stages;
   STATE.terminology = d.terminology;
   STATE.sequence = d.sequence;
@@ -3369,7 +3400,9 @@ function saveSettingsDraft(){
   saveState(STATE);
   closeModal();
   renderAll();
-  showToast('Settings saved.');
+  showToast(moved && moved.moved
+    ? 'Settings saved. ' + moved.moved + ' moved to the matching new stage.'
+    : 'Settings saved.');
 }
 
 
@@ -3923,6 +3956,24 @@ document.addEventListener('click', function(ev){
       SETTINGS_DRAFT.sequence = buildDefaultSequence();
       renderSettingsModal();
       break;
+    case 'use-template': {
+      var tk = target.getAttribute('data-key');
+      var tpl = industryTemplate(tk);
+      if(!tpl) break;
+      SETTINGS_DRAFT.pipeline = tpl.pipeline.map(function(st){
+        return {key: st.key, label: st.label, role: st.role};
+      });
+      if(tpl.terminology){
+        SETTINGS_DRAFT.terminology = Object.assign(buildDefaultTerminology(), tpl.terminology);
+      }
+      /* Remap on save, not now. The draft is reviewable and discardable —
+         nothing has been committed yet — so rewriting statuses here would
+         change real data for a choice the person can still back out of. */
+      SETTINGS_DRAFT.remap = true;
+      renderSettingsModal();
+      showToast('Loaded ' + tpl.label + '. Review it, then Save.');
+      break;
+    }
     case 'reset-settings':
       SETTINGS_DRAFT = {pipeline: buildDefaultPipeline(), terminology: buildDefaultTerminology(),
                         sequence: buildDefaultSequence()};

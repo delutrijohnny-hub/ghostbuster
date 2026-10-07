@@ -8736,6 +8736,104 @@ test('the contact shows it, and shows nothing when there is none', () => {
       + 'else wrote in their own calendar');
 });
 
+console.log('\n--- changing your setup after the first run ---');
+
+/* The nine industry templates were only ever offered in the onboarding
+   wizard, which is gated on a localStorage flag and never returns. Anyone who
+   clicked past it could not reach a template from anywhere in the product —
+   found the hard way when a sales manager who also runs hiring signed up,
+   skipped setup in seven seconds, and was stuck on the sales defaults.
+
+   The risk in offering it later is the data already there. Swapping a template
+   changes every stage at once, and an orphaned status behaves as 'open' — so
+   without remapping, an agency moving templates would find every completed
+   call back in the follow-up cadence, chasing people who already showed up. */
+
+test('statuses move by what the stage MEANS, not what it is called', () => {
+  const st = GB.buildDefaultState();
+  st.pipeline = GB.buildDefaultPipeline();
+  ['a','b','c','d','e'].forEach((id, i) => {
+    st.clients[id] = GB.sanitizeClient({name: id, status:
+      ['Completed','No-show','Booked','Rescheduled','Ghosted'][i]}, id);
+  });
+  const rec = GB.buildIndustryTemplates().filter(t => t.key === 'recruiting')[0];
+  const out = GB.remapStatusesByRole(st, rec.pipeline);
+
+  assert.strictEqual(st.clients.a.status, 'Screen Completed',
+    'a finished call did not land on the new pipeline’s finished stage');
+  assert.strictEqual(st.clients.c.status, 'Sourced', 'an open call did not land on an open stage');
+  assert.strictEqual(st.clients.d.status, 'Awaiting Decision', 'a stalled call was not carried across');
+  assert.strictEqual(st.clients.e.status, 'Passed', 'a lost call was not carried across');
+  // 'No-show' exists in both, so it is left exactly as it is.
+  assert.strictEqual(st.clients.b.status, 'No-show');
+  assert.strictEqual(out.kept, 1, 'a status valid in both pipelines should not be touched');
+  assert.strictEqual(out.moved, 4);
+});
+
+test('nothing is left behind in the old vocabulary', () => {
+  const st = GB.buildDefaultState();
+  st.pipeline = GB.buildDefaultPipeline();
+  ['x','y','z'].forEach((id, i) => {
+    st.clients[id] = GB.sanitizeClient({name:id, status: ['Completed','Booked','No-show'][i]}, id);
+  });
+  const re = GB.buildIndustryTemplates().filter(t => t.key === 'real_estate')[0];
+  GB.remapStatusesByRole(st, re.pipeline);
+  const valid = {};
+  re.pipeline.forEach(s2 => { valid[s2.key] = true; });
+  Object.keys(st.clients).forEach(id => {
+    assert.ok(valid[st.clients[id].status],
+      id + ' was left on "' + st.clients[id].status + '", which does not exist in the new '
+        + 'pipeline — it would read as open and go back into the cadence');
+  });
+});
+
+test('a role with no counterpart lands somewhere followed-up, and is counted', () => {
+  const st = GB.buildDefaultState();
+  st.pipeline = GB.buildDefaultPipeline();
+  st.clients.g = GB.sanitizeClient({name:'g', status:'Ghosted'}, 'g');   // 'lost'
+  // A pipeline with no 'lost' stage at all.
+  const out = GB.remapStatusesByRole(st, [
+    {key:'New', label:'New', role:'open'},
+    {key:'Done', label:'Done', role:'won'}
+  ]);
+  assert.strictEqual(st.clients.g.status, 'New',
+    'a role with no counterpart should land on an open stage rather than be '
+      + 'stranded on a name the new pipeline does not have');
+  assert.strictEqual(out.noCounterpart, 1, 'the caller cannot tell it happened');
+});
+
+test('remapping an empty or odd account does not throw', () => {
+  assert.strictEqual(GB.remapStatusesByRole({}, []).moved, 0);
+  assert.strictEqual(GB.remapStatusesByRole(null, null).moved, 0);
+  const st = GB.buildDefaultState();
+  st.clients.n = GB.sanitizeClient({name:'n'}, 'n');
+  assert.doesNotThrow(() => GB.remapStatusesByRole(st, [{key:'Only', label:'Only', role:'open'}]));
+});
+
+test('the picker is offered in settings and only remaps on save', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const modal = app.slice(app.indexOf('function renderSettingsModal()'),
+                          app.indexOf('function saveSettingsDraft'));
+  assert.ok(/data-action="use-template"/.test(modal),
+    'the templates are still unreachable after onboarding');
+  assert.ok(/buildIndustryTemplates\(\)\.filter/.test(modal),
+    'the picker no longer lists the templates');
+
+  const h = app.slice(app.indexOf("case 'use-template':"), app.indexOf("case 'reset-settings':"));
+  assert.ok(/SETTINGS_DRAFT\.remap = true;/.test(h),
+    'picking a template does not flag the remap, so every status would be '
+      + 'orphaned and the whole book would re-enter the cadence');
+  assert.ok(!/remapStatusesByRole/.test(h),
+    'the remap runs while the draft is still discardable — it must wait for '
+      + 'Save, or backing out leaves rewritten statuses behind');
+
+  const save = app.slice(app.indexOf('function saveSettingsDraft'),
+                         app.indexOf('function saveSettingsDraft') + 2200);
+  assert.ok(/if\(d\.remap\)\{/.test(save), 'the save path never remaps');
+  assert.ok(/remapStatusesByRole\(STATE, stages\)/.test(save),
+    'the save path does not remap against the stages it is about to commit');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
