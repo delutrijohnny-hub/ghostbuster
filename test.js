@@ -9251,6 +9251,107 @@ test('the backlog never becomes a reply rate', () => {
     'the review backlog is leaking into the reply rate calculation');
 });
 
+console.log('\n--- the alarm that was counting the wrong people ---');
+
+/* teamOverview splits adopted members from people who have never used the
+   product, and every headline figure sums only the adopted ones. That is right
+   for rates and for adoption: counting somebody who has never sent anything
+   would make performance figures a statement about onboarding.
+
+   todayUntouched is not a performance figure. It is an operational alarm — a
+   call happening this afternoon that nobody has texted — and it was being
+   summed like one. On this book that printed 5 when the real number was 17,
+   and the 12 it left out belonged to the three people who had not opened the
+   app in a week and were therefore certain not to send them. */
+
+function tmRow(name, opts){
+  const o = opts || {};
+  const now = new Date();
+  return Object.assign({
+    name: name, userId: name, contacts: 10, upcoming: 4, sentEver: 0, sent7d: 0,
+    sentPrev7d: 0, replies: 0, repliesMeasured: false, awaitingReview: 0,
+    pastCalls: 0, unlogged: 0, completed: 0, noshows: 0, rescheduled: 0,
+    connectedCalendars: 1, lastSync: now.toISOString(), lastSentAt: null,
+    upcomingList: [], outsideHours: 0, weeks: []
+  }, o);
+}
+
+/* todayUntouched is DERIVED inside teamMemberState from upcomingList, not
+   passed in — so a fixture has to supply real appointments later today with
+   nothing sent against them, or it silently measures zero. */
+function callsLaterToday(n){
+  const out = [];
+  for(let i = 0; i < n; i++){
+    const when = new Date();
+    when.setHours(23, 0, 0, 0);          // still today, still ahead of now
+    out.push({clientId: 'x' + i, name: 'C' + i, when: when.toISOString(),
+              status: 'Booked', sent: 0});
+  }
+  return out;
+}
+
+test('a call today with nothing sent counts whoever owns it', () => {
+  const now = new Date();
+  // One person working their list, three who have never sent anything.
+  const rows = [
+    tmRow('Working', {sentEver: 50, sent7d: 10, lastSentAt: now.getTime(),
+                      upcomingList: callsLaterToday(2)}),
+    tmRow('Dormant1', {upcomingList: callsLaterToday(6)}),
+    tmRow('Dormant2', {upcomingList: callsLaterToday(4)}),
+    tmRow('Dormant3', {upcomingList: callsLaterToday(2)})
+  ];
+  const o = GB.teamOverview(rows, now);
+  assert.ok(o.notStarted.length >= 3, 'the dormant accounts should be in notStarted');
+  assert.strictEqual(o.todayUntouched, 14,
+    'calls happening today are only counted for people who already use the '
+      + 'product — which hides exactly the ones nobody is going to send');
+});
+
+test('the performance figures still exclude people who never started', () => {
+  /* The fix must not leak into the rates. That split exists so a completion
+     rate is not really a statement about onboarding. */
+  const now = new Date();
+  const rows = [
+    tmRow('Working', {sentEver: 50, sent7d: 10, lastSentAt: now.getTime(), upcoming: 3}),
+    tmRow('Dormant', {upcoming: 20})
+  ];
+  const o = GB.teamOverview(rows, now);
+  assert.strictEqual(o.total, 1, 'somebody who has never used it is being counted as a team member');
+  assert.strictEqual(o.notStartedUpcoming, 20,
+    'their booked work should still be reported, just counted apart');
+  assert.ok(!o.members.some(m => m.name === 'Dormant'));
+});
+
+test('the tab carries the count, and it matches the screen it points at', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  // The creation, not just a mention: the querySelector that looks the badge
+  // up also contains the class name, so a pattern that loose stays true with
+  // the element itself never being made.
+  assert.ok(/h\('span',\{class:'tab-badge'\}/.test(code),
+    'nothing on the tab says there is anything to look at, so none of this '
+      + 'reaches a manager who does not click through');
+  assert.ok(/btn\.appendChild\(badge\)/.test(code), 'the badge is built but never attached');
+  assert.ok(/badge\.textContent = String\(o\.todayUntouched\)/.test(code),
+    'the badge shows something other than the urgent line it points at — a '
+      + 'badge that disagrees with its own screen reads as a bug');
+  assert.ok(/badge\.remove\(\)/.test(code),
+    'a stale badge is left behind once the calls are handled, so it keeps '
+      + 'claiming work that is already done');
+});
+
+test('no urgent calls means no badge at all', () => {
+  const now = new Date();
+  const o = GB.teamOverview([
+    tmRow('A', {sentEver: 10, sent7d: 3, lastSentAt: now.getTime()}),
+    tmRow('B', {sentEver: 10, sent7d: 3, lastSentAt: now.getTime()})
+  ], now);
+  assert.strictEqual(o.todayUntouched, 0,
+    'a quiet day still produces a number, so the badge would never clear');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

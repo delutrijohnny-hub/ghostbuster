@@ -383,6 +383,32 @@ function renderTeamTab(){
   if(btn) btn.classList.remove('hidden');
 
   var o = teamOverview(rows, new Date());
+  /* A count on the tab itself, because none of this reaches a manager who does
+     not click through.
+
+     Everything else built for this screen assumes somebody is already looking
+     at it. The one fact that cannot wait for that is a call happening TODAY
+     with nothing sent — by the time it is noticed tomorrow it is a no-show.
+     Seventeen of those were sitting on this book while the manager's own
+     morning list showed two.
+
+     Deliberately the same number the tab's urgent line shows. A badge that
+     disagreed with the screen it points at would read as a bug. */
+  if(btn){
+    var badge = btn.querySelector('.tab-badge');
+    if(o.todayUntouched){
+      if(!badge){
+        badge = h('span',{class:'tab-badge'},[]);
+        btn.appendChild(badge);
+      }
+      badge.textContent = String(o.todayUntouched);
+      badge.setAttribute('title', o.todayUntouched +
+        (o.todayUntouched === 1 ? ' call happening today that' : ' calls happening today that') +
+        ' nobody has messaged');
+    } else if(badge){
+      badge.remove();
+    }
+  }
   /* The team's own word for a booking, or a neutral one where they differ.
      termLower() would give the SIGNED-IN manager's word and apply it to
      everybody — which is wrong the moment the team spans templates. */

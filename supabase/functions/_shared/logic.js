@@ -4369,7 +4369,20 @@ function teamOverview(rows, now){
     strandedUpcoming: strandedWork,
     sent7d: members.reduce(function(n, m){ return n + m.sent7d; }, 0),
     sentPrev7d: members.reduce(function(n, m){ return n + m.sentPrev7d; }, 0),
-    todayUntouched: members.reduce(function(n, m){ return n + m.todayUntouched; }, 0),
+    /* EVERYONE, not just the adopted members.
+
+       This is the one figure on the screen that is not about performance, and
+       it was being summed like one. A call happening this afternoon that
+       nobody has texted is equally bad whoever owns it — and worse when the
+       owner has not opened the app in a fortnight, because nobody is going to
+       send it.
+
+       On this book the members-only sum said 5. The real number was 17, and
+       the 12 it left out belonged to the three people who will certainly not
+       send them. Splitting adopted from not-started is right for rates and
+       for adoption, which is what that split was written for; applying it
+       here produced a confident, specific, wrong alarm. */
+    todayUntouched: all.reduce(function(n, m){ return n + m.todayUntouched; }, 0),
     unlogged: members.reduce(function(n, m){ return n + m.unlogged; }, 0),
     measurable: members.filter(function(m){ return m.completionRate !== null; }).length,
     showUpMeasurable: members.filter(function(m){ return m.showUpRate !== null; }).length,
