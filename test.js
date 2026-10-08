@@ -9994,6 +9994,70 @@ test('the browser sends an origin to come back to', () => {
       + 'Console and changing it here breaks the consent screen');
 });
 
+console.log('\n--- "Unknown" when Google knew the name all along ---');
+
+/* A contact's name came from the title's parentheses, then "booked by:" in
+   the description, then the literal string "Unknown". Google sends a
+   displayName on every attendee and nothing ever read it.
+
+   On a real account that meant six of thirteen contacts named "Unknown" —
+   every "Interview with Josh" and "Second Meeting Market Maker MGMT - Colin
+   and Erica" belonging to somebody who books meetings by hand instead of
+   through a funnel that writes "(Name)" into the title.
+
+   Not cosmetic: firstName('Unknown') is 'there', so every one of those people
+   gets "Hey there," in a message that is otherwise personal. */
+
+test('the guest’s own name is used when the title has none', () => {
+  const parse = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    '_shared', 'parse.ts'), 'utf8');
+  const fn = parse.slice(parse.indexOf('export function clientFromGCalEvent'));
+  assert.ok(/displayName\?: string/.test(parse),
+    'the attendee type has no displayName, so Google’s own name for the '
+      + 'guest is discarded at the type boundary');
+  assert.ok(/guest\?\.displayName/.test(fn),
+    'the displayName fallback is gone — anything not booked through a funnel '
+      + 'imports as "Unknown" and gets texted "Hey there,"');
+});
+
+test('the order of preference is title, then description, then Google', () => {
+  const parse = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    '_shared', 'parse.ts'), 'utf8');
+  // Comments stripped: the block above this code names all three sources in
+  // prose, so an index-based ordering check matches the explanation instead
+  // of the implementation.
+  const fn = codeOnly(parse.slice(parse.indexOf('export function clientFromGCalEvent')));
+  const iTitle = fn.indexOf('nameMatch ? nameMatch[1]');
+  const iDesc  = fn.indexOf('booked by');
+  const iGuest = fn.indexOf('guest?.displayName');
+  const iFinal = fn.indexOf("if (!name) name = 'Unknown';");
+  assert.ok(iTitle > -1 && iDesc > iTitle && iGuest > iDesc && iFinal > iGuest,
+    'the name sources are no longer tried in order of how much the source '
+      + 'actually knows: a booking tool’s "(Name)" is exact, Google’s '
+      + 'displayName is whatever the guest called themselves');
+});
+
+test('the name comes from the guest we are actually writing to', () => {
+  /* Taking the first attendee's displayName would let the name and the email
+     disagree — "Hey Erica" sent to brian@. It has to be the attendee we
+     already settled on as the contact. */
+  const parse = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    '_shared', 'parse.ts'), 'utf8');
+  const fn = parse.slice(parse.indexOf('export function clientFromGCalEvent'));
+  assert.ok(/\(a\.email \|\| ''\)\.toLowerCase\(\) === emails\[0\]/.test(fn),
+    'the display name is taken from an attendee other than the one the '
+      + 'message is addressed to, so the greeting can name the wrong person');
+  assert.ok(fn.indexOf('const emails =') < fn.indexOf('guest?.displayName'),
+    'the contact address is chosen after the name that depends on it');
+});
+
+test('"Unknown" still greets somebody as "there"', () => {
+  // The reason this mattered, pinned so the cost stays visible.
+  assert.strictEqual(GB.firstName('Unknown'), 'Unknown');
+  assert.strictEqual(GB.firstName(''), 'there');
+  assert.strictEqual(GB.firstName('Josh Degan'), 'Josh');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

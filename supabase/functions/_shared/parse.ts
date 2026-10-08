@@ -78,7 +78,7 @@ export interface GCalEvent {
   created?: string;
   status?: string;
   start?: { dateTime?: string; date?: string; timeZone?: string };
-  attendees?: { email?: string; self?: boolean }[];
+  attendees?: { email?: string; self?: boolean; displayName?: string }[];
   organizer?: { email?: string };
   // Where Google actually puts the Meet room.
   hangoutLink?: string;
@@ -313,12 +313,6 @@ export function clientFromGCalEvent(
   const description = stripHtml(ev.description || '');
 
   const nameMatch = summary.match(/\(([^)]+)\)/);
-  let name = nameMatch ? nameMatch[1].trim() : '';
-  if (!name) {
-    const bm = description.match(/booked by[:\s]+([^\n]+)/i);
-    name = bm ? bm[1].trim() : 'Unknown';
-  }
-
   const phone = extractPhone(description) || extractPhone(summary);
   /* The contact's email is the guest from OUTSIDE the organizer's domain.
 
@@ -359,6 +353,38 @@ export function clientFromGCalEvent(
     .filter((e) => e && e !== organizerSelf && e !== ownerSelf)
     .filter((e) => !organizerDomain || domainOf(e) !== organizerDomain)
     .filter((e) => !ownerDomain || domainOf(e) !== ownerDomain);
+
+  /* Who this is, in order of how much the source actually knows.
+
+       1. The name in the title's parentheses. Booking tools write
+          "Third Call | Youtube Strategy Session (Nathaly Pintor)", and when
+          it is there it is exactly right.
+       2. "booked by:" in the description, for the forms that use it.
+       3. The guest's own displayName from Google.
+
+     The third was missing and Google had it all along. Without it anything
+     whose title is not written by a booking tool imports as "Unknown" — and
+     a real account showed six of thirteen that way: every "Interview with
+     Josh" and "Second Meeting ... Colin and Erica" on the calendar of
+     somebody who books meetings by hand rather than through a funnel.
+     "Unknown" is not a cosmetic problem: firstName() turns it into "there",
+     so every one of those gets "Hey there," while the person's actual name
+     sat in the event the whole time.
+
+     Taken from the attendee we settled on as the contact, not the first in
+     the list, so it cannot disagree with the address the message goes to. */
+  let name = nameMatch ? nameMatch[1].trim() : '';
+  if (!name) {
+    const bm = description.match(/booked by[:\s]+([^\n]+)/i);
+    name = bm ? bm[1].trim() : '';
+  }
+  if (!name && emails[0]) {
+    const guest = (ev.attendees || []).find(
+      (a) => (a.email || '').toLowerCase() === emails[0],
+    );
+    name = (guest?.displayName || '').trim();
+  }
+  if (!name) name = 'Unknown';
 
   return {
     googleEventId: ev.id,
