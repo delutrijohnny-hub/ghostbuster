@@ -160,7 +160,17 @@ function lastSeenLabel(days){
    rows. A manager tab that appears for everybody and shows an empty table is
    worse than no tab: it reads as "your team has no activity" rather than
    "this is not for you". */
-var TEAM_OPEN = null;   // which teammate's queue is expanded
+/* Which teammate's queue is expanded, by user id rather than by name.
+
+   It was the name. Names are not identifiers: they come from sender_name,
+   which anybody can set to anything, falling back to the local part of a
+   calendar address, falling back to the literal string "teammate" for
+   somebody who has neither. Two people called Ethan is not a hypothetical on
+   this book — there are two Ethan accounts — and the moment their names
+   matched, expanding one row expanded both, the bulk-cover dropdown lookup
+   returned whichever sorted first, and "Move them" would have handed over the
+   wrong person's appointments. */
+var TEAM_OPEN = null;
 
 // Day and time in the viewer's own zone. A manager is deciding whether to
 // chase somebody today, so the weekday matters more than the date.
@@ -533,9 +543,9 @@ function renderTeamTab(){
         m.replyRate === null ? '' : 'replies'
       ])
     ];
-    var open = TEAM_OPEN === m.name;
+    var open = !!m.userId && TEAM_OPEN === m.userId;
     var row = h('div',{class:'team-row' + (m.needsAttention ? '' : ' is-ok') + (m.queue.length ? ' can-open' : '') + (open ? ' is-open' : ''),
-                       'data-action': m.queue.length ? 'team-toggle' : '', 'data-who': m.name},[
+                       'data-action': m.queue.length ? 'team-toggle' : '', 'data-uid': m.userId || ''},[
       h('div',{class:'team-who'},[
         h('span',{class:'team-name'},[
           m.queue.length ? (open ? '\u25be ' : '\u25b8 ') : '', m.name
@@ -615,7 +625,7 @@ function renderTeamTab(){
          working their list. On a row that is ticking along, a bulk handover
          is far more likely to be a slip than an intention. */
       if(m.queue.length > 1 && m.needsAttention && o.members.length > 1){
-        var bulkSel = h('select',{class:'tq-assign','data-bulk-to':m.name},[]);
+        var bulkSel = h('select',{class:'tq-assign','data-bulk-to':m.userId},[]);
         o.members.forEach(function(x){
           if(!x.userId || x.userId === m.userId) return;
           bulkSel.appendChild(h('option',{value:x.userId},
@@ -627,7 +637,7 @@ function renderTeamTab(){
             h('span',{},['Cover all ' + m.queue.length + ':']),
             bulkSel,
             h('button',{class:'btn btn-sm','data-action':'bulk-assign',
-              'data-who':m.name, 'data-n':String(m.queue.length),
+              'data-uid':m.userId, 'data-who':m.name, 'data-n':String(m.queue.length),
               'data-hist':String(withHistory)},['Move them'])
           ]));
         }
@@ -3998,13 +4008,14 @@ document.addEventListener('click', function(ev){
       break;
     }
     case 'bulk-assign': {
+      var bUid = target.getAttribute('data-uid');
       var bWho = target.getAttribute('data-who');
       var bN = parseInt(target.getAttribute('data-n'), 10) || 0;
       var bHist = parseInt(target.getAttribute('data-hist'), 10) || 0;
-      var bSel = document.querySelector('[data-bulk-to="' + bWho + '"]');
+      var bSel = document.querySelector('[data-bulk-to="' + bUid + '"]');
       if(!bSel || !bSel.value) break;
       var bTo = bSel.options[bSel.selectedIndex].text;
-      var bMember = (STATE.team || []).filter(function(x){ return x.name === bWho; })[0];
+      var bMember = (STATE.team || []).filter(function(x){ return x.userId === bUid; })[0];
       if(!bMember) break;
       /* Named, counted, and honest about the ones already in conversation —
          taking those over mid-thread is the part somebody would regret. */
@@ -4085,8 +4096,8 @@ document.addEventListener('click', function(ev){
       break;
     }
     case 'team-toggle': {
-      var who = target.getAttribute('data-who');
-      TEAM_OPEN = (TEAM_OPEN === who) ? null : who;
+      var who = target.getAttribute('data-uid');
+      TEAM_OPEN = (who && TEAM_OPEN === who) ? null : who;
       renderTeamTab();
       break;
     }

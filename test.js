@@ -9817,6 +9817,69 @@ test('a booking with no email or no time is never deduped by it', () => {
       + 'next contact that also has no email');
 });
 
+console.log('\n--- two people with the same name ---');
+
+/* The team rows were keyed by NAME: which row is expanded, which dropdown the
+   bulk-cover button reads, and which member "Move them" acts on.
+
+   A name is not an identifier here. It comes from sender_name, which anybody
+   can type; failing that the local part of a connected calendar address;
+   failing that the literal string "teammate" for somebody with neither — and
+   there is one of those on this book right now, because Colin has not
+   connected a calendar.
+
+   Two matching names is not hypothetical either: there are two Ethan accounts
+   in this organisation, and five of the eight have no sender_name set at all.
+   The moment two matched, expanding one row expanded both, the dropdown
+   lookup returned whichever sorted first, and "Move them" would have handed
+   over the wrong person's appointments. */
+
+test('rows are addressed by user id, not by what somebody is called', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'),
+                       app.indexOf('function renderOwnerTab()'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+
+  assert.ok(/TEAM_OPEN === m\.userId/.test(code),
+    'which row is expanded is decided by name, so two people with the same '
+      + 'name open and close together');
+  assert.ok(!/'data-who': m\.name\}/.test(code),
+    'the row is still addressed by name');
+  assert.ok(/'data-bulk-to':m\.userId/.test(code),
+    'the bulk-cover dropdown is keyed by name, so querySelector returns '
+      + 'whichever namesake sorts first in the document');
+
+  const h = app.slice(app.indexOf("case 'bulk-assign':"), app.indexOf("case 'set-role':"));
+  assert.ok(/x\.userId === bUid/.test(h),
+    'the member whose appointments get moved is looked up by name. With two '
+      + 'namesakes this hands over the wrong person\u2019s whole queue.');
+  assert.ok(/data-bulk-to="' \+ bUid \+ '"/.test(h),
+    'the dropdown is still found by name');
+});
+
+test('the toggle still closes, and ignores a row with no id', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'team-toggle':"), app.indexOf("case 'team-toggle':") + 400);
+  assert.ok(/TEAM_OPEN = \(who && TEAM_OPEN === who\) \? null : who;/.test(h),
+    'clicking the open row no longer closes it, or a row with no user id '
+      + 'collapses every other row by matching null against null');
+});
+
+test('a name is still only a label', () => {
+  /* Keeping the fallback chain honest: sender_name, then the calendar local
+     part, then a generic word. The generic word is fine as a LABEL and was
+     never fine as a key. */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/String\(r\.calendar_id\)\.split\('@'\)\[0\]/.test(data),
+    'the calendar-address fallback is gone, so everybody without a sender '
+      + 'name renders as the same generic word');
+  assert.ok(/nameFor\[u\] \|\| b\.name \|\| 'teammate'/.test(data),
+    'the final fallback changed shape');
+  // And userId must actually reach the row, or the new keying has nothing.
+  assert.ok(/userId:u,/.test(data), 'the team row no longer carries a user id');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
