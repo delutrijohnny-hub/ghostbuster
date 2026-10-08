@@ -10655,6 +10655,112 @@ test('the strip leads with people and is actually rendered', () => {
     'teamActivityStrip is never called, so the whole strip renders nowhere');
 });
 
+console.log('\n--- the Performance tab stops asserting things it cannot know ---');
+
+/* Found by auditing a screen I had not touched. computeInsights asserted four
+   findings off a minimum of four decided calls:
+
+     Short lead time (<5 days) beats long lead time - 100% vs 0% show-up.
+     3+ touches beat 2 or fewer - 100% vs 0% show-up.
+     Thursday is the strongest day (100%), Friday the weakest (0%).
+
+   Two calls a side, with a small "hint - small sample" tag beside them.
+   Nobody reads "100% vs 0%" and discounts it because of a tag.
+
+   Worse, it contradicted the team view outright. That screen refuses to
+   compare follow-up against no follow-up until each side has 20 decided
+   calls, and on the live book — 61 against 58 — reports NO measurable
+   difference. The same product asserting "3+ touches beat 2 or fewer" from
+   two calls is worse than either answer on its own. */
+
+function insightBook(n, fn){
+  const st = GB.buildDefaultState();
+  for(let i = 0; i < n; i++){
+    const o = fn(i);
+    const call = new Date('2026-09-15T15:00:00Z');
+    call.setDate(call.getDate() + i);
+    const log = [];
+    for(let t = 0; t < o.touches; t++){
+      log.push({id:'m'+t, stage:'welcome', variantId:'w1', text:'x',
+        sentAt: new Date(call.getTime() - 86400000).toISOString(),
+        responded: t === 0 && o.replied, reviewed: true});
+    }
+    st.clients['c'+i] = GB.sanitizeClient({name:'c'+i,
+      status: o.showed ? 'Completed' : 'No-show',
+      callDateTime: call.toISOString(),
+      bookedDate: new Date(call.getTime() - o.lead * 86400000).toISOString(),
+      messageLog: log}, 'c'+i);
+  }
+  return st;
+}
+
+test('four decided calls produce no findings at all', () => {
+  const st = insightBook(4, i => ({showed: i % 2 === 0, lead: i < 2 ? 1 : 9,
+                                   touches: i % 2 === 0 ? 4 : 1, replied: i === 0}));
+  assert.strictEqual(GB.computeInsights(st), null,
+    'the Performance tab is asserting findings from two calls a side again');
+});
+
+test('both sides need the same minimum the team view uses', () => {
+  assert.strictEqual(GB.INSIGHT_MIN, GB.TOUCH_EFFECT_MIN,
+    'the two screens use different bars for the same comparison, so the '
+      + 'product can assert on one tab what it refuses on the other');
+  // One side just short is still refused.
+  const lop = insightBook(60, i => ({showed: i % 2 === 0, lead: 1,
+                                     touches: i < GB.INSIGHT_MIN - 1 ? 4 : 1, replied: false}));
+  const out = GB.computeInsights(lop) || [];
+  assert.ok(!out.some(x => /touches/.test(x.text)),
+    'a comparison was reported with one side below the minimum');
+});
+
+test('a small gap is reported as no difference, with the counts', () => {
+  const st = insightBook(60, i => ({showed: i % 2 === 0, lead: i % 2 ? 1 : 9,
+                                    touches: i % 3 === 0 ? 4 : 1, replied: false}));
+  const out = GB.computeInsights(st) || [];
+  const touch = out.filter(x => /touches/.test(x.text))[0];
+  assert.ok(touch, 'the touches comparison vanished entirely');
+  assert.ok(/No measurable difference/.test(touch.text),
+    'a 50/50 split is being reported as one side winning: ' + touch.text);
+  assert.ok(/across \d+ and \d+ calls/.test(touch.text),
+    'the counts are not shown, so a reader cannot judge the claim for '
+      + 'themselves: ' + touch.text);
+});
+
+test('a real gap is still reported', () => {
+  const st = insightBook(60, i => ({showed: i < 30 ? i % 10 < 8 : i % 10 < 2,
+                                    lead: i < 30 ? 1 : 9, touches: 1, replied: false}));
+  const out = GB.computeInsights(st) || [];
+  const lead = out.filter(x => /ahead/.test(x.text))[0];
+  assert.ok(lead && /under 5 days ahead shows up better/.test(lead.text),
+    'a genuine 60-point gap across 30 calls a side is being withheld: '
+      + (lead ? lead.text : 'nothing reported'));
+});
+
+test('the best/worst weekday claim is gone', () => {
+  /* It ranked best against worst across up to seven days, which overstates by
+     construction, and tested against real data it came out at about 1.4
+     standard errors. Attendance by time of day replaces it on the team view,
+     where bands are listed and never ranked. */
+  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const fn = logic.slice(logic.indexOf('function computeInsights(state){'),
+                         logic.indexOf('function computeInsights(state){') + 4000);
+  const code = codeOnly(fn);
+  assert.ok(!/strongest day|weakest/.test(code),
+    'the weekday ranking is back. Picking best and worst of seven buckets '
+      + 'names a winner even in pure noise.');
+  assert.ok(!/dowNames|byDow/.test(code), 'the weekday machinery is still there');
+});
+
+test('the small-sample tag is gone, because nothing below the bar is shown', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderInsights()'),
+                       app.indexOf('function renderWeeklyCharts()'));
+  assert.ok(!/small sample/.test(fn),
+    'a "small sample" tag is back beside a percentage. Either the finding is '
+      + 'supportable and needs no tag, or it is not and should not be shown.');
+  assert.ok(!/i\.small/.test(fn), 'the renderer still branches on a flag that no longer exists');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

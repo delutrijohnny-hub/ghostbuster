@@ -5318,49 +5318,84 @@ function computeRescueScorecard(state){
 }
 
 
+/* What the account's own history supports, and nothing more.
+
+   This panel used to assert four findings off a minimum of four decided
+   calls, with a small "hint - small sample" tag beside them. On a brand new
+   account it read:
+
+     Short lead time (<5 days) beats long lead time - 100% vs 0% show-up.
+     3+ touches beat 2 or fewer - 100% vs 0% show-up.
+     Thursday is the strongest day (100%), Friday the weakest (0%).
+
+   Two calls a side. Nobody reads "100% vs 0%" and then discounts it because
+   of a tag; the number is the claim.
+
+   It also contradicted the team view outright. That screen refuses to compare
+   follow-up against no follow-up until each side has twenty decided calls, and
+   on this book, with sixty-odd each side, reports NO measurable difference.
+   The same product asserting "3+ touches beat 2 or fewer" from two is worse
+   than either answer alone.
+
+   So the same discipline applies here: both sides need INSIGHT_MIN decided
+   calls, and a gap under five points is reported as no measurable difference
+   rather than as a direction.
+
+   THE WEEKDAY INSIGHT IS GONE. It ranked best against worst across up to
+   seven days, which overstates by construction - some spread between seven
+   buckets is certain even in noise - and it was the thinnest-powered of the
+   four. Tested against real data it came out at roughly 1.4 standard errors,
+   which is nothing. Attendance by time of day replaces it on the team view,
+   where the bands are listed and never ranked. */
+var INSIGHT_MIN = 20;
+
 function computeInsights(state){
-  var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; }).filter(function(c){ return !c.ignored; });
+  var clients = Object.keys(state.clients).map(function(k){ return state.clients[k]; })
+    .filter(function(c){ return !c.ignored; });
   var resolved = clients.filter(function(c){ return isWon(c.status) || isMissed(c.status); });
-  if(resolved.length < 4) return null;
   var insights = [];
-  function rateOf(arr){ var n=arr.filter(function(c){return isWon(c.status);}).length; return arr.length ? n/arr.length : null; }
-
-  var withLead = resolved.filter(function(c){ return c.bookedDate && c.callDateTime; }).map(function(c){
-    var lead = (new Date(c.callDateTime) - new Date(c.bookedDate)) / 86400000;
-    return {c:c, lead:lead};
-  });
-  var shortLead = withLead.filter(function(x){ return x.lead < 5; }).map(function(x){return x.c;});
-  var longLead = withLead.filter(function(x){ return x.lead >= 5; }).map(function(x){return x.c;});
-  if(shortLead.length && longLead.length){
-    var sr = rateOf(shortLead), lr = rateOf(longLead);
-    insights.push({text:(sr>lr?'Short lead time (<5 days) beats long lead time':'Long lead time beats short lead time') + ' — ' + pct(sr) + ' vs ' + pct(lr) + ' show-up.', small: shortLead.length<5||longLead.length<5});
+  function rateOf(arr){
+    var n = arr.filter(function(c){ return isWon(c.status); }).length;
+    return arr.length ? n / arr.length : null;
   }
 
-  var many = resolved.filter(function(c){ return c.messageLog.length >= 3; });
-  var few = resolved.filter(function(c){ return c.messageLog.length <= 2; });
-  if(many.length && few.length){
-    var mr=rateOf(many), fr=rateOf(few);
-    insights.push({text:(mr>fr?'3+ touches beat 2 or fewer':'2 or fewer touches beat 3+') + ' — ' + pct(mr) + ' vs ' + pct(fr) + ' show-up.', small: many.length<5||few.length<5});
+  /* One comparison, stated honestly or not at all. `lead` and `trail` are the
+     two groups; `both` names what is being compared so the no-difference
+     wording reads as a sentence. */
+  function compare(aLabel, a, bLabel, b){
+    if(a.length < INSIGHT_MIN || b.length < INSIGHT_MIN) return;
+    var ar = rateOf(a), br = rateOf(b);
+    var diff = Math.round(100 * ar) - Math.round(100 * br);
+    if(Math.abs(diff) < 5){
+      insights.push({text: 'No measurable difference between ' + aLabel + ' and ' + bLabel +
+        ' \u2014 ' + pct(ar) + ' vs ' + pct(br) + ' show-up, across ' +
+        a.length + ' and ' + b.length + ' calls.'});
+      return;
+    }
+    insights.push({text: (diff > 0 ? aLabel : bLabel) + ' shows up better \u2014 ' +
+      pct(ar) + ' vs ' + pct(br) + ', across ' + a.length + ' and ' + b.length + ' calls.'});
   }
 
-  var repliedC = resolved.filter(function(c){ return c.messageLog.some(function(m){return m.responded;}); });
-  var noReply = resolved.filter(function(c){ return !c.messageLog.some(function(m){return m.responded;}); });
-  if(repliedC.length && noReply.length){
-    var rr=rateOf(repliedC), nr=rateOf(noReply);
-    insights.push({text:'Clients who reply to texts show up ' + pct(rr) + ' of the time vs ' + pct(nr) + ' for those who don\'t.', small: repliedC.length<5||noReply.length<5});
-  }
+  var withLead = resolved.filter(function(c){ return c.bookedDate && c.callDateTime; })
+    .map(function(c){
+      return {c: c, lead: (new Date(c.callDateTime) - new Date(c.bookedDate)) / 86400000};
+    });
+  compare('booked under 5 days ahead',
+          withLead.filter(function(x){ return x.lead < 5; }).map(function(x){ return x.c; }),
+          'booked 5+ days ahead',
+          withLead.filter(function(x){ return x.lead >= 5; }).map(function(x){ return x.c; }));
 
-  var byDow = {};
-  resolved.forEach(function(c){ if(!c.callDateTime) return; var d=new Date(c.callDateTime); var dow=d.getDay(); byDow[dow]=byDow[dow]||[]; byDow[dow].push(c); });
-  var dowNames=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  var dowRates = Object.keys(byDow).map(function(k){ return {day:dowNames[k], rate:rateOf(byDow[k]), n:byDow[k].length}; }).filter(function(x){return x.rate!==null;});
-  if(dowRates.length >= 2){
-    dowRates.sort(function(a,b){ return b.rate-a.rate; });
-    var best = dowRates[0], worst = dowRates[dowRates.length-1];
-    insights.push({text: best.day + ' is the strongest day (' + pct(best.rate) + ' show-up), ' + worst.day + ' the weakest (' + pct(worst.rate) + ').', small: best.n<5||worst.n<5});
-  }
+  compare('3 or more touches',
+          resolved.filter(function(c){ return c.messageLog.length >= 3; }),
+          '2 or fewer',
+          resolved.filter(function(c){ return c.messageLog.length <= 2; }));
 
-  return insights;
+  compare('people who replied',
+          resolved.filter(function(c){ return c.messageLog.some(function(m){ return m.responded; }); }),
+          'people who did not',
+          resolved.filter(function(c){ return !c.messageLog.some(function(m){ return m.responded; }); }));
+
+  return insights.length ? insights : null;
 }
 
 
@@ -5692,7 +5727,7 @@ var __LOGIC_EXPORTS__ = {
   getOnDeck: getOnDeck, minsUntil: minsUntil, countdownLabel: countdownLabel,
   telHref: telHref, onDeckNudgeText: onDeckNudgeText,
   trendHtml: trendHtml, tzChipInfo: tzChipInfo, lastMessageIndex: lastMessageIndex,
-  computeRescueScorecard: computeRescueScorecard, computeInsights: computeInsights, isoWeekLabel: isoWeekLabel,
+  computeRescueScorecard: computeRescueScorecard, computeInsights: computeInsights, INSIGHT_MIN: INSIGHT_MIN, isoWeekLabel: isoWeekLabel,
   addDays: addDays, addMonths: addMonths, startOfMonth: startOfMonth, isSameLocalDay: isSameLocalDay,
   localDayKey: localDayKey, startOfLocalWeekDate: startOfLocalWeekDate, getCallsByLocalDay: getCallsByLocalDay,
   weekRangeLabel: weekRangeLabel,

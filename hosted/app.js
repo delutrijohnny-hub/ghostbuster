@@ -2824,7 +2824,7 @@ function renderInsights(){
   insights.forEach(function(i){
     var li = document.createElement('li');
     li.textContent = i.text;
-    if(i.small) li.appendChild(h('span',{class:'hint-tag'},['hint · small sample']));
+
     ul.appendChild(li);
   });
   block.appendChild(ul);
