@@ -5350,7 +5350,25 @@ function noteCalendarReturn(){
     window.history.replaceState({}, '', window.location.pathname + (rest ? '?' + rest : ''));
   }catch(e){}
   if(status === 'connected'){
-    showToast(cal ? cal + ' connected. Your bookings are in.' : 'Calendar connected. Your bookings are in.');
+    /* Say what actually arrived, not what was hoped for.
+
+       This claimed "your bookings are in" whichever way the sync went, at the
+       single moment that decides whether somebody stays — and it contradicted
+       the panel directly beneath it, which correctly read "Calendar
+       connected, nothing imported yet".
+
+       Not hypothetical: every account outside the main organisation signed up
+       and never came back, five of the six on the same day they joined. One
+       of them connected a calendar and got nothing. Being told it worked, by
+       an app showing an empty list, is worse than being told why it did not. */
+    var landed = Object.keys((STATE && STATE.clients) || {}).length;
+    if(landed){
+      showToast((cal ? cal + ' connected. ' : 'Calendar connected. ') +
+        landed + (landed === 1 ? ' booking imported.' : ' bookings imported.'));
+    } else {
+      showToast((cal ? cal + ' connected, ' : 'Connected, ') +
+        'but nothing matched yet \u2014 check which events count as bookings in Settings.');
+    }
   } else if(reason === 'already'){
     /* The one failure with a real instruction attached. Shown as a panel
        rather than a toast: it asks the person to go and do something in

@@ -10897,6 +10897,31 @@ test('the narrow layout still has somewhere for every cell', () => {
       + 'implicit row of its own');
 });
 
+test('the connect toast says what actually arrived', () => {
+  /* Every account outside the main organisation signed up and never came
+     back — five of the six on the same day they joined, and one of them had
+     connected a calendar and received nothing. The toast I added this
+     morning claimed "your bookings are in" whichever way the sync went, at
+     the exact moment that decides whether somebody stays, and contradicted
+     the panel directly beneath it reading "Calendar connected, nothing
+     imported yet". */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function noteCalendarReturn()'),
+                                app.indexOf('async function init()')));
+  assert.ok(/Object\.keys\(\(STATE && STATE\.clients\) \|\| \{\}\)\.length/.test(fn),
+    'the toast does not look at what landed, so it reports success either way');
+  assert.ok(/if\(landed\)\{/.test(fn), 'there is no branch for nothing having arrived');
+  assert.ok(/nothing matched yet/.test(fn),
+    'the empty case still claims bookings arrived');
+  assert.ok(/count as bookings in Settings/.test(fn),
+    'the empty case does not point at the thing that fixes it, which is the '
+      + 'calendar filter');
+  // And the success case must state the number rather than assert vaguely.
+  assert.ok(/bookings imported/.test(fn),
+    'the success case no longer says how many arrived, so "it worked" is '
+      + 'again something the reader has to take on trust');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
