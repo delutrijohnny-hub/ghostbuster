@@ -444,6 +444,55 @@ var ATTENDANCE_MIN = 20;
    rather than guessed at: a rule about titles cannot be applied to a row
    whose title was never recorded, and the caller is told how many it could
    not check. */
+/* The rule that is actually deciding what becomes a contact, in words.
+
+   An empty app after connecting a calendar is nearly always this, and the
+   screen used to say only "check which events count as bookings in Settings".
+   That names the place and not the problem. Somebody whose bookings are
+   titled "Intro call" while the filter hunts for "strategy session" can read
+   that sentence twice and learn nothing; shown the actual words being
+   matched, they see it immediately.
+
+   Free to say — it comes from settings already loaded — and it needs no sync
+   round trip, so it is correct even before the first one finishes.
+
+   It resolves an unset filter exactly the way matchesCalendarFilter does,
+   because the account that most needs this sentence is a brand new one, whose
+   filter is still null. Describing null as "keywords, and no words are set"
+   would have told every new user their calendar could never match anything,
+   while the syncer was in fact matching on outside guests. */
+function describeCalendarFilter(filter){
+  var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
+  var quoted = function(list){
+    return (list || [])
+      .map(function(w){ return String(w == null ? '' : w).trim(); })
+      .filter(function(w){ return w; })
+      .map(function(w){ return '\u201c' + w + '\u201d'; });
+  };
+  // Exclusions win in every mode, so they belong in every sentence.
+  var excl = quoted(f.exclude);
+  var tail = excl.length
+    ? ' Events whose title contains ' + excl.join(' or ') + ' are always skipped.'
+    : '';
+
+  if(f.mode === 'all'){
+    return 'Right now every event on your calendar counts as a booking.' + tail;
+  }
+  if(f.mode === 'attendees'){
+    return 'Right now an event counts as a booking when it has a guest from '
+         + 'outside your own email domain.' + tail;
+  }
+
+  var words = quoted(f.include).concat(quoted(f.matchDescription));
+  if(!words.length){
+    return 'Right now an event only counts as a booking when its title '
+         + 'matches one of your own words \u2014 and no words are set, so '
+         + 'nothing can match.' + tail;
+  }
+  return 'Right now an event only counts as a booking when it mentions '
+       + words.join(' or ') + '.' + tail;
+}
+
 function contactsMatchingExclusions(state, exclude){
   var terms = (exclude || [])
     .map(function(t){ return String(t || '').trim().toLowerCase(); })
@@ -5647,6 +5696,7 @@ var __LOGIC_EXPORTS__ = {
   LOCAL_HOURS_START: LOCAL_HOURS_START, LOCAL_HOURS_END: LOCAL_HOURS_END,
   weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
+  describeCalendarFilter: describeCalendarFilter,
   contactsMatchingExclusions: contactsMatchingExclusions,
   attendanceBandFor: attendanceBandFor,
   attendanceByHour: attendanceByHour, ATTENDANCE_BANDS: ATTENDANCE_BANDS,

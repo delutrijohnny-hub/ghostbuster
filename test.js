@@ -2027,6 +2027,37 @@ console.log('\n--- a brand new account is shown how to start ---');
     assert.ok(/work@example\.com/.test(html), 'and name what it is connected to');
   });
 
+  test('and it is walked to the filter, not merely told a tab exists', () => {
+    /* The text said "check which events count as bookings in Settings" and
+       offered no way there -- the setting is four clicks deep through a menu
+       nobody has opened. Of six accounts that reached this screen unaided,
+       five never came back the next day. */
+    const html = panel("STATE.myCalendars = ['work@example.com'];");
+    assert.ok(/data-action="open-settings"/.test(html),
+      'naming the fix without a door to it is how somebody lands here twice');
+  });
+
+  test('and the rule in force is spelled out, not left to be guessed', () => {
+    /* Knowing where the setting lives is still not knowing what it currently
+       says. The usual cause is a filter hunting for wording the calendar does
+       not use, and seeing the words ends the search instantly. */
+    const html = panel(
+      "STATE.myCalendars = ['work@example.com'];" +
+      "STATE.calendarFilter = {mode:'keywords', include:['strategy session'], exclude:[]};");
+    assert.ok(/strategy session/.test(html),
+      'the words actually being matched are the answer: ' + html.slice(0, 400));
+  });
+
+  test('a brand new account is not told its calendar can never match', () => {
+    /* calendarFilter is null until somebody opens the settings screen, and
+       null means attendee mode in the syncer. Rendering it as "no words are
+       set, so nothing can match" would accuse working software on the one
+       screen every new account sees. */
+    const html = panel("STATE.myCalendars = ['work@example.com']; STATE.calendarFilter = null;");
+    assert.ok(/guest from outside/.test(html), html.slice(0, 400));
+    assert.ok(!/nothing can match/.test(html), 'a working default was reported broken');
+  });
+
   test('the cleared-queue badge is kept for the people who earned it', () => {
     /* It belongs to someone who had work and cleared it. Showing it to
        someone with nothing cheapens it for the people it is actually for. */
@@ -5135,6 +5166,81 @@ test('the sync actually calls the collapse, not just defines it', () => {
     'an incremental sync must skip a series it already stored');
   assert.ok(/storedSeries\.add\(/.test(src),
     'a newly inserted occurrence must register its series');
+});
+
+/* --- and the rule, said out loud --- */
+
+test('an unset filter is described as what the syncer actually does', () => {
+  /* The single trap in this function. A brand new account has
+     calendarFilter === null, and that account is exactly the one staring at
+     "nothing imported" wondering why. matchesCalendarFilter resolves null to
+     DEFAULT_CALENDAR_FILTER (attendee mode), so describing it as "keywords,
+     and none are set" would tell every new user their calendar could never
+     match anything -- a flat lie about working software, on the first screen
+     they see. */
+  const words = GB.describeCalendarFilter(null);
+  assert.ok(/guest from outside/.test(words), words);
+  assert.ok(!/no words are set/.test(words), 'null was described as broken: ' + words);
+  // A filter object with no mode is the same case -- that is how the matcher
+  // reads it, and the two must not disagree.
+  assert.strictEqual(GB.describeCalendarFilter({}), words);
+  assert.strictEqual(GB.describeCalendarFilter({include: ['x']}), words,
+    'include words on a modeless filter are not in force, so must not be quoted');
+});
+
+test('keyword mode names the actual words, because that is the whole answer', () => {
+  /* "Check which events count as bookings in Settings" is what this replaced.
+     Someone whose events are titled "Intro call" while the filter hunts for
+     "strategy session" learns nothing from that sentence and everything from
+     seeing the word. */
+  const words = GB.describeCalendarFilter(
+    {mode: 'keywords', include: ['strategy session', 'intro call']});
+  assert.ok(/“strategy session”/.test(words), words);
+  assert.ok(/“intro call”/.test(words), words);
+});
+
+test('words matched in the description are named too, not just titles', () => {
+  // matchesCalendarFilter matches these as well, so leaving them out would
+  // under-report the rule and send someone hunting for a cause they do have.
+  const words = GB.describeCalendarFilter(
+    {mode: 'keywords', include: [], matchDescription: ['booked by']});
+  assert.ok(/“booked by”/.test(words), words);
+  assert.ok(!/no words are set/.test(words),
+    'description-only is a working filter, not an empty one: ' + words);
+});
+
+test('keyword mode with no words says so, because it can never match', () => {
+  // Not a hypothetical: the keyword screen lets you clear the box, and the
+  // result silently imports nothing forever.
+  const words = GB.describeCalendarFilter({mode: 'keywords', include: []});
+  assert.ok(/nothing can match/.test(words), words);
+});
+
+test('exclusions are named in every mode, since they override every mode', () => {
+  /* Exclusions win before the mode is even consulted, so a sentence about
+     the mode alone can be true and still not explain the missing event. */
+  for (const mode of ['all', 'attendees', 'keywords']) {
+    const words = GB.describeCalendarFilter(
+      {mode: mode, include: ['intro call'], exclude: ['weekly team meeting']});
+    assert.ok(/“weekly team meeting” are always skipped/.test(words),
+      mode + ' mode drops the exclusions: ' + words);
+  }
+});
+
+test('blank and junk entries are not quoted back as rules', () => {
+  // The settings box is comma-split, so a trailing comma leaves an empty
+  // string. Quoting it prints an empty pair of quotes as though it were a rule.
+  const words = GB.describeCalendarFilter(
+    {mode: 'keywords', include: ['intro call', '', '   ', null]});
+  assert.ok(/“intro call”/.test(words), words);
+  assert.ok(!/“\s*”/.test(words), 'an empty rule got quoted: ' + words);
+  assert.ok(!/null/.test(words), words);
+});
+
+test('it never throws, because it renders on the first screen', () => {
+  assert.doesNotThrow(() => GB.describeCalendarFilter(undefined));
+  assert.doesNotThrow(() => GB.describeCalendarFilter({mode: 'keywords'}));
+  assert.doesNotThrow(() => GB.describeCalendarFilter({mode: 'nonsense'}));
 });
 
 console.log('\n--- industry templates ---');

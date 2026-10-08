@@ -1459,13 +1459,25 @@ function buildAllClearPanel(subtitle){
       '<div class="allclear-sub">' + escapeHtml(setup.detail) + '</div>' +
       '<div class="start-acts">' +
         (setup.connected
-          ? '<button class="btn btn-sm" data-action="sync-calendar-now">Sync calendar now</button>'
+          ? '<button class="btn btn-sm" data-action="sync-calendar-now">Sync calendar now</button>' +
+            /* The text above already says to check which events count as
+               bookings. Saying it and not offering the door is how somebody
+               ends up here twice and leaves: of six accounts that reached
+               this screen without help, five never came back the next day,
+               and the one who had connected a calendar got nothing.
+
+               "Syncing, but importing nothing" is a filter problem every
+               time, and the filter is four clicks away through a menu nobody
+               has opened yet. */
+            '<button class="btn btn-sm" data-action="open-settings">' +
+            'Check which events count</button>'
           : '<button class="btn btn-green" data-action="connect-calendar" data-priority="0" data-label="Work">Connect your calendar</button>') +
         '<button class="btn btn-sm" data-action="add-client">Add someone by hand</button>' +
       '</div>' +
       '<div class="start-note">' +
         (setup.connected
-          ? 'Connected to ' + escapeHtml((STATE.myCalendars || []).join(', ')) + '.'
+          ? 'Connected to ' + escapeHtml((STATE.myCalendars || []).join(', ')) + '. ' +
+            escapeHtml(describeCalendarFilter(STATE.calendarFilter))
           : 'Or open Menu \u2192 Settings to see every way appointments can get in.') +
       '</div>';
     return div0;
