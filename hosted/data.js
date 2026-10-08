@@ -291,7 +291,7 @@ async function loadTeamRows(sb, uid){
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
         sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0, sentAt: [],
-        outsideHours:0,
+        outsideHours:0, awaitingReview:0,
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -338,7 +338,7 @@ async function loadTeamRows(sb, uid){
     });
 
     var sentPer = {};
-    var mRes = await sb.from('message_log').select('client_id, sent_at, responded');
+    var mRes = await sb.from('message_log').select('client_id, sent_at, responded, reviewed');
     ((mRes && mRes.data) || []).forEach(function(m){
       var u = ownerOf[m.client_id];
       if(!u) return;
@@ -366,6 +366,15 @@ async function loadTeamRows(sb, uid){
          on this book the highest-volume newcomer is also the one texting
          people at eleven at night. */
       if(isOutsideLocalHours(m.sent_at, tzOf[m.client_id])) b.outsideHours++;
+      /* Messages old enough to know the answer, where nobody has said whether
+         a reply came. This is WHY the reply rate column is blank for almost
+         everyone, and the blank is honest — nobody has looked is not the same
+         as nobody answered — but a manager reading "not measured" had no way
+         to see that it is two minutes of somebody's attention away.
+
+         REPLY_WAIT_HOURS, not a fresh number: it is the same threshold that
+         decides when Ghost Recall Today starts asking. */
+      if(!m.reviewed && (now - t) >= REPLY_WAIT_HOURS * 3600000) b.awaitingReview++;
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
       /* Touches that landed BEFORE the call, which is the only kind that can
          affect whether somebody turns up. Counted as activity, not as a

@@ -9124,6 +9124,133 @@ test('the state and the reason never mention it', () => {
       + 'which buries whether they are actually working their list');
 });
 
+console.log('\n--- why the reply column is blank ---');
+
+/* Reply rate reads "not measured" for almost everyone, and that refusal is
+   right: a send only counts once somebody has answered whether a reply came,
+   so zero reviewed is genuinely unknown rather than zero.
+
+   What it did not say is that the fix is two minutes of attention. On this
+   book Johnny has reviewed 489 of 965 and has a real 19% reply rate; Ronin has
+   reviewed 0 of 49 and Ethan 0 of 24. Nobody except the owner has ever
+   answered the question, so the bandit learns from one person's data and the
+   manager can see message quality for one person. An unexplained "not
+   measured" reads as the product being broken rather than as a backlog. */
+
+test('the backlog uses the same threshold that asks the question', () => {
+  /* REPLY_WAIT_HOURS is when Ghost Recall Today starts asking. Counting on a
+     different clock would show a manager work their rep has not been offered
+     yet. */
+  assert.strictEqual(typeof GB.REPLY_WAIT_HOURS, 'number');
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/REPLY_WAIT_HOURS \* 3600000/.test(data),
+    'the review backlog is counted on its own invented window rather than the '
+      + 'one that decides when the question is actually asked');
+  /* And the column has to be asked for. The stub hands back whole fixture
+     rows whatever you select, so dropping `reviewed` passes every behavioural
+     test here and then, against the real database, reads undefined on every
+     row — counting the entire history as outstanding. Third time this trap
+     has caught something today. */
+  assert.ok(/from\('message_log'\)\.select\('[^']*\breviewed\b[^']*'\)/.test(data),
+    'loadTeamRows no longer selects `reviewed`, so every message ever sent '
+      + 'would be counted as awaiting an answer');
+});
+
+test('only messages old enough to answer are counted', async () => {
+  const now = Date.now();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [{id:'c1', user_id:'u2', name:'A', timezone:'UTC'}], error: null},
+    message_log: {data: [
+      // Too recent to ask about: the reply may still be coming.
+      {client_id:'c1', sent_at: new Date(now - 2*3600000).toISOString(), responded:false, reviewed:false},
+      // Old enough, unanswered: the backlog.
+      {client_id:'c1', sent_at: new Date(now - 48*3600000).toISOString(), responded:false, reviewed:false},
+      {client_id:'c1', sent_at: new Date(now - 72*3600000).toISOString(), responded:false, reviewed:false},
+      // Old and already answered: not a backlog.
+      {client_id:'c1', sent_at: new Date(now - 96*3600000).toISOString(), responded:true, reviewed:true}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.awaitingReview, 2,
+    'a message too recent to answer, or one already answered, is being counted '
+      + 'as outstanding work');
+});
+
+test('the team total is the sum, and reaches the note', () => {
+  const now = new Date();
+  const mk = (name, awaiting) => ({
+    name: name, userId: name, upcoming: 3, contacts: 5, sentEver: 10, sent7d: 4,
+    sentPrev7d: 4, replies: 0, repliesMeasured: false, awaitingReview: awaiting,
+    pastCalls: 0, unlogged: 0, completed: 0, noshows: 0, connectedCalendars: 1,
+    lastSync: now.toISOString(), lastSentAt: now.getTime(), upcomingList: [],
+    outsideHours: 0, weeks: []
+  });
+  const o = GB.teamOverview([mk('A', 29), mk('B', 19)], now);
+  assert.strictEqual(o.awaitingReview, 48,
+    'the overview does not total the outstanding reply questions');
+});
+
+test('the note says what it would take, not just that it cannot be shown', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  // The existing refusal must survive — it is the honest half.
+  assert.ok(/nobody has looked, which is not the same as nobody answering/.test(code),
+    'the explanation that unknown is not zero has been dropped');
+  /* The ternary CONDITION, not just a mention: the sentence also interpolates
+     o.awaitingReview, so a looser pattern passes with the condition replaced
+     by `false` and the sentence never rendered. */
+  assert.ok(/\(o\.awaitingReview\s*\n?\s*\?/.test(code),
+    'the note no longer says how much work clearing the blank actually is, so '
+      + '"not measured" reads as a permanent limitation');
+  assert.ok(/Ghost Recall Today/.test(code),
+    'the note does not say where the question is answered');
+  assert.ok(/m\.awaitingReview >= 5/.test(code),
+    'the per-person count is missing, or fires on a trivial backlog');
+});
+
+test('the backlog never becomes a reply rate', () => {
+  /* The temptation is to treat unreviewed as "no reply" and print a number.
+     That is the exact trap the reply-rate refusal exists to avoid: it would
+     read 0% for everyone who has not reviewed, which is a confident claim
+     about their copy drawn from nobody having looked. */
+  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const fn = logic.slice(logic.indexOf('function teamMemberState'),
+                         logic.indexOf('function teamOverview'));
+  /* Behavioural, not a regex over the source: the return object lists
+     replyRate and awaitingReview as neighbouring properties, so any pattern
+     loose enough to catch real mixing also matches that list. */
+  const now2 = new Date();
+  const m = GB.teamMemberState({
+    name:'X', userId:'x', upcoming:3, contacts:5, sentEver:49, sent7d:5,
+    sentPrev7d:5, replies:0, repliesMeasured:false, awaitingReview:29,
+    pastCalls:0, unlogged:0, completed:0, noshows:0, connectedCalendars:1,
+    lastSync: now2.toISOString(), lastSentAt: now2.getTime(), upcomingList:[]
+  }, now2);
+  assert.strictEqual(m.replyRate, null,
+    'a big review backlog produced a reply rate. 49 sent and 0 reviewed would '
+      + 'read as 0%, which is a confident claim about somebody\u2019s copy '
+      + 'drawn entirely from nobody having looked.');
+  assert.strictEqual(m.awaitingReview, 29, 'the backlog itself was lost');
+
+  // The refusal itself lives in teamReplyRate, which is where it has to stay.
+  const rr = logic.slice(logic.indexOf('function teamReplyRate'),
+                         logic.indexOf('function teamReplyRate') + 400);
+  assert.ok(/if\(!m \|\| !m\.repliesMeasured\) return null;/.test(rr),
+    'the reply rate no longer refuses when replies were never reconciled — it '
+      + 'would read 0% for everybody who has simply not reviewed anything, '
+      + 'which is a confident claim about their copy drawn from nobody looking');
+  assert.ok(!/awaitingReview/.test(rr),
+    'the review backlog is leaking into the reply rate calculation');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

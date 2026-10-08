@@ -514,6 +514,17 @@ function renderTeamTab(){
            habit. The tooltip says the timezone is a guess from the area code,
            because a wrong guess looks exactly like a badly timed text and a
            manager should not open that conversation certain. */
+        /* Why their reply rate is blank, next to the blank.
+
+           Shown before the out-of-hours count because it is the one a manager
+           can do something about this afternoon, and because an unexplained
+           "not measured" reads as the product not working rather than as a
+           question nobody has answered. */
+        m.awaitingReview >= 5 ? h('span',{class:'team-seen is-away',
+          title:'Messages sent more than a day ago where nobody has said '
+              + 'whether a reply came. The reply rate stays blank until these '
+              + 'are answered \u2014 they are in Ghost Recall Today.'},
+          [' \u00b7 ' + m.awaitingReview + ' replies unanswered']) : '',
         m.outsideHours >= 3 ? h('span',{class:'team-seen is-away',
           title:'Sent before 8am or after 9pm where the contact lives. Their '
               + 'timezone is guessed from the phone number, so some of these '
@@ -629,7 +640,14 @@ function renderTeamTab(){
     box.appendChild(h('div',{class:'team-note'},[
       'Reply rate is only shown for the ' + o.replyRateMeasuredFor + ' of ' + o.total +
       ' accounts where replies are actually reconciled. For everyone else it is ' +
-      'unknown rather than zero \u2014 nobody has looked, which is not the same as nobody answering.'
+      'unknown rather than zero — nobody has looked, which is not the same as nobody answering.' +
+      /* And what it would take to fix it. The refusal above is right, but on
+         its own it reads as a permanent limitation rather than as a backlog
+         somebody can clear in a sitting. */
+      (o.awaitingReview
+        ? ' There ' + (o.awaitingReview === 1 ? 'is 1 message' : 'are ' + o.awaitingReview + ' messages')
+          + ' across the team waiting on that question, in each person\u2019s own Ghost Recall Today.'
+        : '')
     ]));
   }
 }

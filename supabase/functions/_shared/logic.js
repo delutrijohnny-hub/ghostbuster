@@ -4312,6 +4312,13 @@ function teamMemberState(m, now){
        identical to a badly timed text and anything showing this has to say
        so. */
     outsideHours: Number(m.outsideHours) || 0,
+    /* Sent long enough ago to know, and still unanswered by anybody.
+
+       The reply rate beside it stays null until these are cleared, and that
+       refusal is deliberate — but it reads as a dead end unless the count
+       that would fix it is visible. Like the unlogged count, the number IS
+       the finding rather than an error. */
+    awaitingReview: Number(m.awaitingReview) || 0,
     rescheduled: Number(m.rescheduled) || 0,
     calendar: cal,
     state: state,
@@ -4368,7 +4375,10 @@ function teamOverview(rows, now){
     showUpMeasurable: members.filter(function(m){ return m.showUpRate !== null; }).length,
     // Booked work nobody has spoken to, across the whole team.
     untouched: members.reduce(function(n, m){ return n + m.untouched; }, 0),
-    replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length
+    replyRateMeasuredFor: members.filter(function(m){ return m.replyRate !== null; }).length,
+    // The whole team's unanswered reply questions, so the note explaining the
+    // blank column can say how much work clearing it actually is.
+    awaitingReview: members.reduce(function(n, m){ return n + (m.awaitingReview || 0); }, 0)
   };
 }
 
