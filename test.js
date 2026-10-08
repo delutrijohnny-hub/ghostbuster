@@ -10568,6 +10568,93 @@ test('the offer appears in settings and the hide is undoable', () => {
     'the contacts are being deleted rather than hidden');
 });
 
+console.log('\n--- how many of the team are sending at all ---');
+
+/* The team headline compared this week with last, which on a small team is
+   mostly whoever had a busy Tuesday. This book went 202 messages one week and
+   49 the next with nothing about the team having changed.
+
+   What did change, and what no number on the screen showed, is how many
+   people were sending anything: one person for eight straight weeks, then
+   three, then four. That is a count, it cannot be swung by one person's
+   burst, and it is the thing a manager is actually trying to move. */
+
+function wkRow(counts){
+  const base = GB.startOfUTCWeek(new Date('2026-10-08T12:00:00Z'));
+  return {weeks: counts.map(function(c, i){
+    return {weekStart: new Date(base.getTime() - (counts.length - 1 - i) * 7 * 86400000).toISOString(),
+            count: c, partial: i === counts.length - 1};
+  })};
+}
+
+test('it counts people, not just messages', () => {
+  const out = GB.teamWeeklyActivity([
+    wkRow([200, 50, 0, 10]),   // one heavy sender
+    wkRow([0, 0, 0, 5]),       // joins in the last week
+    wkRow([0, 0, 0, 3])        // joins in the last week
+  ]);
+  assert.strictEqual(out.length, 4);
+  assert.strictEqual(out[0].senders, 1, 'eight weeks of one person should read as one');
+  assert.strictEqual(out[0].messages, 200);
+  assert.strictEqual(out[3].senders, 3, 'the week three people sent is the finding');
+  assert.strictEqual(out[3].messages, 18);
+});
+
+test('a volume collapse with no change in people is visible as such', () => {
+  /* The exact shape that made the old headline misleading: messages fall by
+     three quarters, the number of people working is identical. */
+  const out = GB.teamWeeklyActivity([wkRow([202, 49])]);
+  assert.strictEqual(out[0].senders, out[1].senders,
+    'the same person sending in both weeks should read as the same count');
+  assert.ok(out[0].messages > out[1].messages * 3, 'the volume swing is the distraction');
+});
+
+test('the live week is carried through as partial', () => {
+  const out = GB.teamWeeklyActivity([wkRow([10, 4]), wkRow([0, 2])]);
+  assert.strictEqual(out[1].partial, true,
+    'the current week is not marked, so a part-week reads as a collapse');
+  assert.strictEqual(out[0].partial, false);
+});
+
+test('the strip and the per-person bars agree on what a week is', () => {
+  /* Summed from the rows' own weeks rather than queried again, so the two
+     cannot drift into different buckets. */
+  const rows = [wkRow([1, 2, 3]), wkRow([4, 5, 6])];
+  const out = GB.teamWeeklyActivity(rows);
+  out.forEach(function(w, i){
+    assert.strictEqual(w.weekStart, rows[0].weeks[i].weekStart,
+      'the team strip is bucketing weeks differently from the rows it sums');
+  });
+  assert.strictEqual(out[2].messages, 9);
+});
+
+test('an empty or ragged team does not throw', () => {
+  assert.deepStrictEqual(GB.teamWeeklyActivity([]), []);
+  assert.deepStrictEqual(GB.teamWeeklyActivity(null), []);
+  assert.deepStrictEqual(GB.teamWeeklyActivity([{name:'no weeks'}]), []);
+  // One person with history, one without, must not misalign the buckets.
+  const mixed = GB.teamWeeklyActivity([wkRow([1, 2, 3]), {name:'new', weeks: []}]);
+  assert.strictEqual(mixed.length, 3);
+  assert.strictEqual(mixed[2].messages, 3);
+});
+
+test('the strip leads with people and is actually rendered', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function teamActivityStrip('),
+                                app.indexOf('function activityBars(')));
+  assert.ok(/w\.senders \/ peak/.test(fn),
+    'the bars are drawn from message volume, which is the number that swings '
+      + 'for no reason on a small team');
+  assert.ok(/person has sent something this week|people have sent something this week/.test(fn),
+    'the headline no longer leads with how many people are sending');
+  assert.ok(/is-partial/.test(fn), 'the live week is drawn the same as a finished one');
+
+  const tab = codeOnly(app.slice(app.indexOf('function renderTeamTab()'),
+                                 app.indexOf('function renderOwnerTab()')));
+  assert.ok(/box\.appendChild\(teamActivityStrip\(rows\)\)/.test(tab),
+    'teamActivityStrip is never called, so the whole strip renders nowhere');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

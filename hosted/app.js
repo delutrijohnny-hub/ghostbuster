@@ -429,6 +429,48 @@ function touchEffectPanel(m){
   return wrap;
 }
 
+/* How many of the team are sending at all, week by week.
+
+   The lead line compares this week with last, which on a small team is mostly
+   whoever had a busy Tuesday: this book swung 202 messages to 49 with nothing
+   about the team having changed. The count of people sending did change, from
+   one for eight straight weeks to three to four, and nothing on the screen
+   said so.
+
+   People first, messages second and smaller. A manager moving a team from one
+   sender to four is doing the thing that matters; total volume is the number
+   that will flatter or alarm them for no reason. */
+function teamActivityStrip(rows){
+  var weeks = teamWeeklyActivity(rows);
+  var wrap = h('div',{class:'tw-strip'},[]);
+  if(weeks.length < 2) return wrap;
+  var peak = weeks.reduce(function(n, w){ return Math.max(n, w.senders); }, 0);
+  if(!peak) return wrap;                 // nobody has sent anything, ever
+  var bars = h('div',{class:'tw-bars'},[]);
+  weeks.forEach(function(w){
+    var when = new Date(w.weekStart);
+    var label = isNaN(when.getTime()) ? '' :
+      when.toLocaleDateString(undefined,{month:'short', day:'numeric', timeZone:'UTC'});
+    bars.appendChild(h('div',{class:'tw-bar' + (w.partial ? ' is-partial' : ''),
+      title: w.senders + (w.senders === 1 ? ' person sent' : ' people sent') + ' \u2014 ' +
+             w.messages + (w.messages === 1 ? ' message' : ' messages') +
+             ' in the week of ' + label + (w.partial ? ' (this week, still running)' : '')},[
+      h('i',{style:'height:' + Math.max(Math.round((w.senders / peak) * 100), w.senders ? 8 : 3) + '%'},[])
+    ]));
+  });
+  var last = weeks[weeks.length - 1];
+  wrap.appendChild(h('div',{class:'tw-head'},[
+    h('b',{},[String(last.senders)]),
+    (last.senders === 1 ? ' person has sent something this week' : ' people have sent something this week'),
+    h('span',{},[' \u00b7 ' + last.messages + (last.messages === 1 ? ' message' : ' messages')])
+  ]));
+  wrap.appendChild(bars);
+  wrap.appendChild(h('div',{class:'tw-foot'},[
+    'People sending, last 8 weeks. The last bar is this week so far.'
+  ]));
+  return wrap;
+}
+
 function activityBars(m){
   var weeks = m.weeks || [];
   var wrap = h('div',{class:'act-wrap'},[]);
@@ -543,6 +585,7 @@ function renderTeamTab(){
   box.innerHTML = '';
 
   box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['Your team']) ]));
+  box.appendChild(teamActivityStrip(rows));
 
   /* The lead line is the one sentence a manager wants: how much booked work
      belongs to somebody who is not following anyone up. Phrased as the cost,

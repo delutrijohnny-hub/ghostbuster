@@ -512,6 +512,43 @@ function touchEffect(m){
   };
 }
 
+/* The team's last eight weeks: how many people sent anything, and how much.
+
+   The headline on this screen was week against week — "111 messages this
+   week, down 56" — which on a small team is dominated by whoever had a busy
+   Tuesday. This book went 202 messages one week and 49 the next with nothing
+   whatsoever having changed about the team.
+
+   What did change, and what no number on the screen showed, is how many
+   people were sending at all: one person for eight straight weeks, then three,
+   then four. That is the thing a manager is actually trying to move, it is a
+   count rather than an average, and it cannot be swung by one person's burst.
+
+   Built by summing the per-person weeks already on the rows rather than asking
+   the database again, so the team strip and the per-person bars cannot
+   disagree about what a week is — they are the same UTC buckets. */
+function teamWeeklyActivity(rows){
+  var list = (rows || []).filter(function(r){ return r && Array.isArray(r.weeks); });
+  if(!list.length) return [];
+  var n = 0;
+  list.forEach(function(r){ if(r.weeks.length > n) n = r.weeks.length; });
+  if(!n) return [];
+  var out = [];
+  for(var i = 0; i < n; i++){
+    var total = 0, senders = 0, weekStart = null, partial = false;
+    list.forEach(function(r){
+      var w = r.weeks[r.weeks.length - n + i];
+      if(!w) return;
+      weekStart = weekStart || w.weekStart;
+      partial = partial || !!w.partial;
+      total += Number(w.count) || 0;
+      if((Number(w.count) || 0) > 0) senders++;
+    });
+    out.push({weekStart: weekStart, messages: total, senders: senders, partial: partial});
+  }
+  return out;
+}
+
 function teamAppointmentWords(rows){
   var def = buildDefaultTerminology();
   var one = null, many = null, mixed = false;
@@ -5570,6 +5607,7 @@ var __LOGIC_EXPORTS__ = {
   attendanceBandFor: attendanceBandFor,
   attendanceByHour: attendanceByHour, ATTENDANCE_BANDS: ATTENDANCE_BANDS,
   ATTENDANCE_MIN: ATTENDANCE_MIN,
+  teamWeeklyActivity: teamWeeklyActivity,
   touchEffect: touchEffect, TOUCH_EFFECT_MIN: TOUCH_EFFECT_MIN,
   teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,
