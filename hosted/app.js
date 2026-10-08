@@ -708,14 +708,24 @@ function renderTeamTab(){
   }
 }
 
-/* The owner view: every account on Ghost Recall, for support.
+/* Account health for the accounts you can actually see.
 
-   Deliberately NOT the team view with a wider WHERE clause. The team view is a
-   sales manager looking at his own staff - same company, same customers, full
-   detail is fine. This is the product owner looking at other businesses, which
-   stops being an internal screen the day an outside customer signs up. It shows
-   what is broken and what to tell them, out of account-level facts only, and
-   logic.js has a test asserting it cannot grow a contact-shaped field. */
+   It was called "All accounts" and said "N accounts healthy". It is fed
+   state.platform, which is state.team, which is loadTeamRows — strictly your
+   own organisation, because RLS gives the browser nothing else. At the time of
+   writing Ghost Recall has thirteen accounts across seven organisations and
+   this screen showed eight of them while claiming to be all of them: a
+   confident, specific, wrong statement about the size of the product.
+
+   The intent in the original note was right and is kept below: this is the
+   support view, account-level facts only, and it must never grow a
+   contact-shaped field — logic.js has a test asserting that. What it cannot
+   be, until there is a deliberate product-owner role and a function to serve
+   it, is cross-organisation. A real platform view means handing one person
+   health data about other businesses, which is a privilege that should be
+   granted on purpose rather than inherited from a label.
+
+   Until then it says what it is. */
 function renderOwnerTab(){
   var box = el('owner-view');
   var btn = el('tab-btn-owner');
@@ -731,12 +741,17 @@ function renderOwnerTab(){
 
   var o = platformOverview(rows, new Date());
   box.innerHTML = '';
-  box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['All accounts']) ]));
+  box.appendChild(h('div',{class:'team-head'},[ h('h3',{},['Account health']) ]));
   box.appendChild(h('p',{class:'team-lead', html:
     o.needHelp
       ? '<strong>' + o.needHelp + '</strong> of ' + o.total + ' need help. ' +
         o.neverUsed + ' have never sent a message.'
-      : 'All ' + o.total + ' accounts healthy.'}));
+      : 'All ' + o.total + ' healthy.'}));
+  // Said once, plainly, rather than implied by a title that overstates it.
+  box.appendChild(h('p',{class:'team-note'},[
+    'The accounts in ' + (STATE.orgName || 'your organisation') + '. Ghost Recall '
+    + 'cannot show you another business\u2019s account from here.'
+  ]));
 
   o.accounts.forEach(function(a){
     var meta = [];

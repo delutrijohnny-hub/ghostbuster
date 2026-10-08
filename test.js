@@ -8567,7 +8567,7 @@ test('an empty or missing team does not throw', () => {
 test('the team view asks the team, not the signed-in manager', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
   const fn = app.slice(app.indexOf('function renderTeamTab()'),
-                       app.indexOf('/* The owner view'));
+                       app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   assert.ok(/teamAppointmentWords\(rows\)/.test(code),
@@ -8876,7 +8876,7 @@ test('an empty or odd list does not throw', async () => {
 
 test('bulk cover is only offered where it is the actual problem', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   assert.ok(/m\.queue\.length > 1 && m\.needsAttention/.test(code),
@@ -9088,7 +9088,7 @@ test('the count rides on the team row as a count, never a rate', async () => {
 
 test('the row says it is a guess, and stays quiet about one-offs', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   assert.ok(/m\.outsideHours >= 3/.test(code),
@@ -9204,7 +9204,7 @@ test('the team total is the sum, and reaches the note', () => {
 
 test('the note says what it would take, not just that it cannot be shown', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   // The existing refusal must survive — it is the honest half.
@@ -9330,7 +9330,7 @@ test('the performance figures still exclude people who never started', () => {
 
 test('the tab carries the count, and it matches the screen it points at', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   // The creation, not just a mention: the querySelector that looks the badge
@@ -9370,7 +9370,7 @@ test('the small facts share one line instead of stacking', () => {
      line of its own: four stacked red sentences per person, each opening with
      a separator that separated nothing, and a 135px row. */
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
                  .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
   assert.ok(/h\('div',\{class:'team-flags'\}/.test(code),
@@ -9388,7 +9388,7 @@ test('the headline never leads with a bold red zero', () => {
      read "0 booked appointments belong to someone who is not following anyone
      up": nonsense, and alarming. */
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('function renderOwnerTab()'));
   assert.ok(/\} else if\(!o\.strandedUpcoming\)\{/.test(fn),
     'there is no branch for "needs attention but holding nothing", so the '
       + 'headline leads with a bold zero');
@@ -9461,7 +9461,7 @@ test('nothing the renderer reads off a member is missing from the state', () => 
      teamMemberState result — so the next field added to the screen cannot
      silently resolve to undefined the way these four did. */
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const region = app.slice(app.indexOf('function activityBars('), app.indexOf('/* The owner view'));
+  const region = app.slice(app.indexOf('function activityBars('), app.indexOf('function renderOwnerTab()'));
   const code = region.replace(/\/\*[\s\S]*?\*\//g, ' ')
                      .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
 
@@ -9584,6 +9584,66 @@ test('bulk cover carries the same context', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
   const h = app.slice(app.indexOf("case 'bulk-assign':"), app.indexOf("case 'set-role':"));
   assert.ok(/fromName: bWho, toName: bTo/.test(h), 'the bulk handler sends no names');
+});
+
+console.log('\n--- the support view says what it can actually see ---');
+
+/* It was titled "All accounts" and reported "All N accounts healthy". It is
+   fed state.platform, which is state.team, which is loadTeamRows — strictly
+   the caller's own organisation, because RLS gives the browser nothing else.
+   Ghost Recall had thirteen accounts across seven organisations and this
+   screen showed eight of them while claiming to be all of them.
+
+   Nothing was broken in the code. The label was simply making a claim the
+   data could not support, which is the same failure as a reply rate of 0%
+   drawn from nobody having looked. */
+
+test('it does not claim to be every account on Ghost Recall', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderOwnerTab()'),
+                       app.indexOf('function renderOwnerTab()') + 4000);
+  assert.ok(!/'All accounts'/.test(fn),
+    'the heading claims to show every account on Ghost Recall. It is fed the '
+      + 'caller’s own organisation and can never see another business.');
+  assert.ok(!/'All ' \+ o\.total \+ ' accounts healthy\.'/.test(fn),
+    'the summary still reports the organisation’s count as the platform’s');
+  assert.ok(/cannot show you another business/.test(fn),
+    'nothing on the screen says what it is limited to, so the reader has to '
+      + 'infer the scope from a title');
+
+  const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  const btn = html.slice(html.indexOf('id="tab-btn-owner"'), html.indexOf('id="tab-btn-owner"') + 160);
+  assert.ok(!/All accounts/.test(btn), 'the tab button still says All accounts');
+});
+
+test('the scope it describes is the scope it is given', () => {
+  /* The honest fix is only honest while platform stays org-scoped. If
+     state.platform is ever fed something wider, this note becomes the
+     understatement rather than the overstatement, and either way the screen
+     would be lying again. */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/state\.platform = state\.team;/.test(data),
+    'platform is no longer the team rows — the support view now describes its '
+      + 'own scope wrongly, in the other direction. Either widen the wording '
+      + 'with it or give it a function of its own.');
+});
+
+test('it still refuses to carry contact data', () => {
+  // The original intent, kept: account-level facts only, because the day an
+  // outside business signs up this stops being an internal screen.
+  const now = new Date();
+  const d = GB.accountDiagnosis({
+    name: 'Someone', contacts: 10, upcoming: 3, sentEver: 0,
+    connectedCalendars: 1, lastSync: now.toISOString(),
+    upcomingList: [{clientId:'c1', name:'A Real Person', when: now.toISOString()}],
+    queue: [{name: 'Another Person'}]
+  }, now);
+  const blob = JSON.stringify(d);
+  assert.ok(!/A Real Person|Another Person/.test(blob),
+    'the support view grew a contact-shaped field — it shows other businesses '
+      + 'and must never carry their customers’ names');
+  assert.ok(!('upcomingList' in d) && !('queue' in d),
+    'the diagnosis is passing the raw queue through: ' + Object.keys(d).join(', '));
 });
 
 Promise.all(pendingTests).then(() => {
