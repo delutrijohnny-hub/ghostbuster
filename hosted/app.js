@@ -361,6 +361,39 @@ function invitePanel(){
    whether somebody texts before a call is not random: you chase the ones you
    are worried about, so the touched group is pre-selected for doubt. That can
    hide a real effect, and the panel should not pretend otherwise. */
+/* When this person's calls actually get attended.
+
+   The only dimension tried on this book that showed a real pattern AND
+   survived being split into two independent halves — one person at 33% midday
+   against 62% in the afternoon, reproduced in both periods. Five things had
+   been tested by then and testing enough of them guarantees one looks
+   significant, so replication is what earned this a place rather than a
+   p-value.
+
+   The bands are listed, never ranked. Picking the best and worst of four and
+   quoting the gap overstates by construction: some spread is certain even in
+   noise, and a manager reading "your 11am slot is your worst" will move
+   bookings on the strength of it. Numbers and counts, and let them look. */
+function attendancePanel(m){
+  var bands = attendanceByHour(m);
+  var wrap = h('div',{class:'te-wrap'},[]);
+  if(!bands.length) return wrap;        // nothing honest to say yet
+  wrap.appendChild(h('div',{class:'act-head'},['Attendance by time of day']));
+  var row = h('div',{class:'te-cmp'},[]);
+  bands.forEach(function(b){
+    row.appendChild(h('div',{},[
+      h('b',{},[b.pct + '%']), b.label, h('i',{},[b.decided + ' calls'])
+    ]));
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(h('div',{class:'act-foot'},[
+    'Their local time, worked out from the phone number, so treat it as '
+    + 'roughly right. Bands with fewer than ' + ATTENDANCE_MIN
+    + ' decided calls are left out rather than shown as a percentage.'
+  ]));
+  return wrap;
+}
+
 function touchEffectPanel(m){
   var e = touchEffect(m);
   var wrap = h('div',{class:'te-wrap'},[]);
@@ -688,6 +721,7 @@ function renderTeamTab(){
       var list = h('div',{class:'team-queue'},[]);
       list.appendChild(activityBars(m));
       list.appendChild(touchEffectPanel(m));
+      list.appendChild(attendancePanel(m));
       if(m.untouched){
         list.appendChild(h('div',{class:'team-queue-head'},[
           m.untouched + ' of ' + m.queue.length + ' with nothing sent yet'

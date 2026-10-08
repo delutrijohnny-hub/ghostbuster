@@ -10253,6 +10253,8 @@ test('the panel is actually on the screen', () => {
                                 app.indexOf('function renderOwnerTab()')));
   assert.ok(/list\.appendChild\(touchEffectPanel\(m\)\)/.test(fn),
     'touchEffectPanel is never called, so the whole comparison renders nowhere');
+  assert.ok(/list\.appendChild\(attendancePanel\(m\)\)/.test(fn),
+    'attendancePanel is never called, so the time-of-day breakdown renders nowhere');
 });
 
 test('both halves survive the trip from loader to screen', async () => {
@@ -10285,6 +10287,105 @@ test('both halves survive the trip from loader to screen', async () => {
   const m = GB.teamMemberState(rep, new Date());
   assert.strictEqual(m.decidedWithTouch, 1, 'the split is lost at the state boundary');
   assert.strictEqual(m.decidedWithoutTouch, 2);
+});
+
+console.log('\n--- attendance by time of day ---');
+
+/* The one dimension on this book that showed a real pattern. One person's
+   midday calls were attended at 33% against 62% in the afternoon. Five
+   dimensions had been tried by then — touches, lead time, weekday, hour, call
+   type — and testing enough of them guarantees one looks significant, so it
+   was checked by splitting that person's history into two independent halves:
+   39 vs 64 in the earlier period, 33 vs 62 in the later. Same direction, same
+   size, twice. Replication is what earned it a place, not a p-value. */
+
+test('a call is banded on the CONTACT’s clock', () => {
+  // 19:00 UTC is midday in Los Angeles and mid-afternoon in New York. Whether
+  // somebody is at lunch depends on where they are, not where you are.
+  const when = new Date('2026-10-08T19:00:00Z');
+  assert.strictEqual(GB.attendanceBandFor(when, 'America/Los_Angeles'), 'midday');
+  assert.strictEqual(GB.attendanceBandFor(when, 'America/New_York'), 'afternoon');
+  assert.strictEqual(GB.attendanceBandFor(null, 'UTC'), null, 'a missing time still bands');
+  assert.strictEqual(GB.attendanceBandFor('nonsense', 'UTC'), null);
+});
+
+test('the bands cover the clock once and only once', () => {
+  /* A gap would silently drop calls out of the comparison; an overlap would
+     double-count them into two bands. */
+  for (let hr = 0; hr < 24; hr++) {
+    const hits = GB.ATTENDANCE_BANDS.filter(b => hr >= b.from && hr < b.to);
+    assert.strictEqual(hits.length, 1,
+      hr + ':00 falls into ' + hits.length + ' bands, not exactly one');
+  }
+});
+
+test('a thin band is left out rather than given a percentage', () => {
+  const out = GB.attendanceByHour({
+    decidedByBand: {midday: 64, afternoon: 34, evening: 3},
+    showedByBand:  {midday: 21, afternoon: 21, evening: 3}
+  });
+  assert.strictEqual(out.length, 2, 'a three-call band was given a percentage');
+  assert.ok(!out.some(b => b.key === 'evening'),
+    'the evening band has three calls and would read as 100%');
+  assert.strictEqual(out[0].pct, 33);
+  assert.strictEqual(out[1].pct, 62);
+});
+
+test('one band alone is not a comparison', () => {
+  /* With a single band this is just that person's overall rate again, which
+     the row above already shows — and putting it under a "by time of day"
+     heading implies a contrast that is not there. */
+  const out = GB.attendanceByHour({
+    decidedByBand: {midday: 80}, showedByBand: {midday: 40}
+  });
+  assert.deepStrictEqual(out, [], 'a single band was presented as a breakdown');
+});
+
+test('the panel lists the bands and never ranks them', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function attendancePanel('),
+                                app.indexOf('function touchEffectPanel(')));
+  assert.ok(/attendanceByHour\(m\)/.test(fn), 'the panel does not use the gated helper');
+  assert.ok(/if\(!bands\.length\) return wrap;/.test(fn),
+    'an empty breakdown still renders a heading, so somebody reads a title '
+      + 'with nothing under it as a bug');
+  /* No superlatives. Picking best-and-worst of four buckets overstates by
+     construction and a manager will move bookings on the strength of it. */
+  assert.ok(!/best|worst|strongest|weakest/i.test(fn),
+    'the panel ranks the bands. Some spread between four buckets is certain '
+      + 'even in noise, so naming a winner invents a finding.');
+  assert.ok(/roughly right/.test(fn),
+    'the panel no longer says the contact clock is derived from a phone '
+      + 'number and therefore approximate');
+});
+
+test('the bands survive the loader and the state boundary', async () => {
+  const past = new Date(Date.now() - 5*86400000);
+  past.setUTCHours(19, 0, 0, 0);
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [
+      {id:'a', user_id:'u2', name:'A', call_date_time:past.toISOString(),
+       status:'Completed', timezone:'America/Los_Angeles'},
+      {id:'b', user_id:'u2', name:'B', call_date_time:past.toISOString(),
+       status:'No-show', timezone:'America/Los_Angeles'},
+      {id:'c', user_id:'u2', name:'C', call_date_time:past.toISOString(),
+       status:'Completed', timezone:'America/New_York'}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.decidedByBand.midday, 2,
+    'the two Los Angeles calls should land at midday on their own clock');
+  assert.strictEqual(rep.showedByBand.midday, 1, 'a no-show was counted as attended');
+  assert.strictEqual(rep.decidedByBand.afternoon, 1,
+    'the New York call should land in the afternoon on its own clock');
+  const m = GB.teamMemberState(rep, new Date());
+  assert.strictEqual(m.decidedByBand.midday, 2, 'the bands are lost at the state boundary');
 });
 
 Promise.all(pendingTests).then(() => {

@@ -312,6 +312,7 @@ async function loadTeamRows(sb, uid){
         sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0, sentAt: [],
         outsideHours:0, awaitingReview:0,
         decidedWithTouch:0, decidedWithoutTouch:0, showedWithTouch:0, showedWithoutTouch:0,
+        decidedByBand:{}, showedByBand:{},
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -354,6 +355,17 @@ async function loadTeamRows(sb, uid){
          the message log has been read. */
       if(role === 'won' || role === 'missed'){
         decidedOf[c.id] = {user: c.user_id, showed: role === 'won'};
+        /* Which part of the day it fell in, where the CONTACT is. Their clock
+           is what decides whether somebody is at lunch or on the school run,
+           and it is derived from their area code — a guess, which the panel
+           showing this says out loud. */
+        if(!isNaN(t)){
+          var band = attendanceBandFor(new Date(t), tzOf[c.id]);
+          if(band){
+            b.decidedByBand[band] = (b.decidedByBand[band] || 0) + 1;
+            if(role === 'won') b.showedByBand[band] = (b.showedByBand[band] || 0) + 1;
+          }
+        }
       }
       if(!isNaN(t) && t < now){
         b.pastCalls++;

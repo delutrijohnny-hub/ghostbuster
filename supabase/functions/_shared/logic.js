@@ -401,6 +401,62 @@ function remapStatusesByRole(state, newStages){
    "following up does not work". */
 var TOUCH_EFFECT_MIN = 20;
 
+/* When somebody's calls actually get attended, by time of day.
+
+   The first dimension on this book to show a real pattern, and it survived
+   the check that killed the others. One person's midday calls were attended
+   at 33% against 62% in the afternoon — and splitting their history into two
+   independent halves reproduced it both times, 39/64 in the earlier period
+   and 33/62 in the later. Five dimensions had been tried by then (touches,
+   lead time, weekday, hour, call type); testing enough of them guarantees one
+   looks significant, so replication rather than a p-value is what makes this
+   one worth showing.
+
+   THE BANDS ARE SHOWN, NOT RANKED. Picking the best and worst of four
+   buckets and reporting the gap overstates by construction — some spread is
+   certain even in noise. So this hands over the numbers with their counts and
+   says nothing about which is best.
+
+   Hours are the CONTACT's local time, because that is what governs whether
+   somebody is at lunch or picking up children, and that clock is derived from
+   their phone's area code — a guess, which the panel says. */
+var ATTENDANCE_BANDS = [
+  {key: 'early', label: 'Before 11am', from: 0,  to: 11},
+  {key: 'midday', label: '11am \u2013 2pm', from: 11, to: 14},
+  {key: 'afternoon', label: '2 \u2013 5pm', from: 14, to: 17},
+  {key: 'evening', label: 'After 5pm', from: 17, to: 24}
+];
+var ATTENDANCE_MIN = 20;
+
+/* Which band a call falls in, on the contact's own clock. */
+function attendanceBandFor(when, tz){
+  var d = (when instanceof Date) ? when : safeDate(when);
+  if(!d) return null;
+  var hr = localHourInTZ(d, tz || 'America/New_York');
+  for(var i = 0; i < ATTENDANCE_BANDS.length; i++){
+    var b = ATTENDANCE_BANDS[i];
+    if(hr >= b.from && hr < b.to) return b.key;
+  }
+  return null;
+}
+
+function attendanceByHour(m){
+  var decided = (m && m.decidedByBand) || {};
+  var showed = (m && m.showedByBand) || {};
+  var out = [], shown = 0;
+  ATTENDANCE_BANDS.forEach(function(b){
+    var n = Number(decided[b.key]) || 0;
+    if(n < ATTENDANCE_MIN) return;      // too thin to put a percentage on
+    shown++;
+    out.push({key: b.key, label: b.label, decided: n,
+              showed: Number(showed[b.key]) || 0,
+              pct: Math.round(100 * (Number(showed[b.key]) || 0) / n)});
+  });
+  // One band on its own is not a comparison, it is just that person's rate
+  // again, which the row already shows.
+  return shown >= 2 ? out : [];
+}
+
 function touchEffect(m){
   var withT = Number(m && m.decidedWithTouch) || 0;
   var withoutT = Number(m && m.decidedWithoutTouch) || 0;
@@ -4408,6 +4464,8 @@ function teamMemberState(m, now){
     awaitingReview: Number(m.awaitingReview) || 0,
     // Both halves of the follow-up comparison, so touchEffect can refuse on
     // the thin side rather than reporting 33% from three calls.
+    decidedByBand: m.decidedByBand || {},
+    showedByBand: m.showedByBand || {},
     decidedWithTouch: Number(m.decidedWithTouch) || 0,
     decidedWithoutTouch: Number(m.decidedWithoutTouch) || 0,
     showedWithTouch: Number(m.showedWithTouch) || 0,
@@ -5470,6 +5528,9 @@ var __LOGIC_EXPORTS__ = {
   LOCAL_HOURS_START: LOCAL_HOURS_START, LOCAL_HOURS_END: LOCAL_HOURS_END,
   weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
+  attendanceBandFor: attendanceBandFor,
+  attendanceByHour: attendanceByHour, ATTENDANCE_BANDS: ATTENDANCE_BANDS,
+  ATTENDANCE_MIN: ATTENDANCE_MIN,
   touchEffect: touchEffect, TOUCH_EFFECT_MIN: TOUCH_EFFECT_MIN,
   teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,
