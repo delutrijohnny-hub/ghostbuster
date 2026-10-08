@@ -429,6 +429,40 @@ var ATTENDANCE_BANDS = [
 var ATTENDANCE_MIN = 20;
 
 /* Which band a call falls in, on the contact's own clock. */
+/* Contacts already imported that a new exclusion would have kept out.
+
+   "Never include events titled X" only ever applied to the next sync, so
+   somebody who notices junk in their list sets the rule and the junk stays
+   there — the setting fixes a future they are not looking at and leaves the
+   present alone.
+
+   This became answerable only when event_title started being stored. Before
+   that the contact kept the NAME pulled out of the title and threw the title
+   away, so there was nothing left to match a title rule against.
+
+   Rows imported before titles were kept have none, and those are skipped
+   rather than guessed at: a rule about titles cannot be applied to a row
+   whose title was never recorded, and the caller is told how many it could
+   not check. */
+function contactsMatchingExclusions(state, exclude){
+  var terms = (exclude || [])
+    .map(function(t){ return String(t || '').trim().toLowerCase(); })
+    .filter(function(t){ return t.length; });
+  var matched = [], untitled = 0;
+  if(!terms.length) return {matched: matched, untitled: untitled};
+  var clients = (state && state.clients) || {};
+  Object.keys(clients).forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    if(!c.eventTitle){ untitled++; return; }
+    var title = String(c.eventTitle).toLowerCase();
+    for(var i = 0; i < terms.length; i++){
+      if(title.indexOf(terms[i]) !== -1){ matched.push(c); return; }
+    }
+  });
+  return {matched: matched, untitled: untitled};
+}
+
 function attendanceBandFor(when, tz){
   var d = (when instanceof Date) ? when : safeDate(when);
   if(!d) return null;
@@ -5532,6 +5566,7 @@ var __LOGIC_EXPORTS__ = {
   LOCAL_HOURS_START: LOCAL_HOURS_START, LOCAL_HOURS_END: LOCAL_HOURS_END,
   weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
+  contactsMatchingExclusions: contactsMatchingExclusions,
   attendanceBandFor: attendanceBandFor,
   attendanceByHour: attendanceByHour, ATTENDANCE_BANDS: ATTENDANCE_BANDS,
   ATTENDANCE_MIN: ATTENDANCE_MIN,

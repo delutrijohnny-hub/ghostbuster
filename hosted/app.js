@@ -3641,6 +3641,30 @@ function renderSettingsModal(){
       '<input type="text" data-action="set-cal-words" data-key="exclude" value="' +
       escapeHtml(((STATE.calendarFilter || {}).exclude || []).join(', ')) +
       '" placeholder="team meeting, lunch"></div></div>' +
+    /* And clean up what the rule came too late for.
+
+       An exclusion only ever applied to the next sync, so somebody who
+       notices junk in their list sets the rule and watches the junk stay
+       exactly where it is. The offer appears once the rule is saved, because
+       typing here deliberately does not re-render — rebuilding the modal
+       would steal the caret mid-word. */
+    (function(){
+      var ex = contactsMatchingExclusions(STATE, (STATE.calendarFilter || {}).exclude);
+      if(!ex.matched.length) return '';
+      return '<div class="set-warn" style="margin-top:8px;">' +
+        ex.matched.length + ' already-imported ' +
+        (ex.matched.length === 1 ? 'event matches' : 'events match') +
+        ' these words. The rule only stops new ones arriving.' +
+        '<button class="btn btn-sm" style="margin-left:8px;" data-action="apply-exclusions">' +
+        'Hide ' + (ex.matched.length === 1 ? 'it' : 'them') + '</button>' +
+        (ex.untitled
+          ? '<div class="hint" style="margin-top:6px;">' + ex.untitled +
+            ' older ' + (ex.untitled === 1 ? 'contact was' : 'contacts were') +
+            ' imported before Ghost Recall kept event titles, so they cannot be ' +
+            'checked against a title rule.</div>'
+          : '') +
+        '</div>';
+    })() +
     '</div>' +
     /* Email settings are now one question: which Gmail do client emails open
        from.
@@ -4299,6 +4323,20 @@ document.addEventListener('click', function(ev){
       saveState(STATE);
       renderEmailLibrary();
       showToast('Brought in ' + imported.length + (imported.length === 1 ? ' email.' : ' emails.'));
+      break;
+    }
+    case 'apply-exclusions': {
+      var ex = contactsMatchingExclusions(STATE, (STATE.calendarFilter || {}).exclude);
+      if(!ex.matched.length) break;
+      lastSnapshot = snapshot();
+      ex.matched.forEach(function(c){ c.ignored = true; });
+      saveState(STATE);
+      renderSettingsModal();
+      renderAll();
+      // Undoable, like every other bulk hide here: the rule is a guess about
+      // titles and somebody will word one too broadly.
+      showToast('Hid ' + ex.matched.length +
+        (ex.matched.length === 1 ? ' contact.' : ' contacts.'), lastSnapshot);
       break;
     }
     case 'set-cal-mode': {

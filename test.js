@@ -10476,6 +10476,98 @@ test('a derived name is still only a guess', () => {
     'anything truthy sets the flag, so a stray value would freeze a name');
 });
 
+console.log('\n--- an exclusion can clean up what it came too late for ---');
+
+/* "Never include events titled X" only ever applied to the NEXT sync. So
+   somebody notices junk in their list, writes the rule that describes it,
+   saves, and the junk sits exactly where it was: the setting fixes a future
+   they are not looking at and leaves the present alone.
+
+   Only answerable because event_title is now stored. Before that a contact
+   kept the NAME pulled out of the title and discarded the title itself, so
+   there was nothing left to match a title rule against. */
+
+function withTitles(titles){
+  const st = GB.buildDefaultState();
+  titles.forEach(function(t, i){
+    st.clients['c' + i] = GB.sanitizeClient({name: 'N' + i, eventTitle: t}, 'c' + i);
+  });
+  return st;
+}
+
+test('it finds the ones a rule would have kept out', () => {
+  const st = withTitles([
+    'DEMO Walkthrough/Training',
+    'Third Call | Youtube Strategy Session (Nathaly Pintor)',
+    'Team meeting',
+    'Interview with Josh'
+  ]);
+  const r = GB.contactsMatchingExclusions(st, ['demo', 'team meeting']);
+  assert.strictEqual(r.matched.length, 2, 'matched: ' + r.matched.map(c => c.eventTitle).join(' | '));
+  assert.ok(r.matched.every(c => !/Strategy Session|Interview/.test(c.eventTitle)),
+    'a real booking was caught by the rule');
+});
+
+test('matching ignores case and matches anywhere in the title', () => {
+  const st = withTitles(['Weekly DEMO and training', 'demo walkthrough']);
+  assert.strictEqual(GB.contactsMatchingExclusions(st, ['DeMo']).matched.length, 2,
+    'the rule is case-sensitive, so the words somebody types have to match '
+      + 'exactly what their booking tool wrote');
+});
+
+test('a row with no stored title is counted, not guessed at', () => {
+  /* A title rule cannot be applied to a row whose title was never recorded.
+     Silently skipping them would leave somebody wondering why the count did
+     not match what they can see. */
+  const st = withTitles(['DEMO Walkthrough']);
+  st.clients.old = GB.sanitizeClient({name: 'Older contact'}, 'old');   // no eventTitle
+  const r = GB.contactsMatchingExclusions(st, ['demo']);
+  assert.strictEqual(r.matched.length, 1);
+  assert.strictEqual(r.untitled, 1,
+    'rows with no title are dropped without telling anybody how many could '
+      + 'not be checked');
+});
+
+test('an already-hidden contact is not offered again', () => {
+  const st = withTitles(['DEMO Walkthrough']);
+  st.clients.c0.ignored = true;
+  assert.strictEqual(GB.contactsMatchingExclusions(st, ['demo']).matched.length, 0,
+    'contacts already hidden are counted again, so the button never clears');
+});
+
+test('an empty or blank rule matches nothing at all', () => {
+  /* The dangerous direction. An empty term in indexOf matches EVERY string,
+     so a stray comma would offer to hide the entire book. */
+  const st = withTitles(['Anything', 'Something else']);
+  assert.strictEqual(GB.contactsMatchingExclusions(st, []).matched.length, 0);
+  assert.strictEqual(GB.contactsMatchingExclusions(st, ['']).matched.length, 0,
+    'an empty rule matched every contact');
+  assert.strictEqual(GB.contactsMatchingExclusions(st, ['   ']).matched.length, 0,
+    'a whitespace rule matched every contact');
+  assert.strictEqual(GB.contactsMatchingExclusions(null, ['x']).matched.length, 0);
+});
+
+test('the offer appears in settings and the hide is undoable', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const modal = codeOnly(app.slice(app.indexOf('function renderSettingsModal()'),
+                                   app.indexOf('function saveSettingsDraft')));
+  assert.ok(/contactsMatchingExclusions\(STATE/.test(modal),
+    'the settings screen never checks whether the rule applies to anything '
+      + 'already imported, so the cleanup is unreachable');
+  assert.ok(/data-action="apply-exclusions"/.test(modal), 'there is no button to do it');
+  assert.ok(/only stops new ones arriving/.test(modal),
+    'the screen no longer says what the rule does on its own, which is the '
+      + 'thing that surprises people');
+
+  const h = app.slice(app.indexOf("case 'apply-exclusions':"), app.indexOf("case 'set-cal-mode':"));
+  assert.ok(/lastSnapshot = snapshot\(\)/.test(h) &&
+            /showToast\([\s\S]*?lastSnapshot\)/.test(h),
+    'hiding a batch of contacts is not undoable — the rule is a guess about '
+      + 'titles and somebody will word one too broadly');
+  assert.ok(/c\.ignored = true/.test(h) && !/delete |splice/.test(h),
+    'the contacts are being deleted rather than hidden');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
