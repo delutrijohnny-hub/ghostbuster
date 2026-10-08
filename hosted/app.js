@@ -465,6 +465,18 @@ function renderTeamTab(){
   if(!o.needsAttention){
     lead = h('p',{class:'team-lead'},['All ' + o.working + ' working their lists. ' +
       o.sent7d + ' messages sent across the team this week.' + dir]);
+  } else if(!o.strandedUpcoming){
+    /* Somebody needs attention but is not sitting on any booked work — a new
+       starter with no calendar, most often.
+
+       Without this the sentence below leads with a bold red "0 booked
+       appointments belong to...", which is both nonsense and alarming. Found
+       by rendering a real-shaped team and reading it, not by a test: every
+       assertion about this line was about the case where the number is
+       non-zero. */
+    lead = h('p',{class:'team-lead'},[
+      o.working + ' of ' + o.total + ' working their lists, and nobody who has '
+      + 'stopped is holding booked work. ' + o.sent7d + ' messages sent this week.' + dir]);
   } else {
     lead = h('p',{class:'team-lead', html:
       '<strong>' + o.strandedUpcoming + '</strong> booked ' +
@@ -523,6 +535,17 @@ function renderTeamTab(){
           m.queue.length ? (open ? '\u25be ' : '\u25b8 ') : '', m.name
         ]),
         h('span',{class:'team-why'},[m.why]),
+        /* All the small facts on ONE wrapping line.
+
+           .team-who is a flex column, so every one of these was becoming a
+           full-width block on a line of its own — four stacked red sentences
+           per person, each opening with a separator that separated nothing,
+           and a row 135px tall. Caught by rendering eight people and looking,
+           which no unit test here can do.
+
+           They are findings, not alarms: a manager should be able to take
+           them in sideways while reading down the names. */
+        h('div',{class:'team-flags'},[
         m.daysSinceSignIn === null ? '' :
           h('span',{class:'team-seen' + (m.daysSinceSignIn >= 7 ? ' is-away' : '')},
             [lastSeenLabel(m.daysSinceSignIn)]),
@@ -556,6 +579,7 @@ function renderTeamTab(){
               + 'timezone is guessed from the phone number, so some of these '
               + 'may be the guess being wrong rather than the timing.'},
           [' \u00b7 ' + m.outsideHours + ' out of hours']) : ''
+        ])
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
       h('div',{class:'team-nums'}, nums),

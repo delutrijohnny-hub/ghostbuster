@@ -4311,6 +4311,28 @@ function teamMemberState(m, now){
        timezone is guessed from their area code, so a wrong guess looks
        identical to a badly timed text and anything showing this has to say
        so. */
+    /* Fields the team view reads straight off a member.
+
+       teamMemberState returns an explicit object rather than spreading the
+       row, which is right — it is the boundary between what the loader
+       happens to collect and what the screen is allowed to see. The cost is
+       that anything new has to be added here too, and four things were not:
+
+         userId   - every assign dropdown rendered with ZERO options, so
+                    reassigning an appointment was impossible, and bulk cover
+                    and the role control were dead for the same reason.
+         weeks    - the activity bars drew an empty box.
+         orgRole  - no manager badge anywhere.
+         isManager
+
+       None of it failed. The selects rendered, the buttons rendered, the
+       bars reserved their space; they just did nothing. Six hundred tests
+       passed because each piece was tested on its own and nothing exercised
+       the seam between them. Found by rendering eight people and clicking. */
+    userId: m.userId || null,
+    orgRole: m.orgRole || 'member',
+    isManager: !!m.isManager,
+    weeks: Array.isArray(m.weeks) ? m.weeks : [],
     outsideHours: Number(m.outsideHours) || 0,
     /* Sent long enough ago to know, and still unanswered by anybody.
 

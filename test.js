@@ -9352,6 +9352,135 @@ test('no urgent calls means no badge at all', () => {
     'a quiet day still produces a number, so the badge would never clear');
 });
 
+console.log('\n--- what eight real rows actually looked like ---');
+
+/* Both of these were found by rendering a team shaped like the real one and
+   reading it, not by a failing assertion. The DOM stub in this file cannot
+   see layout or stacking, so every test about these lines was about their
+   text and every one of them passed. */
+
+test('the small facts share one line instead of stacking', () => {
+  /* .team-who is a flex column, so each badge became a full-width block on a
+     line of its own: four stacked red sentences per person, each opening with
+     a separator that separated nothing, and a 135px row. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/h\('div',\{class:'team-flags'\}/.test(code),
+    'the per-person badges are no longer wrapped together, so each one '
+      + 'becomes a full-width line of its own inside the flex column');
+  const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  assert.ok(/\.team-flags\{[^}]*display:flex/.test(html), '.team-flags is not laid out as a row');
+  assert.ok(/\.team-flags\{[^}]*flex-wrap:wrap/.test(html),
+    '.team-flags does not wrap, so a narrow window pushes the badges off the row');
+});
+
+test('the headline never leads with a bold red zero', () => {
+  /* Somebody needs attention but holds no booked work — a new starter with no
+     calendar, which is exactly what Colin was. The stranded sentence then
+     read "0 booked appointments belong to someone who is not following anyone
+     up": nonsense, and alarming. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  assert.ok(/\} else if\(!o\.strandedUpcoming\)\{/.test(fn),
+    'there is no branch for "needs attention but holding nothing", so the '
+      + 'headline leads with a bold zero');
+  const branch = fn.slice(fn.indexOf('} else if(!o.strandedUpcoming){'),
+                          fn.indexOf('} else {', fn.indexOf('} else if(!o.strandedUpcoming){')));
+  assert.ok(/nobody who has '\s*\+\s*'stopped is holding booked work/.test(branch),
+    'the no-stranded-work case no longer says what is actually true');
+  assert.ok(!/strandedUpcoming/.test(branch.replace('!o.strandedUpcoming', '')),
+    'the zero is still being printed in the branch that exists to avoid it');
+});
+
+console.log('\n--- the seam between the loader and the screen ---');
+
+/* The failure this exists to prevent, in full, because it is the most
+   expensive kind in this codebase: nothing threw, nothing logged, every test
+   passed, and four features silently did nothing.
+
+   teamMemberState returns an explicit object rather than spreading the row —
+   correct, it is the boundary between what the loader happens to collect and
+   what the screen may see. But four fields the screen reads were never added
+   to it:
+
+     userId   every assign dropdown rendered with ZERO options, so reassigning
+              an appointment was impossible. Bulk cover and the role control
+              were dead for the same reason.
+     weeks    the activity bars drew an empty box.
+     orgRole  no manager badge anywhere.
+     isManager
+
+   Six hundred tests passed because each piece was tested alone: weeklyActivity
+   against timestamps, the loader against a stub, the renderer against its own
+   source. Nothing crossed the seam. */
+
+test('every field the team view reads survives teamMemberState', () => {
+  const now = new Date();
+  // Shaped exactly like a row out of loadTeamRows.
+  const row = {
+    userId: 'u-42', name: 'Rep', orgRole: 'admin', isManager: true,
+    contacts: 40, upcoming: 8, sentEver: 50, sent7d: 10, sentPrev7d: 8,
+    replies: 3, repliesMeasured: true, awaitingReview: 7, outsideHours: 4,
+    pastCalls: 20, unlogged: 2, completed: 10, noshows: 8, rescheduled: 1,
+    connectedCalendars: 1, lastSync: now.toISOString(), lastSentAt: now.getTime(),
+    upcomingList: [{clientId:'c1', name:'A', when:now.toISOString(), status:'Booked', sent:0}],
+    weeks: [{weekStart: now.toISOString(), count: 5, partial: true}],
+    terminology: null
+  };
+  const m = GB.teamMemberState(row, now);
+
+  assert.strictEqual(m.userId, 'u-42',
+    'userId is dropped — the assign dropdown renders with no options at all, '
+      + 'so reassigning an appointment is impossible and bulk cover is dead');
+  assert.strictEqual(m.isManager, true, 'isManager is dropped — no manager badge renders');
+  assert.strictEqual(m.orgRole, 'admin', 'orgRole is dropped');
+  assert.strictEqual(m.weeks.length, 1, 'weeks is dropped — the activity bars draw an empty box');
+  assert.strictEqual(m.outsideHours, 4);
+  assert.strictEqual(m.awaitingReview, 7);
+});
+
+test('the defaults are safe when the loader gives nothing', () => {
+  const m = GB.teamMemberState({name: 'X'}, new Date());
+  assert.strictEqual(m.userId, null);
+  assert.strictEqual(m.isManager, false, 'an unknown person must not default to being a manager');
+  assert.strictEqual(m.orgRole, 'member');
+  assert.deepStrictEqual(m.weeks, [], 'weeks must be an array, or activityBars throws on .length');
+});
+
+test('nothing the renderer reads off a member is missing from the state', () => {
+  /* The general version. Scans what renderTeamTab and its helpers actually
+     read off a member object and checks each one exists on a real
+     teamMemberState result — so the next field added to the screen cannot
+     silently resolve to undefined the way these four did. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const region = app.slice(app.indexOf('function activityBars('), app.indexOf('/* The owner view'));
+  const code = region.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                     .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+
+  const now = new Date();
+  const m = GB.teamMemberState({
+    userId:'u1', name:'Rep', orgRole:'member', isManager:false, contacts:1, upcoming:1,
+    sentEver:1, sent7d:1, sentPrev7d:1, replies:0, repliesMeasured:false,
+    awaitingReview:0, outsideHours:0, pastCalls:1, unlogged:0, completed:0,
+    noshows:0, rescheduled:0, connectedCalendars:1, lastSync:now.toISOString(),
+    lastSentAt:now.getTime(), upcomingList:[], weeks:[]
+  }, now);
+
+  // Everything read as `m.<field>` in the team-rendering code.
+  const read = new Set();
+  let mm;
+  const re = /\bm\.([a-zA-Z][a-zA-Z0-9]*)/g;
+  while ((mm = re.exec(code)) !== null) read.add(mm[1]);
+
+  const missing = Array.from(read).filter(k => !(k in m));
+  assert.deepStrictEqual(missing, [],
+    'the team view reads these off a member and teamMemberState does not '
+      + 'return them, so they are undefined at render time and whatever they '
+      + 'drive silently does nothing: ' + missing.join(', '));
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
