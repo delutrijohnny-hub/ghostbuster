@@ -10405,6 +10405,77 @@ test('the coverage line does not contradict itself', () => {
     '"only measurable for N of N" is back');
 });
 
+console.log('\n--- a contact’s name can be corrected, and it sticks ---');
+
+/* The name is derived four ways over: the parentheses in the calendar title,
+   "booked by:" in the description, the guest's displayName from Google, then
+   the literal "Unknown". Three of those are somebody else's data entry, so
+   being wrong is normal — and the client modal let you edit the date, the
+   phone, the timezone, the notes and the recap, but not who the person is.
+
+   "Unknown" is not cosmetic: firstName('Unknown') is 'there', so those
+   contacts receive "Hey there," in a message that is otherwise personal.
+   Seven of them on one account, two of which can never resolve on their own
+   because the guest is a shared mailbox with no display name to send. */
+
+test('the modal offers the name, and flags the ones that have none', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function openClientModal'),
+                       app.indexOf('function openClientModal') + 4000);
+  assert.ok(/data-field="name"/.test(fn),
+    'the name still cannot be corrected, so an "Unknown" contact keeps being '
+      + 'greeted as "there" with no way to fix it');
+  assert.ok(/c\.name === 'Unknown'/.test(fn),
+    'nothing distinguishes a placeholder name from a real one, so the reason '
+      + 'to fix it is invisible');
+  assert.ok(/Hey there/.test(fn),
+    'the note no longer says what "Unknown" actually does to the messages');
+  /* The input's VALUE specifically. The modal heading also escapes c.name, so
+     an unscoped pattern stays true while the field itself interpolates raw. */
+  assert.ok(/value="' \+ escapeHtml\(c\.name\) \+ '"><\/div>/.test(fn),
+    'the name goes into the value attribute unescaped — it comes from somebody '
+      + 'else’s calendar entry');
+});
+
+test('typing a name marks it as confirmed', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(/if\(field === 'name'\) c\.nameConfirmed = true;/.test(app),
+    'a hand-typed name is not marked, so the next sync silently replaces it '
+      + 'with "Unknown" again — the worst shape of this bug, because they fix '
+      + 'it, see it fixed, and find it undone days later');
+  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  assert.ok(/nameConfirmed: raw\.nameConfirmed === true,/.test(logic),
+    'the flag does not survive sanitising');
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/name_confirmed: !!c\.nameConfirmed/.test(data), 'the flag is never saved');
+  assert.ok(/nameConfirmed: !!row\.name_confirmed/.test(data), 'the flag is never read back');
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.ok(/add column if not exists name_confirmed/.test(sql),
+    'nothing adds the column, so every save would error');
+});
+
+test('the sync leaves a confirmed name alone', () => {
+  const sync = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/existingByEvent\.name_confirmed\s*\n?\s*\? existingByEvent\.name/.test(sync),
+    'the sync overwrites the name on every re-read, so a correction survives '
+      + 'only until Google next resends that event');
+  // And it must still fill in a better name where nobody has corrected one.
+  assert.ok(/: \(parsed\.name \|\| existingByEvent\.name\)/.test(sync),
+    'an uncorrected name no longer improves when the parser learns to read it');
+});
+
+test('a derived name is still only a guess', () => {
+  // The chain that makes the edit necessary in the first place.
+  assert.strictEqual(GB.firstName('Unknown'), 'Unknown');
+  assert.strictEqual(GB.sanitizeClient({name:'A'}, 'x').nameConfirmed, false,
+    'a contact must not arrive already claiming its name was confirmed');
+  assert.strictEqual(GB.sanitizeClient({name:'A', nameConfirmed:true}, 'x').nameConfirmed, true);
+  assert.strictEqual(GB.sanitizeClient({name:'A', nameConfirmed:'yes'}, 'x').nameConfirmed, false,
+    'anything truthy sets the flag, so a stray value would freeze a name');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

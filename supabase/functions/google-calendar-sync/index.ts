@@ -207,7 +207,14 @@ async function syncOneCalendar(
     const existingByEvent = byEventId.get(parsed.googleEventId);
     if (existingByEvent) {
       const patch: Record<string, unknown> = {
-        name: parsed.name || existingByEvent.name,
+        /* Never overwrite a name somebody typed. Same guarantee the timezone
+           below gets, and for the same reason: both are derived values that
+           are wrong often enough to be corrected by hand, and a correction
+           that survives until the next sync and is then silently replaced is
+           worse than never allowing the edit at all. */
+        name: existingByEvent.name_confirmed
+          ? existingByEvent.name
+          : (parsed.name || existingByEvent.name),
         phone: parsed.phone || existingByEvent.phone,
         email: parsed.email || existingByEvent.email,
         youtube_link: parsed.youtubeLink || existingByEvent.youtube_link,

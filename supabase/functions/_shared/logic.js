@@ -1477,6 +1477,10 @@ function sanitizeClient(raw, fallbackId){
     bookedDate: (typeof raw.bookedDate === 'string' && !isNaN(Date.parse(raw.bookedDate))) ? raw.bookedDate : nowISO(),
     timezone: resolveClientTimezone(raw),
     timezoneConfirmed: raw.timezoneConfirmed === true,
+    // Set when somebody types a name by hand, so the next sync leaves it
+    // alone. See the migration: without it a correction is silently undone
+    // the next time Google resends that event.
+    nameConfirmed: raw.nameConfirmed === true,
     /* A status is preserved as-is whenever it is a real string.
 
        This used to check against VALID_STATUSES — which is derived from the

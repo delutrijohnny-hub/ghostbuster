@@ -3216,6 +3216,17 @@ function openClientModal(clientId){
       ? '<div class="ev-title" title="The calendar event this came from">' +
         escapeHtml(c.eventTitle) + '</div>'
       : '') +
+    /* Who this is. Derived from somebody else's calendar entry, wrong often
+       enough to need correcting, and until now the one thing on this screen
+       that could not be. "Unknown" renders as "Hey there," in every message
+       the person receives. */
+    '<div class="field-row"><label>Name' +
+      (c.name === 'Unknown'
+        ? ' <span style="text-transform:none;font-weight:400;color:var(--ink-faint);">' +
+          '\u2014 the calendar did not say, so messages open "Hey there"</span>'
+        : '') +
+    '</label><input id="cf-name" data-action="save-client-field" data-cid="' + c.id +
+      '" data-field="name" type="text" value="' + escapeHtml(c.name) + '"></div>' +
     '<div class="two-col">' +
       '<div class="field-row"><label>Call date &amp; time <span style="text-transform:none;font-weight:400;color:var(--ink-faint);">(' + escapeHtml(c.timezone||'America/New_York') + ')</span></label><input id="cf-call" data-action="save-client-field" data-cid="'+c.id+'" data-field="callDateTime" type="datetime-local" value="'+callVal+'"></div>' +
       '<div class="field-row"><label>Phone</label><input id="cf-phone" data-action="save-client-field" data-cid="'+c.id+'" data-field="phone" type="text" value="'+escapeHtml(c.phone)+'"></div>' +
@@ -4691,6 +4702,10 @@ document.addEventListener('change', function(ev){
       // Picking a zone by hand is a deliberate correction — flag it so the
       // area-code guess stops overriding it on every load.
       if(field === 'timezone') c.timezoneConfirmed = true;
+      /* Same reason as the zone above: a derived value somebody corrected by
+         hand has to survive the next sync, or they fix it, watch it stick,
+         and find it reverted days later. */
+      if(field === 'name') c.nameConfirmed = true;
       saveState(STATE); renderAll();
       // the call-time field is displayed in the client's own zone, so a
       // timezone change needs the modal itself re-drawn to stay correct
