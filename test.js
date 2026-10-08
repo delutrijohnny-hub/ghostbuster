@@ -5340,6 +5340,114 @@ test('it never throws, because it renders on the first screen', () => {
   assert.doesNotThrow(() => GB.describeCalendarFilter({mode: 'nonsense'}));
 });
 
+console.log('\n--- a text opened in Messages is recorded ---');
+
+{
+  const ctx = () => {
+    const c = makeHostedCtx();
+    vm.runInContext(`
+      STATE = buildDefaultState();
+      STATE.senderName = 'Johnny';
+      STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Booked',
+        bookedDate: new Date(Date.now()-20*86400000).toISOString(),
+        callDateTime: new Date(Date.now()+5*86400000).toISOString()});
+    `, c);
+    return c;
+  };
+
+  test('the send is recorded straight away, not on a timer', () => {
+    /* Ethan sent a morning of texts through "Open in Messages" and none of
+       them were marked.
+
+       The handler used to wait 700ms and then look for the card's checkbox in
+       the DOM. By the time that fires, the OS has handed over to Messages and
+       the page is in the background, where a tab can be suspended or
+       discarded outright -- and a pending setTimeout in a discarded page
+       never runs. The sends that disappear are the ones where Messages took
+       over fastest, which is why it looked random.
+
+       So: nothing may be left pending. Marking must be done and saved by the
+       time the handler returns. */
+    const c = ctx();
+    vm.runInContext("doMarkSent('c1', 'welcome', true);", c);
+    const n = vm.runInContext("STATE.clients['c1'].messageLog.length", c);
+    assert.strictEqual(n, 1, 'the send was not recorded synchronously');
+    assert.strictEqual(vm.runInContext("STATE.clients['c1'].messageLog[0].stage", c), 'welcome');
+  });
+
+  test('deferring the repaint does not defer the record', () => {
+    // The repaint is deferred on purpose: renderAll() tears out the <a> that
+    // was just clicked, and a browser asked to follow an href whose element
+    // has gone may drop the navigation, so Messages never opens. That is a
+    // reason to delay drawing, never to delay writing.
+    const c = ctx();
+    const before = vm.runInContext("STATE.clients['c1'].messageLog.length", c);
+    vm.runInContext("doMarkSent('c1', 'welcome', true);", c);
+    assert.strictEqual(vm.runInContext("STATE.clients['c1'].messageLog.length", c), before + 1);
+  });
+
+  test('a contact that vanished mid-click does not take the handler down', () => {
+    // Deleted in another tab, or resolved by a calendar sync between the
+    // click and the handler. getCardText would be handed undefined.
+    const c = ctx();
+    assert.doesNotThrow(() => vm.runInContext("doMarkSent('gone', 'welcome', true);", c));
+    assert.doesNotThrow(() => vm.runInContext("doMarkSent('gone', 'welcome');", c));
+  });
+
+  test('clicking twice does not log the same touch twice', () => {
+    /* `!cb.checked` was the old double-send guard, and it lived in the
+       markup. With the record written before the repaint there is a window
+       where the checkbox still looks unticked, so the guard has to come from
+       the state -- which also makes it hold across a reload and in a second
+       tab. */
+    const c = ctx();
+    vm.runInContext("doMarkSent('c1', 'welcome', true);", c);
+    const guarded = vm.runInContext(
+      "hasSentStage(STATE.clients['c1'], 'welcome')", c);
+    assert.strictEqual(guarded, true,
+      'nothing in the state says this touch was sent, so a second click would resend');
+  });
+
+  test('the click handler writes the record itself, with no DOM in the way', () => {
+    /* This one cannot be driven through the stub: document is a noop proxy,
+       so the old `document.querySelector(...)` returned a proxy and
+       `!cb.checked` was false -- meaning the broken path would have passed
+       any behavioural test too. Hence reading the handler. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const start = app.indexOf("case 'open-sms':");
+    assert.ok(start !== -1, "the 'open-sms' case is gone");
+    const block = app.slice(start, app.indexOf("case 'copy-remaining'", start));
+
+    assert.ok(/doMarkSent\(cid, stage, true\)/.test(block),
+      'the handler no longer records the send');
+    assert.ok(!/querySelector/.test(block),
+      'the mark is being driven off rendered markup again, which is how this broke');
+    assert.ok(/hasSentStage\(STATE\.clients\[cid\], stage\)/.test(block),
+      'no state-based guard, so a second click would log the touch twice');
+
+    /* And the write must not sit inside a timer. Comments are stripped
+       first: the explanation above this case says the word "setTimeout"
+       several times, so matching the raw text matched my own prose and the
+       assertion proved nothing either way. */
+    const code = block
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+    const upToMark = code.slice(0, code.indexOf('doMarkSent('));
+    assert.ok(!/setTimeout/.test(upToMark),
+      'the record is deferred again -- a discarded tab will never write it');
+
+    /* The repaint, by contrast, is meant to wait. Pinned in source because
+       its effect is on whether the browser completes an sms: navigation,
+       which nothing reachable from here can observe -- so this asserts the
+       intent survives a refactor and makes no claim to have tested it. */
+    const dms = app.slice(app.indexOf('function doMarkSent('));
+    assert.ok(/if\(deferRender\) setTimeout\(renderAll, 700\);/.test(
+      dms.slice(0, dms.indexOf('\nfunction '))),
+      'doMarkSent no longer honours deferRender, so the repaint lands mid-handoff');
+  });
+}
+
 console.log('\n--- industry templates ---');
 
 test('every template is a valid, workable configuration', () => {

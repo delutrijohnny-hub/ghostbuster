@@ -4487,10 +4487,41 @@ document.addEventListener('click', function(ev){
       showToast('Pushed to tomorrow.');
       break;
     case 'open-sms':
-      setTimeout(function(){
-        var cb = document.querySelector('input[data-action="mark-sent"][data-cid="'+cid+'"][data-stage="'+stage+'"]');
-        if(cb && !cb.checked){ cb.checked = true; doMarkSent(cid, stage); }
-      }, 700);
+      /* Recorded before the handoff to Messages, not 700ms after it.
+
+         It used to wait 700ms and then look for the card's checkbox in the
+         DOM, ticking it if it found one. Two ways that records nothing:
+
+         1. By the time the timer fires, the OS has handed over to Messages
+            and this page is in the background. A backgrounded tab can be
+            suspended or discarded outright -- routine on iOS, possible
+            anywhere -- and a pending setTimeout in a discarded page never
+            runs. Ethan sent a morning's worth of texts this way and none of
+            them were marked, which is exactly this shape: the sends that
+            vanish are the ones where Messages took over fastest.
+         2. The lookup is by rendered markup. Any re-render in that 700ms
+            window, or any surface whose card has no checkbox, and the mark
+            is silently skipped -- the `if(cb)` had no else.
+
+         The state is the record and the checkbox is only a picture of it, so
+         this writes the state and lets the next render redraw the checkbox.
+         hasSentStage replaces `!cb.checked` as the double-send guard, which
+         also makes it correct across a reload and in a second tab.
+
+         Optimistic, like the email path: Ghost Recall cannot see whether Send
+         was actually pressed in Messages, so this is logged and undoable
+         rather than confirmed beforehand. */
+      if(STATE.clients[cid] && !hasSentStage(STATE.clients[cid], stage)){
+        lastSnapshot = snapshot();
+        var smsName = STATE.clients[cid].name, smsSnap = lastSnapshot;
+        doMarkSent(cid, stage, true);
+        // Shown with the deferred repaint, so it is waiting when they come
+        // back from Messages. Optimistic marking needs a visible way out:
+        // the one case this gets wrong is deciding not to press Send.
+        setTimeout(function(){
+          showToast('Marked as sent to ' + smsName + '.', smsSnap);
+        }, 700);
+      }
       break;
     case 'copy-remaining': {
       var items = getTextTodayList(STATE, new Date(), '');
@@ -5099,13 +5130,27 @@ function markSentOnChannel(cid, stage, text, channel){
   saveState(STATE);
 }
 
-function doMarkSent(cid, stage){
+function doMarkSent(cid, stage, deferRender){
   var client = STATE.clients[cid];
+  // A contact can vanish between the click and the handler -- deleted in
+  // another tab, or resolved by a calendar sync. getCardText would throw.
+  if(!client) return;
   var text = getCardText(STATE, client, stage);
-  markSent(STATE, cid, stage, text);
+  markSent(STATE, cid, stage, text);   // persists; saveState lives in markSent
   var logged = client.messageLog[client.messageLog.length - 1];
   if(logged && logged.variantId !== 'custom') pooledIncrementIfBuiltin(stage, logged.variantId, 'sends');
-  renderAll();
+  /* Re-rendering can be deferred, but the save above never is.
+
+     renderAll() rebuilds the morning list and removes the <a> that was just
+     clicked, which in principle can cost a browser the navigation it was
+     about to follow. Precautionary rather than demonstrated: focus mode has
+     always rendered synchronously on the same kind of anchor and nobody has
+     reported Messages failing to open there. Kept because delaying the
+     repaint costs nothing and it puts the undo toast on screen for when they
+     come back, and because the one thing that must not be delayed -- the
+     write -- now happens before this either way. */
+  if(deferRender) setTimeout(renderAll, 700);
+  else renderAll();
 }
 
 
