@@ -295,6 +295,59 @@ function pipelineHasStages(keys){
    called. Where the new pipeline has no stage for a role at all, the first
    open stage is the honest landing place — still followed up, nothing
    claimed — and it is counted separately so the caller can say so. */
+/* Monday 00:00 UTC, for the week a timestamp belongs to.
+
+   UTC on purpose. The suite runs in eight timezones and the app runs in the
+   browser's, so a machine-local week boundary makes identical data bucket
+   differently depending on where somebody is sitting — which is exactly the
+   class of bug that has bitten this file before. Everyone sees the same weeks;
+   whether that is their Monday matters far less than whether a manager and
+   their rep are looking at the same bars. */
+function startOfUTCWeek(d){
+  var x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  var dow = (x.getUTCDay() + 6) % 7;        // Monday = 0
+  return new Date(x.getTime() - dow * 86400000);
+}
+
+/* How much somebody sent, week by week.
+
+   The team view answers "how are they doing now". It cannot answer the
+   question a manager actually has after a conversation — did that change
+   anything — and a 7-day arrow cannot either, because a single burst ageing
+   out of a rolling window looks identical to somebody stopping.
+
+   Counts rather than rates, deliberately. A weekly show-up RATE on three to
+   sixteen decided calls swings fifteen points on noise and would invite
+   exactly the wrong conversation. How many messages somebody sent is a count:
+   it is either right or it is not.
+
+   THE CURRENT WEEK IS MARKED PARTIAL. Today is two and a half days into this
+   one, so every live bar is short by construction, and an unmarked final bar
+   reads as a collapse every single time somebody looks before Friday.
+
+   Empty weeks are zero-filled rather than omitted. A gap is the finding — it
+   is when somebody stopped — and a chart that silently closes gaps turns a
+   fortnight off into an unbroken line. */
+function weeklyActivity(sentAtList, now, weeks){
+  weeks = weeks && weeks > 0 ? weeks : 8;
+  now = now || new Date();
+  var thisWeek = startOfUTCWeek(now);
+  var buckets = [], index = {};
+  for(var i = weeks - 1; i >= 0; i--){
+    var ws = new Date(thisWeek.getTime() - i * 7 * 86400000);
+    var b = {weekStart: ws.toISOString(), count: 0, partial: i === 0};
+    index[ws.getTime()] = b;
+    buckets.push(b);
+  }
+  (sentAtList || []).forEach(function(ts){
+    var t = (ts instanceof Date) ? ts : safeDate(ts);
+    if(!t) return;
+    var b = index[startOfUTCWeek(t).getTime()];
+    if(b) b.count++;              // older than the window: not an error, just out of view
+  });
+  return buckets;
+}
+
 function remapStatusesByRole(state, newStages){
   var oldMap = pipelineRoleMap(state && state.pipeline);
   var byRole = {}, valid = {};
@@ -5274,6 +5327,7 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
   teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,

@@ -8902,6 +8902,110 @@ test('the confirmation names the count, both people, and the mid-conversation on
     'the contacts changed owner; both rows have to reload rather than be patched');
 });
 
+console.log('\n--- eight weeks of activity ---');
+
+/* The team view answers "how are they doing now". It cannot answer the
+   question a manager has after a conversation — did that change anything —
+   and the 7-day arrow cannot either: a single burst ageing out of a rolling
+   window is indistinguishable from somebody stopping. Ethan's count went from
+   22 to 5 over one afternoon on this book for exactly that reason.
+
+   Two things decide whether this is honest rather than merely pretty:
+   zero-filling, because a gap IS the finding, and marking the live week,
+   because it is short by construction and otherwise reads as a collapse every
+   time somebody looks before Friday. */
+
+test('weeks are bucketed in UTC, not the machine timezone', () => {
+  // The suite runs in eight timezones and the app in the browser's. A
+  // machine-local boundary makes identical data bucket differently depending
+  // on where somebody is sitting, which is a bug this file has shipped before.
+  const d = new Date('2026-10-07T12:00:00Z');       // a Wednesday
+  const start = GB.startOfUTCWeek(d);
+  assert.strictEqual(start.toISOString(), '2026-10-05T00:00:00.000Z',
+    'the week does not start on Monday 00:00 UTC');
+  // Sunday belongs to the week that began the previous Monday.
+  assert.strictEqual(GB.startOfUTCWeek(new Date('2026-10-11T23:59:59Z')).toISOString(),
+    '2026-10-05T00:00:00.000Z');
+  assert.strictEqual(GB.startOfUTCWeek(new Date('2026-10-12T00:00:00Z')).toISOString(),
+    '2026-10-12T00:00:00.000Z', 'Monday starts a new week');
+});
+
+test('the live week is flagged partial and nothing else is', () => {
+  const now = new Date('2026-10-07T12:00:00Z');
+  const w = GB.weeklyActivity([], now, 8);
+  assert.strictEqual(w.length, 8);
+  assert.strictEqual(w[7].partial, true,
+    'the current week is not marked, so a bar that is two days old reads as a collapse');
+  assert.strictEqual(w.filter(x => x.partial).length, 1, 'more than one week is marked partial');
+  assert.strictEqual(w[7].weekStart, '2026-10-05T00:00:00.000Z');
+  assert.strictEqual(w[0].weekStart, '2026-08-17T00:00:00.000Z', 'the window is not 8 weeks back');
+});
+
+test('empty weeks are zero-filled, because the gap is the finding', () => {
+  const now = new Date('2026-10-07T12:00:00Z');
+  const w = GB.weeklyActivity([
+    '2026-09-28T10:00:00Z', '2026-09-28T11:00:00Z',   // week of 28 Sep
+    '2026-10-06T10:00:00Z'                            // this week
+  ], now, 8);
+  assert.strictEqual(w.length, 8, 'quiet weeks were dropped, so a fortnight off becomes a straight line');
+  const counts = w.map(x => x.count);
+  assert.deepStrictEqual(counts, [0,0,0,0,0,0,2,1],
+    'weeks bucketed wrongly: ' + JSON.stringify(counts));
+});
+
+test('timestamps outside the window are ignored, not misfiled', () => {
+  const now = new Date('2026-10-07T12:00:00Z');
+  const w = GB.weeklyActivity(['2026-01-01T10:00:00Z'], now, 8);
+  assert.strictEqual(w.reduce((n, x) => n + x.count, 0), 0,
+    'an old message was dumped into the first visible week, inventing activity');
+});
+
+test('junk timestamps do not throw or count', () => {
+  const now = new Date('2026-10-07T12:00:00Z');
+  const w = GB.weeklyActivity([null, '', 'not-a-date', undefined, '2026-10-06T10:00:00Z'], now, 8);
+  assert.strictEqual(w.reduce((n, x) => n + x.count, 0), 1);
+  assert.doesNotThrow(() => GB.weeklyActivity(null, now, 8));
+});
+
+test('the real shape of this book comes out right', () => {
+  /* Ethan and Ronin both went from nothing to 18 and 22 in the week of
+     28 September. That IS the finding a manager wants, and it is invisible in
+     every other view. */
+  const now = new Date('2026-10-07T12:00:00Z');
+  const sends = [];
+  for (let i = 0; i < 18; i++) sends.push('2026-09-30T10:00:00Z');
+  for (let i = 0; i < 5; i++) sends.push('2026-10-06T10:00:00Z');
+  const w = GB.weeklyActivity(sends, now, 8);
+  assert.strictEqual(w[6].count, 18);
+  assert.strictEqual(w[7].count, 5);
+  assert.strictEqual(w[7].partial, true,
+    '5 against 18 reads as a collapse unless the live week is marked — it is '
+      + 'two and a half days old');
+});
+
+test('the bars say the last one is this week so far', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function activityBars('), app.indexOf('function roleControl('));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/this week so far/.test(code),
+    'nothing tells the reader the final bar is a part-week, so every glance '
+      + 'before Friday reports a decline that is not happening');
+  assert.ok(/is-partial/.test(code), 'the live bar is drawn identically to a finished one');
+  assert.ok(/w\.count \? 6 : 2/.test(code),
+    'a zero week collapses to nothing, so an absent bar and a zero bar look different '
+      + 'when they mean the same thing');
+});
+
+test('the loader attaches the history and drops its scaffolding', async () => {
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/b\.weeks = weeklyActivity\(b\.sentAt, new Date\(now\), 8\)/.test(data),
+    'the team rows no longer carry an activity history');
+  assert.ok(/delete b\.sentAt;/.test(data),
+    'the raw timestamp list is shipped to the client as part of every team row '
+      + '— it is scaffolding for the buckets, not state');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

@@ -285,6 +285,52 @@ function invitePanel(){
 
    A manager badge still shows for everyone, including yourself, because "who
    else can see all this" is a reasonable thing to be able to check. */
+/* Eight weeks of activity, as bars.
+
+   The row above says how somebody is doing now. This says whether that is
+   new. A manager's real question after having a word is "did that change
+   anything", and neither a snapshot nor a 7-day arrow can answer it — a
+   single burst ageing out of a rolling window looks exactly like somebody
+   stopping. On this book the bars show Ethan and Ronin going from nothing to
+   eighteen and twenty-two in the week of 28 September, which is the whole
+   story in one glance.
+
+   The live week is drawn hatched and labelled "so far". Today is two and a
+   half days into it, so that bar is short by construction and an unmarked one
+   reads as a collapse every time somebody looks before Friday.
+
+   Counts, not rates. A weekly show-up rate on three to sixteen decided calls
+   swings fifteen points on noise; how many messages somebody sent is simply
+   true. */
+function activityBars(m){
+  var weeks = m.weeks || [];
+  var wrap = h('div',{class:'act-wrap'},[]);
+  if(!weeks.length) return wrap;
+  var peak = weeks.reduce(function(n, w){ return Math.max(n, w.count); }, 0);
+  wrap.appendChild(h('div',{class:'act-head'},['Messages sent, last 8 weeks']));
+  var row = h('div',{class:'act-bars'},[]);
+  weeks.forEach(function(w){
+    var when = new Date(w.weekStart);
+    var label = when.toLocaleDateString(undefined,{month:'short', day:'numeric', timeZone:'UTC'});
+    // A zero week still gets a visible baseline: an absent bar and a bar of
+    // height zero mean the same thing and should look the same.
+    var pct = peak ? Math.round((w.count / peak) * 100) : 0;
+    var bar = h('div',{class:'act-bar' + (w.partial ? ' is-partial' : ''),
+      title: w.count + (w.count === 1 ? ' message' : ' messages') +
+             ' in the week of ' + label + (w.partial ? ' (this week, still running)' : '')},[
+      h('i',{style:'height:' + Math.max(pct, w.count ? 6 : 2) + '%'},[])
+    ]);
+    row.appendChild(bar);
+  });
+  wrap.appendChild(row);
+  var last = weeks[weeks.length - 1];
+  wrap.appendChild(h('div',{class:'act-foot'},[
+    'Last bar is this week so far \u2014 ' + last.count +
+    (last.count === 1 ? ' message' : ' messages') + ' to date.'
+  ]));
+  return wrap;
+}
+
 function roleControl(m){
   var wrap = h('div',{class:'team-role'},[]);
   if(m.isManager){
@@ -469,6 +515,7 @@ function renderTeamTab(){
        you can act on, so the untouched ones are marked and listed first. */
     if(open){
       var list = h('div',{class:'team-queue'},[]);
+      list.appendChild(activityBars(m));
       if(m.untouched){
         list.appendChild(h('div',{class:'team-queue-head'},[
           m.untouched + ' of ' + m.queue.length + ' with nothing sent yet'

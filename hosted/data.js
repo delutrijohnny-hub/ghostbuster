@@ -290,7 +290,7 @@ async function loadTeamRows(sb, uid){
            somebody is sitting on rather than only how many. Deliberately only
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
-        sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0,
+        sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0, sentAt: [],
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -352,6 +352,9 @@ async function loadTeamRows(sb, uid){
          window. */
       else if(now - t <= 14 * 86400000) b.sentPrev7d++;
       if(b.lastSentAt === null || t > b.lastSentAt) b.lastSentAt = t;
+      // Kept raw so weeklyActivity can bucket them. The log already holds
+      // every timestamp; nothing new is stored or fetched for the history.
+      b.sentAt.push(m.sent_at);
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
       /* Touches that landed BEFORE the call, which is the only kind that can
          affect whether somebody turns up. Counted as activity, not as a
@@ -398,6 +401,12 @@ async function loadTeamRows(sb, uid){
     return Object.keys(agg).map(function(u){
       var b = agg[u];
       b.name = nameFor[u] || b.name || 'teammate';
+      /* Eight weeks of activity, so "did that conversation change anything"
+         has an answer. The current week is flagged partial by weeklyActivity;
+         anything reading these bars must say so or it reports a collapse
+         every time somebody looks before Friday. */
+      b.weeks = weeklyActivity(b.sentAt, new Date(now), 8);
+      delete b.sentAt;             // the raw list is scaffolding, not state
       b.terminology = termsFor[u] || null;
       b.orgRole = orgRoleOf[u] || 'member';
       b.isManager = b.orgRole === 'admin' || b.orgRole === 'owner';
