@@ -5053,6 +5053,17 @@ function describeSyncResult(cals){
     };
   }
 
+  /* Deliberately NOT special-casing scanned === 0 here.
+
+     The first version of this change did, and a test already in the suite
+     caught it: "a genuinely quiet calendar is not dressed up as a problem".
+     That is right. For somebody who syncs every day, nothing read means
+     nothing new, and alarming them about an empty window would be wrong.
+
+     The same result means something else entirely to somebody who connected a
+     minute ago and has no contacts at all — and that difference is about who
+     is asking, not about the sync. It is handled where that is known, in
+     noteCalendarReturn. */
   if(!added && !updated){
     return {ok: true, text: 'Already up to date — nothing new on the calendar.', detail: null};
   }
@@ -5366,8 +5377,39 @@ function noteCalendarReturn(){
       showToast((cal ? cal + ' connected. ' : 'Calendar connected. ') +
         landed + (landed === 1 ? ' booking imported.' : ' bookings imported.'));
     } else {
-      showToast((cal ? cal + ' connected, ' : 'Connected, ') +
-        'but nothing matched yet \u2014 check which events count as bookings in Settings.');
+      /* Nothing arrived, which is the moment that decides whether somebody
+         stays. The callback already ran a sync server-side but its counts
+         never reach the browser, so this asks again purely to find out WHY —
+         describeSyncResult already knows how to tell the difference between
+         an empty calendar, events that matched no filter, and a connection
+         that failed. Being told "nothing matched" is barely better than an
+         empty list; being told "read 14 events and none looked like a
+         booking" is something somebody can act on. */
+      showToast((cal ? cal + ' connected. ' : 'Connected. ') + 'Checking what came in\u2026');
+      window.GB_SUPABASE.functions.invoke('google-calendar-sync').then(function(res){
+        if(res.error){
+          showToast('Connected, but the first sync did not run. Try "Sync calendar now".');
+          return;
+        }
+        var cals = (res.data && res.data.results && res.data.results[0] && res.data.results[0].calendars) || [];
+        if(!cals.length){
+          showToast('Connected, but nothing matched yet \u2014 check which events count as bookings in Settings.');
+          return;
+        }
+        var why = describeSyncResult(cals);
+        /* Nothing read AND nothing here already: an empty calendar or the
+           wrong Google account, not a quiet day. describeSyncResult says
+           "already up to date" for this, which is correct for a daily sync
+           and the wrong answer to the only question a new arrival has. */
+        var readNothing = cals.reduce(function(n, c){ return n + (c.scanned || 0); }, 0) === 0;
+        showToast(readNothing && !cals.some(function(c){ return c.error; })
+          ? 'Connected, but that calendar has nothing on it between a week ago '
+            + 'and six months ahead. If your bookings live on another Google '
+            + 'account, connect that one.'
+          : why.text);
+        if(why.detail) console.log('Ghost Recall: first sync —', why.detail);
+        init();   // anything that did arrive on this second pass
+      });
     }
   } else if(reason === 'already'){
     /* The one failure with a real instruction attached. Shown as a panel

@@ -10922,6 +10922,67 @@ test('the connect toast says what actually arrived', () => {
       + 'again something the reader has to take on trust');
 });
 
+console.log('\n--- the first sync says why, not just that it happened ---');
+
+/* Six of six accounts outside the main organisation signed up and never came
+   back, five on the day they joined. One of them connected a calendar and
+   received nothing — and the app told him it had worked.
+
+   The diagnosis already existed. describeSyncResult can tell an empty
+   calendar from events that matched no filter from a connection that failed,
+   and says so in words somebody can act on: "Read 14 events and none of them
+   looked like a booking. Check which events count as bookings in Settings."
+   It just never ran on the path where it mattered, because the callback syncs
+   server-side and its counts never reach the browser. */
+
+test('nothing arriving triggers a real diagnosis, not a shrug', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function noteCalendarReturn()'),
+                                app.indexOf('async function init()')));
+  assert.ok(/Checking what came in[\s\S]{0,120}?\n\s*window\.GB_SUPABASE\.functions\.invoke\('google-calendar-sync'\)/.test(fn),
+    'the empty case does not ask why — the callback synced server-side and '
+      + 'those counts never reach the browser, so without this the app can '
+      + 'only say "nothing matched"');
+  assert.ok(/describeSyncResult\(cals\)/.test(fn),
+    'the answer is not run through the explanation that already knows how to '
+      + 'tell an empty calendar from a filter problem');
+  assert.ok(/did not run/.test(fn),
+    'a sync that errors on this path says nothing at all');
+});
+
+test('an empty calendar is told apart from a quiet one', () => {
+  /* The same sync result means different things to different people, and the
+     difference is who is asking. An established user reading "nothing new" is
+     correctly reassured; somebody who connected a minute ago and has no
+     contacts needs to hear that the calendar itself is empty — most likely
+     the wrong Google account. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function noteCalendarReturn()'),
+                                app.indexOf('async function init()')));
+  // The computation, not the variable name: `var readNothing = false;` keeps
+  // the name and removes the distinction entirely.
+  assert.ok(/readNothing = cals\.reduce\([\s\S]*?scanned[\s\S]*?\) === 0/.test(fn),
+    'the empty-calendar case is not actually computed from what was scanned');
+  assert.ok(/another Google\s*'?\s*\+?\s*'?\s*account|another Google/.test(fn),
+    'the empty-calendar message does not suggest the likeliest cause, which '
+      + 'is having connected the wrong account');
+
+  // And describeSyncResult itself must NOT have been changed, because for a
+  // daily sync "nothing read" really does mean "nothing new".
+  const call = (cals) => {
+    const ctx = {};
+    return null;
+  };
+  const src = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const dsr = codeOnly(src.slice(src.indexOf('function describeSyncResult('),
+                                 src.indexOf('function markSentOnChannel(')));
+  assert.ok(/Already up to date/.test(dsr),
+    'describeSyncResult no longer reassures a daily syncer with nothing new');
+  assert.ok(!/six months ahead/.test(dsr),
+    'the first-run wording leaked into the routine sync message, where it '
+      + 'would alarm somebody whose calendar is simply quiet today');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
