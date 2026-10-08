@@ -5168,6 +5168,92 @@ test('the sync actually calls the collapse, not just defines it', () => {
     'a newly inserted occurrence must register its series');
 });
 
+/* --- a name from the address, and never "Hey Unknown," --- */
+
+test('nobody is ever greeted as "Unknown"', () => {
+  /* The import writes 'Unknown' when no source carries a name, and firstName
+     passed it straight through -- so the text opened "Hey Unknown,". Two
+     files carried a comment asserting it produced "Hey there," and nobody
+     had checked. Live risk when found: five of Colin's twelve contacts. */
+  assert.strictEqual(GB.firstName('Unknown'), 'there');
+  assert.strictEqual(GB.firstName('unknown'), 'there');
+  assert.strictEqual(GB.firstName('  UNKNOWN  '), 'there');
+  assert.strictEqual(GB.firstName('N/A'), 'there');
+  assert.strictEqual(GB.firstName(''), 'there');
+  assert.strictEqual(GB.firstName(null), 'there');
+  // And a real name is still untouched, including one that merely contains it.
+  assert.strictEqual(GB.firstName('Dana Reed'), 'Dana');
+  assert.strictEqual(GB.firstName('Unknowles Smith'), 'Unknowles');
+});
+
+test('it reaches a real text, not just the helper', () => {
+  // firstName is reached through renderTemplate, which is what actually
+  // produces the message -- a guard that only holds in the helper is no use.
+  const c = GB.sanitizeClient({id: 'c', name: 'Unknown', phone: '2135550100',
+    timezone: 'America/New_York', status: 'Booked'});
+  const out = GB.renderTemplate('Hey {name}, quick question', c, 'Johnny');
+  assert.ok(!/Unknown/.test(out), out);
+  assert.ok(/Hey there,/.test(out), out);
+});
+
+test('a name is taken from the address when the event carries none', () => {
+  // Colin books by hand, so the title has no parentheses, there is no
+  // "booked by:", and Google has no displayName. The address had it.
+  assert.strictEqual(GB.nameFromEmail('brian@nevadagroup.com'), 'Brian');
+  assert.strictEqual(GB.nameFromEmail('erica@realtychicks.com'), 'Erica');
+  assert.strictEqual(GB.nameFromEmail('john.smith@acme.com'), 'John Smith');
+  assert.strictEqual(GB.nameFromEmail('mary-jane@x.com'), 'Mary Jane');
+});
+
+test('and it refuses rather than inventing one', () => {
+  /* The whole reason this is safe to do automatically. A wrong name is worse
+     than no name: it goes out in a text, repeatedly, and reads as a mail
+     merge nobody checked. Every case here is from live data. */
+  const refused = {
+    'joshdegan42@gmail.com': 'digits',
+    'brawatson3009@gmail.com': 'digits',
+    'gauravbatra791@gmail.com': 'digits',
+    'goldrealestaters@gmail.com': 'too long to be a first name',
+    'marketmakermgmt@gmail.com': 'the company itself',
+    'info@acme.com': 'a role, not a person',
+    'sales@acme.com': 'a role, not a person',
+    'bookings@acme.com': 'a role, not a person',
+    'a@b.com': 'a single letter',
+    'john.paul.george.ringo@x.com': 'four parts is a system address, not a name',
+    '': 'nothing at all',
+  };
+  for (const addr of Object.keys(refused)) {
+    assert.strictEqual(GB.nameFromEmail(addr), '',
+      addr + ' should have been refused (' + refused[addr] + ')');
+  }
+  assert.strictEqual(GB.nameFromEmail(null), '');
+  assert.strictEqual(GB.nameFromEmail(undefined), '');
+});
+
+test('a refused address leaves the contact unnamed, not half-named', () => {
+  // The point of refusing: it must hand back to a human cleanly, and the
+  // greeting must then be the neutral one rather than the placeholder.
+  assert.strictEqual(GB.nameFromEmail('joshdegan42@gmail.com') || 'Unknown', 'Unknown');
+  assert.strictEqual(GB.firstName(GB.nameFromEmail('joshdegan42@gmail.com') || 'Unknown'),
+    'there');
+});
+
+test('the Edge Function copy uses it as a fourth source, in order', () => {
+  /* The Deno function is what imports contacts. It must not only define
+     nameFromEmail but reach it AFTER the three sources that are more
+     reliable, and still fall through to 'Unknown' when it refuses. */
+  const src = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    '_shared', 'parse.ts'), 'utf8');
+  assert.ok(/export function nameFromEmail\(/.test(src), 'parse.ts has no nameFromEmail');
+  const call = src.indexOf('name = nameFromEmail(emails[0])');
+  assert.ok(call !== -1, 'parse.ts defines it but never calls it');
+  const displayName = src.indexOf("name = (guest?.displayName || '').trim()");
+  assert.ok(displayName !== -1 && displayName < call,
+    'the address is being consulted before Google’s own displayName');
+  assert.ok(src.indexOf("if (!name) name = 'Unknown';") > call,
+    'a refused address must still fall through to Unknown');
+});
+
 /* --- your own company's inbox is not a prospect --- */
 
 test('the company’s own shared inbox is not imported as a client', () => {
@@ -10362,9 +10448,12 @@ test('the name comes from the guest we are actually writing to', () => {
     'the contact address is chosen after the name that depends on it');
 });
 
-test('"Unknown" still greets somebody as "there"', () => {
-  // The reason this mattered, pinned so the cost stays visible.
-  assert.strictEqual(GB.firstName('Unknown'), 'Unknown');
+test('an unnamed contact is greeted neutrally, not by its placeholder', () => {
+  /* This test used to pin firstName('Unknown') === 'Unknown', recording the
+     cost of an unnamed contact so it stayed visible. The cost was worse than
+     the note beside it admitted -- the text opened "Hey Unknown," -- and it
+     is now fixed rather than merely documented, so this pins the fix. */
+  assert.strictEqual(GB.firstName('Unknown'), 'there');
   assert.strictEqual(GB.firstName(''), 'there');
   assert.strictEqual(GB.firstName('Josh Degan'), 'Josh');
 });
@@ -10778,8 +10867,11 @@ test('the sync leaves a confirmed name alone', () => {
 });
 
 test('a derived name is still only a guess', () => {
-  // The chain that makes the edit necessary in the first place.
-  assert.strictEqual(GB.firstName('Unknown'), 'Unknown');
+  /* The chain that makes the edit necessary in the first place. An unnamed
+     contact no longer leaks its placeholder into the greeting, but it is
+     still unnamed -- neutral text is a floor, not a substitute for the real
+     name, which is why the field and the confirmed flag exist. */
+  assert.strictEqual(GB.firstName('Unknown'), 'there');
   assert.strictEqual(GB.sanitizeClient({name:'A'}, 'x').nameConfirmed, false,
     'a contact must not arrive already claiming its name was confirmed');
   assert.strictEqual(GB.sanitizeClient({name:'A', nameConfirmed:true}, 'x').nameConfirmed, true);

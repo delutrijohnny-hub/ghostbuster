@@ -177,6 +177,55 @@ function internalDomain(email?: string): string {
   return !d || isSharedMailDomain(d) ? '' : d;
 }
 
+/* A name from the email address, when nothing in the event carries one.
+
+   Mirrors nameFromEmail in logic.js.
+
+   The three sources below -- the title's parentheses, "booked by:" in the
+   description, and the guest's Google displayName -- all come up empty for
+   somebody who books by hand rather than through a funnel. On Colin's
+   calendar that was five of twelve contacts: "Interview with Josh", "Second
+   Meeting Market MGMT- Colin and Brian". The address had the answer sitting
+   in it the whole time: brian@nevadagroup.com is Brian.
+
+   Deliberately timid, because a wrong name is worse than no name: it goes out
+   in a text, over and over, and reads as a mail merge nobody checked. So this
+   refuses anything it cannot be confident about rather than guessing --
+   joshdegan42 and goldrealestaters stay "Unknown" and wait for a human.
+
+   The rules, each there for a live example. Every one of them is enforced
+   in the per-part loop, and nowhere else: earlier drafts also tested the
+   whole local part for digits and for role names, and neither check could
+   ever fire on its own -- the loop had already rejected those -- so they were
+   unfalsifiable and came back out.
+     - letters only, so any digit disqualifies it (joshdegan42, brawatson3009)
+     - a part longer than 14 characters is a company or a handle, not a first
+       name (goldrealestaters, marketmakermgmt)
+     - role addresses are nobody (info@, sales@, bookings@, no-reply@)
+     - dots and underscores separate words, so john.smith becomes John Smith */
+const ROLE_MAILBOXES = new Set([
+  'info', 'sales', 'team', 'hello', 'admin', 'support', 'contact',
+  'noreply', 'noreplies', 'office', 'billing', 'help', 'booking',
+  'bookings', 'mail', 'email', 'hi', 'hey', 'me', 'careers', 'jobs',
+  'hr', 'accounts', 'accounting', 'invoices', 'orders', 'service',
+  'enquiries', 'inquiries', 'marketing', 'newsletter', 'webmaster',
+  'postmaster', 'abuse', 'notifications', 'reply', 'do_not_reply',
+]);
+const NAME_PART_MAX = 14;
+
+export function nameFromEmail(email?: string): string {
+  const lp = String(email == null ? '' : email).split('@')[0].trim().toLowerCase();
+  if (!lp) return '';
+  const parts = lp.split(/[._\-+]+/).filter((x) => x);
+  if (!parts.length || parts.length > 3) return '';
+  for (const part of parts) {
+    if (!/^[a-z]+$/.test(part)) return '';
+    if (part.length < 2 || part.length > NAME_PART_MAX) return '';
+    if (ROLE_MAILBOXES.has(part)) return '';
+  }
+  return parts.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 /* Your own company's mailbox, living on a domain you don't own.
 
    Mirrors isOwnCompanyMailbox in logic.js.
@@ -403,15 +452,18 @@ export function clientFromGCalEvent(
           it is there it is exactly right.
        2. "booked by:" in the description, for the forms that use it.
        3. The guest's own displayName from Google.
+       4. The email address, when it plainly carries a name.
 
      The third was missing and Google had it all along. Without it anything
      whose title is not written by a booking tool imports as "Unknown" — and
      a real account showed six of thirteen that way: every "Interview with
      Josh" and "Second Meeting ... Colin and Erica" on the calendar of
      somebody who books meetings by hand rather than through a funnel.
-     "Unknown" is not a cosmetic problem: firstName() turns it into "there",
-     so every one of those gets "Hey there," while the person's actual name
-     sat in the event the whole time.
+     "Unknown" is not a cosmetic problem. firstName() used to pass it
+     through verbatim, so the text opened "Hey Unknown," -- a comment here
+     claimed it became "Hey there," and nobody had checked. firstName now
+     treats it as absent, and the fourth source below means far fewer
+     contacts reach that state at all.
 
      Taken from the attendee we settled on as the contact, not the first in
      the list, so it cannot disagree with the address the message goes to. */
@@ -426,6 +478,10 @@ export function clientFromGCalEvent(
     );
     name = (guest?.displayName || '').trim();
   }
+  // 4. The address itself, when it plainly carries a person's name. Refuses
+  //    anything it cannot be confident about, so this is a fourth source
+  //    rather than a guess of last resort -- see nameFromEmail above.
+  if (!name && emails[0]) name = nameFromEmail(emails[0]);
   if (!name) name = 'Unknown';
 
   return {

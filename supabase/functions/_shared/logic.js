@@ -2263,10 +2263,22 @@ function pickVariant(state, stage, client, opts){
 }
 
 
+/* "Unknown" is a placeholder, not a name, and it must never be greeted.
+
+   The import writes 'Unknown' when no source in the event carries a name, and
+   firstName passed it straight through -- so the text opened "Hey Unknown,".
+   Comments in two files claimed it produced "Hey there," and nobody had
+   checked; it does not, and "Hey Unknown," is far worse than the fallback it
+   was believed to be using.
+
+   Matched case-insensitively and trimmed, because the same placeholder is
+   written from several places and arrives spelled a few different ways. */
+var PLACEHOLDER_NAMES = {'unknown': true, 'n/a': true, 'none': true, 'no name': true};
+
 function firstName(name){
-  if(!name) return 'there';
-  var parts = String(name).trim().split(/\s+/);
-  return parts[0];
+  var trimmed = String(name == null ? '' : name).trim();
+  if(!trimmed || PLACEHOLDER_NAMES[trimmed.toLowerCase()]) return 'there';
+  return trimmed.split(/\s+/)[0];
 }
 
 
@@ -3584,6 +3596,57 @@ function internalDomain(email){
   return (!d || isSharedMailDomain(d)) ? '' : d;
 }
 
+/* A name from the email address, when nothing in the event carries one.
+
+   Mirrors nameFromEmail in supabase/functions/_shared/parse.ts.
+
+   The import has three sources for a name -- the title's parentheses, "booked
+   by:" in the description, and the guest's Google displayName -- and somebody
+   who books by hand rather than through a funnel has none of them. On Colin's
+   calendar that was five of twelve contacts: "Interview with Josh", "Second
+   Meeting Market MGMT- Colin and Brian". The address had the answer sitting
+   in it the whole time: brian@nevadagroup.com is Brian.
+
+   Deliberately timid, because a wrong name is worse than no name: it goes out
+   in a text, over and over, and reads as a mail merge nobody checked. So this
+   refuses anything it cannot be confident about rather than guessing --
+   joshdegan42 and goldrealestaters stay "Unknown" and wait for a human.
+
+   The rules, each there for a live example. Every one of them is enforced
+   in the per-part loop, and nowhere else: earlier drafts also tested the
+   whole local part for digits and for role names, and neither check could
+   ever fire on its own -- the loop had already rejected those -- so they were
+   unfalsifiable and came back out.
+     - letters only, so any digit disqualifies it (joshdegan42, brawatson3009)
+     - a part longer than 14 characters is a company or a handle, not a first
+       name (goldrealestaters, marketmakermgmt)
+     - role addresses are nobody (info@, sales@, bookings@, no-reply@)
+     - dots and underscores separate words, so john.smith becomes John Smith */
+var ROLE_MAILBOXES = {
+  info: 1, sales: 1, team: 1, hello: 1, admin: 1, support: 1, contact: 1,
+  noreply: 1, noreplies: 1, office: 1, billing: 1, help: 1, booking: 1,
+  bookings: 1, mail: 1, email: 1, hi: 1, hey: 1, me: 1, careers: 1, jobs: 1,
+  hr: 1, accounts: 1, accounting: 1, invoices: 1, orders: 1, service: 1,
+  enquiries: 1, inquiries: 1, marketing: 1, newsletter: 1, webmaster: 1,
+  postmaster: 1, abuse: 1, notifications: 1, reply: 1, do_not_reply: 1
+};
+var NAME_PART_MAX = 14;
+
+function nameFromEmail(email){
+  var lp = String(email == null ? '' : email).split('@')[0].trim().toLowerCase();
+  if(!lp) return '';
+  var parts = lp.split(/[._\-+]+/).filter(function(x){ return x; });
+  if(!parts.length || parts.length > 3) return '';
+  for(var i = 0; i < parts.length; i++){
+    if(!/^[a-z]+$/.test(parts[i])) return '';
+    if(parts[i].length < 2 || parts[i].length > NAME_PART_MAX) return '';
+    if(ROLE_MAILBOXES[parts[i]]) return '';
+  }
+  return parts.map(function(w){
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }).join(' ');
+}
+
 /* Your own company's mailbox, living on a domain you don't own.
 
    Mirrors isOwnCompanyMailbox in supabase/functions/_shared/parse.ts.
@@ -3595,7 +3658,7 @@ function internalDomain(email){
    therefore looked like a booking with an outside guest. It imported as a
    fresh contact every day on every rep's list — four reps, one new fake
    client each per day, 9 rows and still growing when this was found, and
-   each one named "Unknown" so the follow-up would have opened "Hey there,".
+   each one named "Unknown", which the text would have greeted literally.
 
    The giveaway is that the mailbox is named after the company: local part
    "marketmakermgmt" against the domain marketmakermgmt.com. That generalises
@@ -5803,6 +5866,7 @@ var __LOGIC_EXPORTS__ = {
   platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
   TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS,
   TEAM_MIN_COVERAGE: TEAM_MIN_COVERAGE, TEAM_MIN_LOGGED: TEAM_MIN_LOGGED, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
+  nameFromEmail: nameFromEmail,
   isOwnCompanyMailbox: isOwnCompanyMailbox,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
