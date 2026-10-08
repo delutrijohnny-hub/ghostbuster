@@ -10115,6 +10115,63 @@ test('every industry template has somewhere for a booking to land', () => {
   });
 });
 
+console.log('\n--- which clock a time is on ---');
+
+/* Reported: "why is Mason Lopez showing as a 12pm call when I have him for
+   3pm my time". Both numbers were right and the app never said which was
+   which.
+
+   The instant is 19:00 UTC. That is 3pm in New York, where the reader is, and
+   12pm in Los Angeles, which is where a (702) Las Vegas area code puts Mason.
+   Ghost Recall deliberately tracks the contact's clock so nobody gets texted
+   at 6am — and the On Deck panel was answering "when is this call" with it,
+   printing a 12:00 PM headline above a chip reading "12:00 PM their time".
+   The same number twice, one of them silently meaning something else, and
+   neither matching the calendar the reader had open. */
+
+test('the two clocks really are three hours apart here', () => {
+  // The actual record, so the example cannot drift from the bug.
+  const when = new Date('2026-10-08T19:00:00Z');
+  assert.strictEqual(GB.fmtTime(when, 'America/New_York'), '3:00 PM');
+  assert.strictEqual(GB.fmtTime(when, 'America/Los_Angeles'), '12:00 PM');
+  // A 702 number is Las Vegas, which is Pacific — the derivation was right,
+  // which is the point: nothing here was broken except which clock was shown.
+  assert.strictEqual(GB.areaCodeFromPhone('(702) 343-4318'), '702');
+  assert.strictEqual(GB.AREA_CODE_TZ['702'], 'America/Los_Angeles');
+});
+
+test('"when is this call" is answered on the reader’s clock', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function fmtTimeHere('),
+                                app.indexOf('function fmtDayTime(')));
+  assert.ok(!/timeZone/.test(fn),
+    'fmtTimeHere passes a timeZone, so it is not the reader’s clock. '
+      + 'fmtTime defaults to UTC when given nothing, which is why this cannot '
+      + 'just delegate to it.');
+
+  const od = codeOnly(app.slice(app.indexOf('var html = \'<div class="ondeck\''),
+                                app.indexOf('<div class="od-actions">')));
+  assert.ok(/fmtTimeHere\(d\)/.test(od),
+    'the On Deck headline is back on the contact’s clock, so it disagrees '
+      + 'with the calendar the reader has open');
+  assert.ok(/their time/.test(od),
+    'the contact-clock chip is gone — that is the one that stops somebody '
+      + 'texting at 6am and it has to stay');
+});
+
+test('the contact’s clock keeps its label wherever it is shown', () => {
+  /* The rule that makes both readable: a time on the contact's clock always
+     says so, a time on the reader's clock never needs to. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const code = codeOnly(app);
+  const chips = code.split('tzInfo.timeLabel').length - 1;
+  assert.ok(chips >= 2,
+    'the "their time" chips have been removed from the surfaces that send '
+      + 'messages, which is where the contact’s clock actually matters');
+  assert.ok(!/od-time">' \+ fmtTime\(d, c\.timezone\)/.test(code),
+    'the On Deck headline is unlabelled AND on the contact’s clock again');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

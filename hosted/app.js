@@ -174,6 +174,34 @@ var TEAM_OPEN = null;
 
 // Day and time in the viewer's own zone. A manager is deciding whether to
 // chase somebody today, so the weekday matters more than the date.
+/* A call's time where the PERSON READING IT is sitting.
+
+   Ghost Recall shows two different clocks on purpose. "Is this a reasonable
+   hour to text them" is about the contact, and the chips that answer it say
+   "their time". "When is this call" is about you, and it has to match the
+   calendar you are looking at.
+
+   The On Deck panel was answering the second question with the first clock.
+   It printed a headline of 12:00 PM for a call a New York user has at 3pm,
+   with "12:00 PM their time" on a chip directly underneath — the same number
+   twice, one of them silently meaning something else. Reported as a bug, and
+   it reads as one: the headline disagreed with Google Calendar.
+
+   No timeZone passed, so Intl uses the browser's. fmtTime defaults to UTC
+   when given nothing, which is why this cannot just call it. */
+function fmtTimeHere(d){
+  if(!d || isNaN(d.getTime())) return '';
+  try{
+    return new Intl.DateTimeFormat('en-US',{hour:'numeric', minute:'2-digit'}).format(d);
+  }catch(e){ return d.toTimeString().slice(0,5); }
+}
+function fmtDateHere(d){
+  if(!d || isNaN(d.getTime())) return '';
+  try{
+    return new Intl.DateTimeFormat('en-US',{month:'short', day:'numeric'}).format(d);
+  }catch(e){ return d.toDateString(); }
+}
+
 function fmtDayTime(iso){
   var d = iso ? new Date(iso) : null;
   if(!d || isNaN(d.getTime())) return 'no date';
@@ -1331,7 +1359,7 @@ function renderOnDeck(){
       var nd = safeDate(od.next.callDateTime);
       body = '<div class="od-quiet">Next on the books: <button class="od-name" data-action="open-client" data-cid="' +
         od.next.id + '">' + escapeHtml(od.next.name) + '</button> · ' +
-        fmtDate(nd, od.next.timezone) + ' at ' + fmtTime(nd, od.next.timezone) + '</div>';
+        fmtDateHere(nd) + ' at ' + fmtTimeHere(nd) + '</div>';
     } else {
       body = '<div class="od-quiet">No upcoming calls on the books. The next booking to sync lands here with a countdown and their number.</div>';
     }
@@ -1353,7 +1381,7 @@ function renderOnDeck(){
     '<h4><span>⏱ On deck</span><span>' + od.todays.length + ' call' + (od.todays.length === 1 ? '' : 's') +
       ' today' + (od.loggedCount ? (' · ' + od.loggedCount + ' logged') : '') + '</span></h4>' +
     '<div class="od-main">' +
-      '<span class="od-time">' + fmtTime(d, c.timezone) + '</span>' +
+      '<span class="od-time">' + fmtTimeHere(d) + '</span>' +
       '<button class="od-name" data-action="open-client" data-cid="' + c.id + '">' + escapeHtml(c.name) + '</button>' +
       '<span class="od-count">' + countdownLabel(od.mins) + '</span>' +
     '</div>' +
