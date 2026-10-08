@@ -300,7 +300,7 @@ async function loadTeamRows(sb, uid){
     if(cRes.error || !cRes.data) return [];
 
     var ownerOf = {}, callTimeOf = {}, tzOf = {}, ignoredOf = {}, agg = {};
-    var decidedOf = {}, touchedBefore = {};
+    var decidedOf = {}, touchedBefore = {}, rescuedOf = {}, recentMissOf = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
@@ -313,6 +313,7 @@ async function loadTeamRows(sb, uid){
         outsideHours:0, awaitingReview:0,
         decidedWithTouch:0, decidedWithoutTouch:0, showedWithTouch:0, showedWithoutTouch:0,
         decidedByBand:{}, showedByBand:{},
+        noShowsUnchased:0,
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -353,6 +354,11 @@ async function loadTeamRows(sb, uid){
       /* Kept for the touch comparison below, which cannot be done in this
          pass: whether a call was followed up beforehand is only known once
          the message log has been read. */
+      if(role === 'missed' && !isNaN(t) && (now - t) <= NOSHOW_CHASE_DAYS * 86400000){
+        /* A no-show recent enough that chasing it still makes sense. Whether
+           anybody did is only knowable once the message log has been read. */
+        recentMissOf[c.id] = c.user_id;
+      }
       if(role === 'won' || role === 'missed'){
         decidedOf[c.id] = {user: c.user_id, showed: role === 'won'};
         /* Which part of the day it fell in, where the CONTACT is. Their clock
@@ -377,7 +383,7 @@ async function loadTeamRows(sb, uid){
     });
 
     var sentPer = {};
-    var mRes = await sb.from('message_log').select('client_id, sent_at, responded, reviewed');
+    var mRes = await sb.from('message_log').select('client_id, sent_at, responded, reviewed, stage');
     ((mRes && mRes.data) || []).forEach(function(m){
       var u = ownerOf[m.client_id];
       if(!u) return;
@@ -431,6 +437,7 @@ async function loadTeamRows(sb, uid){
          claim about cause. */
       var ct = callTimeOf[m.client_id];
       if(ct && t < ct){ b.touchesBeforeCall++; touchedBefore[m.client_id] = true; }
+      if(m.stage === 'noshow') rescuedOf[m.client_id] = true;
     });
 
     /* Did following up beforehand change whether they turned up?
@@ -440,6 +447,20 @@ async function loadTeamRows(sb, uid){
        the message log. Counted per person, both halves, so touchEffect can
        refuse when one side is too thin to compare — which it is for anybody
        who always follows up, or never does. */
+    /* No-shows nobody went back to.
+
+       The biggest unworked pile on this book and nothing showed it: 129
+       no-shows, 48 chased, and one person sitting on 45 unchased with three
+       of them in the last week. The upcoming queue covers calls that have not
+       happened yet; this is the other end, and it was invisible.
+
+       Only recent ones. "Sorry we missed each other" three weeks late is not
+       a follow-up, and counting those would turn an actionable number into a
+       permanent accusation. */
+    Object.keys(recentMissOf).forEach(function(cid){
+      if(!rescuedOf[cid]) bucket(recentMissOf[cid]).noShowsUnchased++;
+    });
+
     Object.keys(decidedOf).forEach(function(cid){
       var d = decidedOf[cid];
       var b = bucket(d.user);

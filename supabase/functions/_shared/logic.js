@@ -4293,6 +4293,13 @@ function schedulingStatus(state){
    this sorts on is whether somebody is actually working their list, not
    whether their calendar is green. */
 
+/* How long a no-show is still worth going back to.
+
+   Past this, "sorry we missed each other" reads as an afterthought rather
+   than a follow-up, and counting those would turn a number somebody can act
+   on into a standing accusation about history. */
+var NOSHOW_CHASE_DAYS = 14;
+
 var TEAM_IDLE_DAYS = 7;          // no send in this long, having sent before
 var TEAM_AWAY_DAYS = 7;          // not opened the app in this long
 var TEAM_BACKLOG_UPCOMING = 5;   // enough booked work that silence is notable
@@ -4537,6 +4544,8 @@ function teamMemberState(m, now){
        that would fix it is visible. Like the unlogged count, the number IS
        the finding rather than an error. */
     awaitingReview: Number(m.awaitingReview) || 0,
+    // Recent no-shows nobody went back to — the other end of the queue.
+    noShowsUnchased: Number(m.noShowsUnchased) || 0,
     // Both halves of the follow-up comparison, so touchEffect can refuse on
     // the thin side rather than reporting 33% from three calls.
     decidedByBand: m.decidedByBand || {},
@@ -5688,6 +5697,7 @@ var __LOGIC_EXPORTS__ = {
   UNANSWERED_SWITCH_AT: UNANSWERED_SWITCH_AT,
   computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
+  NOSHOW_CHASE_DAYS: NOSHOW_CHASE_DAYS,
   REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, REVIEW_MAX_AGE_DAYS: REVIEW_MAX_AGE_DAYS, messageState: messageState, lastInteraction: lastInteraction,
   messageSource: messageSource, replySource: replySource,
   explainDue: explainDue,   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,

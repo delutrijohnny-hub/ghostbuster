@@ -10761,6 +10761,95 @@ test('the small-sample tag is gone, because nothing below the bar is shown', () 
   assert.ok(!/i\.small/.test(fn), 'the renderer still branches on a flag that no longer exists');
 });
 
+console.log('\n--- no-shows nobody went back to ---');
+
+/* The team row showed how much BOOKED work had nothing sent. It showed
+   nothing about the other end: calls that were missed and then dropped.
+
+   On this book that is the largest unworked pile in the system — 129
+   no-shows, 48 chased, 2 replies, 0 back on the calendar — and one person is
+   sitting on 45 unchased with three of them in the last week. None of it
+   appeared on any screen.
+
+   Counted only inside NOSHOW_CHASE_DAYS. "Sorry we missed each other" three
+   weeks late is not a follow-up, and counting those would turn a number
+   somebody can act on this afternoon into a standing accusation about
+   history. */
+
+test('a recent no-show with no follow-up counts; an old one does not', async () => {
+  const now = Date.now();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [
+      // Missed three days ago, nobody went back: the finding.
+      {id:'a', user_id:'u2', name:'A', call_date_time:new Date(now-3*86400000).toISOString(),
+       status:'No-show', timezone:'UTC'},
+      // Missed three days ago and chased: not a finding.
+      {id:'b', user_id:'u2', name:'B', call_date_time:new Date(now-3*86400000).toISOString(),
+       status:'No-show', timezone:'UTC'},
+      // Missed five weeks ago, never chased: too late to be work.
+      {id:'c', user_id:'u2', name:'C', call_date_time:new Date(now-35*86400000).toISOString(),
+       status:'No-show', timezone:'UTC'},
+      // Attended, not chased, irrelevant.
+      {id:'d', user_id:'u2', name:'D', call_date_time:new Date(now-3*86400000).toISOString(),
+       status:'Completed', timezone:'UTC'}
+    ], error: null},
+    message_log: {data: [
+      {client_id:'b', sent_at:new Date(now-2*86400000).toISOString(), stage:'noshow',
+       responded:false, reviewed:true},
+      // A message of a different kind does not count as going back to them.
+      {client_id:'a', sent_at:new Date(now-4*86400000).toISOString(), stage:'welcome',
+       responded:false, reviewed:true}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.noShowsUnchased, 1,
+    'the count is wrong: a chased no-show, an attended call, or one too old '
+      + 'to be worth chasing is being counted as outstanding work');
+});
+
+test('the window is named rather than hardcoded twice', () => {
+  assert.strictEqual(typeof GB.NOSHOW_CHASE_DAYS, 'number');
+  assert.ok(GB.NOSHOW_CHASE_DAYS >= 7 && GB.NOSHOW_CHASE_DAYS <= 30,
+    'the chase window has drifted somewhere unreasonable: ' + GB.NOSHOW_CHASE_DAYS);
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/NOSHOW_CHASE_DAYS \* 86400000/.test(data),
+    'the loader uses its own number, so the tooltip and the count can disagree '
+      + 'about what "recent" means');
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(/NOSHOW_CHASE_DAYS \+ ' days/.test(app),
+    'the tooltip states a window it does not read from the constant');
+});
+
+test('the stage is actually fetched', () => {
+  /* The stub returns whole fixture rows whatever you select, so dropping
+     `stage` passes every behavioural test here and then, against the real
+     database, reads undefined on every message — making it look as though
+     nobody has ever chased anybody. Fourth time this trap has caught
+     something. */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/from\('message_log'\)\.select\('[^']*\bstage\b[^']*'\)/.test(data),
+    'loadTeamRows no longer selects the message stage, so no rescue text can '
+      + 'ever be recognised and every no-show reads as unchased');
+});
+
+test('it rides on the row and shows only once it is a pattern', () => {
+  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  assert.ok(/noShowsUnchased: Number\(m\.noShowsUnchased\) \|\| 0,/.test(logic),
+    'the count is dropped at the state boundary');
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function renderTeamTab()'),
+                                app.indexOf('function renderOwnerTab()')));
+  assert.ok(/m\.noShowsUnchased >= 3/.test(fn),
+    'a single dropped no-show is flagged — that is a busy week, not a habit');
+  assert.ok(/no-shows not chased/.test(fn), 'the count is not shown at all');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

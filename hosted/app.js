@@ -748,6 +748,14 @@ function renderTeamTab(){
            can do something about this afternoon, and because an unexplained
            "not measured" reads as the product not working rather than as a
            question nobody has answered. */
+        /* The other end of the queue. The row already says how much booked
+           work has had nothing sent; this says how many calls were missed and
+           then dropped. On this book one person has 45 of them. */
+        m.noShowsUnchased >= 3 ? h('span',{class:'team-seen is-away',
+          title: 'No-shows in the last ' + NOSHOW_CHASE_DAYS + ' days with no '
+               + 'follow-up sent. Older ones are not counted \u2014 going back '
+               + 'weeks later is not really a follow-up.'},
+          [' \u00b7 ' + m.noShowsUnchased + ' no-shows not chased']) : '',
         m.awaitingReview >= 5 ? h('span',{class:'team-seen is-away',
           title:'Messages sent more than a day ago where nobody has said '
               + 'whether a reply came. The reply rate stays blank until these '
