@@ -10850,6 +10850,53 @@ test('it rides on the row and shows only once it is a pattern', () => {
   assert.ok(/no-shows not chased/.test(fn), 'the count is not shown at all');
 });
 
+console.log('\n--- the team table reads down a column ---');
+
+/* Every .team-row is its OWN grid, so with fr and auto each row sized its
+   columns from its own content. Measured across three rows of the same table,
+   the numbers block started at 682px, 629px and 685px — moved by how long
+   somebody's name was and whether they had a MANAGER badge. A column you
+   cannot read down is not a column, and it had been that way since the row
+   was built.
+
+   Only the name flexes now. Checked on screen at 1240px (numbers at 643 on
+   every row) and at 600px, where the layout collapses to two columns and
+   nothing overflows. */
+
+test('the right-hand columns are fixed, so rows line up with each other', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  const rule = html.slice(html.indexOf('.team-row{display:grid'),
+                          html.indexOf('.team-row.is-ok'));
+  const cols = /grid-template-columns:([^;]+);/.exec(rule);
+  assert.ok(cols, 'the team row no longer declares its columns');
+  const spec = cols[1];
+  assert.ok(!/\bfr\b/.test(spec.replace(/minmax\(0,\s*1fr\)/, '')),
+    'a flexible column is back on the right-hand side, so every row sizes it '
+      + 'from its own content and the numbers stop lining up: ' + spec);
+  assert.ok(!/\bauto\b/.test(spec),
+    'an auto column is back, which sizes to content per row: ' + spec);
+  assert.strictEqual((spec.match(/px/g) || []).length, 3,
+    'the three right-hand columns are not all fixed: ' + spec);
+  assert.ok(/minmax\(0,\s*1fr\)/.test(spec),
+    'the name column must flex, and must be allowed to shrink below its '
+      + 'content or a long name pushes the row wider than the card');
+});
+
+test('the narrow layout still has somewhere for every cell', () => {
+  /* Four children and two columns: without an explicit rule the role control
+     drops into an implicit row on its own — which is exactly the bug that put
+     the MANAGER badge under the whole row at full width. */
+  const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  const start = html.indexOf('@media (max-width:640px){ .team-row');
+  assert.ok(start > -1, 'the narrow-width rule for the team row is gone');
+  const block = html.slice(start, start + 500);
+  assert.ok(/\.team-nums\{grid-column:1\/-1/.test(block),
+    'the numbers no longer span the row at narrow widths');
+  assert.ok(/\.team-role\{grid-column:1\/-1/.test(block),
+    'the role control has no placement at narrow widths, so it lands in an '
+      + 'implicit row of its own');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

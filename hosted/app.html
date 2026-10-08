@@ -417,7 +417,17 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    three-column template it fell into an implicit row and sat under the whole
    row at full width. Found by rendering it, not by a test — the grid was
    silently doing exactly what it was told. */
-.team-row{display:grid;grid-template-columns:1.4fr auto 1fr auto;gap:12px;align-items:center;
+/* Fixed widths on the right three columns, because every row is its OWN grid.
+
+   With fr and auto, each row sized its columns from its own content, so the
+   numbers landed in a different place on every line: measured at 682px, 629px
+   and 685px across three rows of the same table. Whether somebody had a
+   MANAGER badge, and how long their name was, moved the whole block. A column
+   you cannot read down is not a column.
+
+   Only the name flexes now. Below the breakpoint the layout collapses to two
+   columns anyway, so these never apply there. */
+.team-row{display:grid;grid-template-columns:minmax(0,1fr) 88px 400px 128px;gap:12px;align-items:center;
   border:1px solid var(--border);border-radius:var(--radius);background:var(--card);
   padding:11px 13px;margin-bottom:8px;}
 .team-row.is-ok{opacity:.72;}
@@ -435,7 +445,11 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .team-nums b{display:block;font-size:15px;color:var(--ink);font-weight:600;}
 .team-nums .unknown{font-size:12px;color:var(--ink-faint);font-weight:400;font-style:italic;}
 .team-note{font-size:12px;color:var(--ink-faint);margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}
-@media (max-width:640px){ .team-row{grid-template-columns:1fr auto;} .team-nums{grid-column:1/-1;justify-content:flex-start;} }
+@media (max-width:640px){ .team-row{grid-template-columns:1fr auto;}
+  .team-nums{grid-column:1/-1;justify-content:flex-start;}
+  /* The role control is a fourth child and would otherwise drop into an
+     implicit row on its own, which is what it used to do at full width. */
+  .team-role{grid-column:1/-1;justify-content:flex-start;} }
 .team-trend{display:block;font-size:10.5px;font-weight:600;}
 .team-trend.up{color:var(--green);}
 .team-trend.down{color:var(--red-dark);}
