@@ -3060,10 +3060,19 @@ function recordInteractionOutcome(state, clientId, outcomeKey, extra){
 // reliably remembers whether a particular text got a reply a fortnight ago,
 // and a guessed answer is worse for the bandit than no answer at all. Sends
 // that age out are simply never counted, which is the safe direction.
+/* The ceiling, named so the manager's count cannot drift from the rep's queue.
+
+   It was a bare 3 in a default argument, and the team view's backlog badge
+   was written without it — unreviewed and older than a day, with no upper
+   bound. That showed Johnny 465 outstanding when only 58 were ever offered to
+   him, under a note telling him they were in his Ghost Recall Today. They
+   were not: the rest aged out days ago and can never be answered. */
+var REVIEW_MAX_AGE_DAYS = 3;
+
 function getAwaitingReview(state, now, minAgeHours, maxAgeDays){
   now = now || new Date();
   minAgeHours = (typeof minAgeHours === 'number') ? minAgeHours : REPLY_WAIT_HOURS;
-  maxAgeDays = (typeof maxAgeDays === 'number') ? maxAgeDays : 3;
+  maxAgeDays = (typeof maxAgeDays === 'number') ? maxAgeDays : REVIEW_MAX_AGE_DAYS;
   var newest = now.getTime() - minAgeHours * 3600000;
   var oldest = now.getTime() - maxAgeDays * 86400000;
   var out = [];
@@ -5452,7 +5461,7 @@ var __LOGIC_EXPORTS__ = {
   UNANSWERED_SWITCH_AT: UNANSWERED_SWITCH_AT,
   computeVariantPerformance: computeVariantPerformance, VARIANT_MIN_SAMPLE: VARIANT_MIN_SAMPLE,
   buildTimeline: buildTimeline, EVENT_LABELS: EVENT_LABELS,
-  REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, messageState: messageState, lastInteraction: lastInteraction,
+  REPLY_WAIT_HOURS: REPLY_WAIT_HOURS, REVIEW_MAX_AGE_DAYS: REVIEW_MAX_AGE_DAYS, messageState: messageState, lastInteraction: lastInteraction,
   messageSource: messageSource, replySource: replySource,
   explainDue: explainDue,   interactionLabel: interactionLabel, INTERACTION_OUTCOMES: INTERACTION_OUTCOMES,
   stageWithRole: stageWithRole, recordInteractionOutcome: recordInteractionOutcome,

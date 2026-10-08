@@ -299,7 +299,7 @@ async function loadTeamRows(sb, uid){
       .select('id, user_id, name, call_date_time, status, created_at, ignored, timezone');
     if(cRes.error || !cRes.data) return [];
 
-    var ownerOf = {}, callTimeOf = {}, tzOf = {}, agg = {};
+    var ownerOf = {}, callTimeOf = {}, tzOf = {}, ignoredOf = {}, agg = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
@@ -319,6 +319,7 @@ async function loadTeamRows(sb, uid){
     cRes.data.forEach(function(c){
       ownerOf[c.id] = c.user_id;
       tzOf[c.id] = c.timezone || null;
+      ignoredOf[c.id] = !!c.ignored;
       var b = bucket(c.user_id);
       /* An ignored contact is not work, so it must not read as a booked
          appointment nobody has spoken to. Zachary had 132 occurrences of one
@@ -384,15 +385,26 @@ async function loadTeamRows(sb, uid){
          on this book the highest-volume newcomer is also the one texting
          people at eleven at night. */
       if(isOutsideLocalHours(m.sent_at, tzOf[m.client_id])) b.outsideHours++;
-      /* Messages old enough to know the answer, where nobody has said whether
-         a reply came. This is WHY the reply rate column is blank for almost
-         everyone, and the blank is honest — nobody has looked is not the same
-         as nobody answered — but a manager reading "not measured" had no way
-         to see that it is two minutes of somebody's attention away.
+      /* Messages the rep is ACTUALLY being asked about and has not answered.
 
-         REPLY_WAIT_HOURS, not a fresh number: it is the same threshold that
-         decides when Ghost Recall Today starts asking. */
-      if(!m.reviewed && (now - t) >= REPLY_WAIT_HOURS * 3600000) b.awaitingReview++;
+         Exactly getAwaitingReview's window, because a manager must never be
+         shown work their rep has not been offered. Written first with only a
+         floor, which showed Johnny 465 outstanding when 58 had ever been
+         offered — the rest aged out and can never be answered — beneath a note
+         saying they were waiting in his Ghost Recall Today.
+
+         Both bounds and the ignored check, from the same constants that drive
+         the rep's own queue:
+           - older than REPLY_WAIT_HOURS: asking sooner is asking a question
+             nobody can answer yet
+           - younger than REVIEW_MAX_AGE_DAYS: nobody reliably remembers a
+             fortnight back, and a guessed answer is worse for the bandit than
+             no answer
+           - not an ignored contact: it is not on their list at all */
+      var age = now - t;
+      if(!m.reviewed && !ignoredOf[m.client_id] &&
+         age >= REPLY_WAIT_HOURS * 3600000 &&
+         age <= REVIEW_MAX_AGE_DAYS * 86400000) b.awaitingReview++;
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
       /* Touches that landed BEFORE the call, which is the only kind that can
          affect whether somebody turns up. Counted as activity, not as a

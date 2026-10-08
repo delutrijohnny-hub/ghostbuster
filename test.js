@@ -9174,18 +9174,22 @@ test('only messages old enough to answer are counted', async () => {
     message_log: {data: [
       // Too recent to ask about: the reply may still be coming.
       {client_id:'c1', sent_at: new Date(now - 2*3600000).toISOString(), responded:false, reviewed:false},
-      // Old enough, unanswered: the backlog.
-      {client_id:'c1', sent_at: new Date(now - 48*3600000).toISOString(), responded:false, reviewed:false},
-      {client_id:'c1', sent_at: new Date(now - 72*3600000).toISOString(), responded:false, reviewed:false},
-      // Old and already answered: not a backlog.
-      {client_id:'c1', sent_at: new Date(now - 96*3600000).toISOString(), responded:true, reviewed:true}
+      // Old enough, unanswered, still inside the window: the real backlog.
+      {client_id:'c1', sent_at: new Date(now - 36*3600000).toISOString(), responded:false, reviewed:false},
+      {client_id:'c1', sent_at: new Date(now - 60*3600000).toISOString(), responded:false, reviewed:false},
+      // Already answered: not a backlog.
+      {client_id:'c1', sent_at: new Date(now - 40*3600000).toISOString(), responded:true, reviewed:true},
+      /* Unanswered but AGED OUT. The rep is never offered this one, so a
+         manager must never be shown it. Counting these is what turned 58 real
+         outstanding answers into a reported 465. */
+      {client_id:'c1', sent_at: new Date(now - 10*86400000).toISOString(), responded:false, reviewed:false}
     ], error: null}
   });
   const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
   const rep = rows.filter(r => r.name === 'Rep')[0];
   assert.strictEqual(rep.awaitingReview, 2,
-    'a message too recent to answer, or one already answered, is being counted '
-      + 'as outstanding work');
+    'the count does not match the window the rep is actually offered: too '
+      + 'recent, already answered, or aged out past the ceiling');
 });
 
 test('the team total is the sum, and reaches the note', () => {
@@ -9644,6 +9648,100 @@ test('it still refuses to carry contact data', () => {
       + 'and must never carry their customers’ names');
   assert.ok(!('upcomingList' in d) && !('queue' in d),
     'the diagnosis is passing the raw queue through: ' + Object.keys(d).join(', '));
+});
+
+console.log('\n--- the manager’s backlog is the rep’s backlog ---');
+
+/* I shipped this badge a few turns ago with only a floor on it. getAwaitingReview
+   — the rep's own queue — has a ceiling as well, deliberately: nobody reliably
+   remembers whether a text got a reply a fortnight ago, and a guessed answer is
+   worse for the bandit than no answer at all, so sends simply age out.
+
+   Against the real book the two disagreed badly:
+
+     Johnny   465 shown   58 ever offered
+     Ronin     41 shown   19 ever offered
+     Ethan     23 shown    4 ever offered
+
+   with a note under it saying they were waiting in Ghost Recall Today. They
+   were not. Most of them aged out days ago and can never be answered, so the
+   badge was asking for work that does not exist. */
+
+test('both windows come from the same constants', () => {
+  assert.strictEqual(typeof GB.REVIEW_MAX_AGE_DAYS, 'number',
+    'the ceiling is a bare number in a default argument again, so the two '
+      + 'counts can drift apart without anything noticing');
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/REPLY_WAIT_HOURS \* 3600000/.test(data), 'the floor is not the shared constant');
+  assert.ok(/REVIEW_MAX_AGE_DAYS \* 86400000/.test(data),
+    'the manager count has no ceiling, so it reports answers that aged out '
+      + 'days ago and can never be given');
+});
+
+test('the count and the queue agree on the same messages', () => {
+  /* The real guard: build one account, ask the rep's queue and apply the
+     manager's rule to the same data, and require the same answer. */
+  const now = new Date();
+  const mk = (hoursAgo, reviewed, ignored) => ({
+    sentAt: new Date(now.getTime() - hoursAgo * 3600000).toISOString(),
+    reviewed: reviewed, responded: false, stage: 'welcome', variantId: 'w1'
+  });
+  const state = GB.buildDefaultState();
+  const live = GB.sanitizeClient({name: 'Live', messageLog: [
+    mk(2, false),      // too recent to ask
+    mk(36, false),     // askable
+    mk(60, false),     // askable
+    mk(40, true),      // already answered
+    mk(240, false)     // aged out
+  ]}, 'c-live');
+  const gone = GB.sanitizeClient({name: 'Ignored', ignored: true,
+    messageLog: [mk(36, false)]}, 'c-ign');
+  state.clients[live.id] = live;
+  state.clients[gone.id] = gone;
+
+  const queue = GB.getAwaitingReview(state, now);
+  assert.strictEqual(queue.length, 2,
+    'the rep’s own queue changed shape: ' + queue.length);
+
+  // The manager's rule, applied to the same messages.
+  let managerCount = 0;
+  Object.keys(state.clients).forEach(id => {
+    const c = state.clients[id];
+    c.messageLog.forEach(m => {
+      const age = now.getTime() - Date.parse(m.sentAt);
+      if(!m.reviewed && !c.ignored &&
+         age >= GB.REPLY_WAIT_HOURS * 3600000 &&
+         age <= GB.REVIEW_MAX_AGE_DAYS * 86400000) managerCount++;
+    });
+  });
+  assert.strictEqual(managerCount, queue.length,
+    'the manager is shown ' + managerCount + ' outstanding answers while the '
+      + 'rep is offered ' + queue.length + '. A manager must never be shown '
+      + 'work their rep has not been given.');
+});
+
+test('an ignored contact is not somebody’s outstanding work', async () => {
+  const now = Date.now();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [
+      {id:'c1', user_id:'u2', name:'Real', timezone:'UTC'},
+      {id:'c2', user_id:'u2', name:'Standing meeting', timezone:'UTC', ignored:true}
+    ], error: null},
+    message_log: {data: [
+      {client_id:'c1', sent_at: new Date(now - 36*3600000).toISOString(), responded:false, reviewed:false},
+      {client_id:'c2', sent_at: new Date(now - 36*3600000).toISOString(), responded:false, reviewed:false}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.awaitingReview, 1,
+    'a message to an ignored contact is counted as outstanding, but the rep’s '
+      + 'queue skips ignored contacts entirely so it can never be cleared');
 });
 
 Promise.all(pendingTests).then(() => {
