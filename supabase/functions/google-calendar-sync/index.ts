@@ -134,6 +134,28 @@ async function fetchAllEvents(accessToken: string, syncToken: string | null) {
   return { events, nextSyncToken };
 }
 
+/* One key for "this person, at this moment", however the time was written.
+
+   This dedup was built two different ways and so never matched anything
+   already in the database. The stored side came back from PostgREST as
+   `2026-10-08T19:00:00+00:00`; the Google side was `start.dateTime` verbatim,
+   `2026-10-08T14:00:00-05:00`. The same instant, two strings, no match — so
+   the check only ever caught duplicates WITHIN a single run and was inert
+   against every contact imported before it.
+
+   Found by noticing one person booked twice in a team view: same email, same
+   instant, two different calendar events, created on successive days.
+
+   Normalised to an instant on both sides, so the comparison is about when the
+   call is rather than how the clock was spelled. */
+function emailTimeKey(email: string | null | undefined,
+                      when: string | null | undefined): string | null {
+  if (!email || !when) return null;
+  const t = Date.parse(when);
+  if (isNaN(t)) return null;
+  return `${email.toLowerCase()}|${new Date(t).toISOString()}`;
+}
+
 async function syncOneCalendar(
   userId: string,
   conn: { calendar_id: string; refresh_token: string; sync_token: string | null },
@@ -230,10 +252,11 @@ async function syncOneCalendar(
     const series = recurringSeriesKey(ev);
     if (series && storedSeries.has(series)) { collapsedRecurring++; continue; }
 
-    // Cross-calendar dedup: same person, same call time, already imported
-    // from a higher-priority calendar this run — don't create a duplicate.
-    const emailTimeKey = parsed.email ? `${parsed.email.toLowerCase()}|${parsed.callDateTime}` : null;
-    if (emailTimeKey && byEmailTime.has(emailTimeKey)) {
+    // Same person, same call time, already imported — don't create a second
+    // row for it, whether it came from another calendar this run or from a
+    // sync days ago.
+    const etKey = emailTimeKey(parsed.email, parsed.callDateTime);
+    if (etKey && byEmailTime.has(etKey)) {
       skippedDuplicate++;
       continue;
     }
@@ -258,7 +281,7 @@ async function syncOneCalendar(
     if (!insertRes.ok) throw new Error('Insert client failed: ' + (await insertRes.text()));
     const [inserted] = await insertRes.json();
     byEventId.set(parsed.googleEventId, inserted);
-    if (emailTimeKey) byEmailTime.set(emailTimeKey, inserted);
+    if (etKey) byEmailTime.set(etKey, inserted);
     if (series) storedSeries.add(series);
     added++;
   }
@@ -281,7 +304,9 @@ async function syncUserCalendars(userId: string) {
   const existing = await existingRes.json();
   const byEventId = new Map(existing.filter((c: any) => c.google_event_id).map((c: any) => [c.google_event_id, c]));
   const byEmailTime = new Map(
-    existing.filter((c: any) => c.email).map((c: any) => [`${c.email.toLowerCase()}|${c.call_date_time}`, c])
+    existing
+      .map((c: any) => [emailTimeKey(c.email, c.call_date_time), c])
+      .filter((pair: any) => pair[0] !== null)
   );
 
   // Which events count as bookings is per-organization. Loaded once per user

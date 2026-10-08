@@ -9744,6 +9744,79 @@ test('an ignored contact is not somebody’s outstanding work', async () => {
       + 'queue skips ignored contacts entirely so it can never be cleared');
 });
 
+console.log('\n--- the same booking, spelled two ways ---');
+
+/* The sync's duplicate check compared `email|time` strings built two
+   different ways. The stored side came back from PostgREST as
+   2026-10-08T19:00:00+00:00; the Google side was start.dateTime verbatim,
+   2026-10-08T14:00:00-05:00. The same instant, two strings, no match — so it
+   only ever caught duplicates WITHIN one run and was inert against every
+   contact imported before it.
+
+   Found in the team view: Zachary had Cody Cravens twice at the same time,
+   two different calendar events, created on successive days. Small today —
+   three duplicated bookings across the book — but it grows with every
+   rebooking, and every copy inflates upcoming, untouched and the calls-today
+   alarm.
+
+   parse.ts and the sync are TypeScript and this suite is deliberately
+   dependency-free, so the rule is pinned at source and the normalisation
+   itself is checked against the exact strings the two sides produce. */
+
+test('the two spellings of one instant are the same key', () => {
+  // Precisely the pair that slipped through.
+  const fromDatabase = '2026-10-08T19:00:00+00:00';
+  const fromGoogle   = '2026-10-08T14:00:00-05:00';
+  assert.strictEqual(Date.parse(fromDatabase), Date.parse(fromGoogle),
+    'these must be the same instant, or the example is wrong');
+  assert.notStrictEqual(fromDatabase, fromGoogle,
+    'if the raw strings matched there would have been no bug');
+  assert.strictEqual(new Date(Date.parse(fromDatabase)).toISOString(),
+                     new Date(Date.parse(fromGoogle)).toISOString(),
+    'normalising to an instant does not make them equal, so the fix does not work');
+});
+
+test('the sync builds that key one way, in one place', () => {
+  const sync = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/function emailTimeKey\(/.test(sync),
+    'the key is built inline again, which is how the two sides drifted apart');
+  assert.ok(/new Date\(t\)\.toISOString\(\)/.test(sync),
+    'the key is not normalised to an instant, so a contact stored by Postgres '
+      + 'and the same booking from Google will not match');
+  // Both ends must go through it.
+  assert.ok(/\.map\(\(c: any\) => \[emailTimeKey\(c\.email, c\.call_date_time\)/.test(sync),
+    'the existing contacts are not keyed through the shared function');
+  assert.ok(/const etKey = emailTimeKey\(parsed\.email, parsed\.callDateTime\)/.test(sync),
+    'the incoming event is not keyed through the shared function');
+  /* And no hand-built key may survive OUTSIDE that function — the function's
+     own body is the one place allowed to spell it, so the check has to
+     exclude it or it matches the fix itself. */
+  const outside = sync.slice(0, sync.indexOf('function emailTimeKey('))
+                + sync.slice(sync.indexOf('async function syncOneCalendar'));
+  assert.ok(!/\$\{[^}]*email[^}]*\}\|\$\{/i.test(outside),
+    'a hand-built `email|time` key is back somewhere outside the shared '
+      + 'function, which is exactly how the two sides drifted apart');
+});
+
+test('a booking with no email or no time is never deduped by it', () => {
+  /* Returning a key for a missing value would collide every contact without
+     an email address into one, and the second of them would be silently
+     dropped as a duplicate. */
+  const sync = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'google-calendar-sync', 'index.ts'), 'utf8');
+  const fn = sync.slice(sync.indexOf('function emailTimeKey('),
+                        sync.indexOf('async function syncOneCalendar'));
+  assert.ok(/if \(!email \|\| !when\) return null;/.test(fn),
+    'a missing email or time still produces a key, so unrelated contacts '
+      + 'collide and get dropped as duplicates');
+  assert.ok(/if \(isNaN\(t\)\) return null;/.test(fn),
+    'an unparseable time produces a key built on NaN');
+  assert.ok(/\.filter\(\(pair: any\) => pair\[0\] !== null\)/.test(sync),
+    'null keys are being put into the map, where one of them will match the '
+      + 'next contact that also has no email');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
