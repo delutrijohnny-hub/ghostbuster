@@ -581,11 +581,20 @@ function renderTeamTab(){
      somebody who has logged nothing would be a confident, specific, false
      claim about their work. */
   if(o.unlogged){
-    box.appendChild(h('p',{class:'team-lead team-coverage'},[
-      o.unlogged + ' finished ' + (o.unlogged === 1 ? 'call has' : 'calls have') +
-      ' no outcome recorded, so show-up rates are only measurable for ' +
-      o.showUpMeasurable + ' of ' + o.total + '.'
-    ]));
+    /* Two different facts, and they were being welded into one sentence that
+       contradicted itself. With five calls unlogged but everybody still
+       measurable it read "so show-up rates are only measurable for 3 of 3" —
+       "only" promising something withheld, "3 of 3" saying nothing was.
+
+       The backlog is always worth stating. The consequence is only worth
+       stating when there IS one. */
+    var coverage = o.unlogged + ' finished ' +
+      (o.unlogged === 1 ? 'call has' : 'calls have') + ' no outcome recorded';
+    coverage += (o.showUpMeasurable < o.total)
+      ? ', so show-up rates are measurable for only ' + o.showUpMeasurable +
+        ' of ' + o.total + '.'
+      : '. Every show-up rate below is still measurable.';
+    box.appendChild(h('p',{class:'team-lead team-coverage'},[coverage]));
   }
 
   var lead;

@@ -10388,6 +10388,23 @@ test('the bands survive the loader and the state boundary', async () => {
   assert.strictEqual(m.decidedByBand.midday, 2, 'the bands are lost at the state boundary');
 });
 
+test('the coverage line does not contradict itself', () => {
+  /* Seen on screen: "5 finished calls have no outcome recorded, so show-up
+     rates are only measurable for 3 of 3." The word "only" promises something
+     is being withheld; "3 of 3" says nothing is. Two facts welded into one
+     sentence, and the join was wrong whenever everybody was still measurable. */
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('if(o.unlogged){'),
+                                app.indexOf('var lead;')));
+  assert.ok(/o\.showUpMeasurable < o\.total/.test(fn),
+    'the consequence is stated unconditionally, so it claims rates are '
+      + 'withheld even when every one of them is being shown');
+  assert.ok(/Every show-up rate below is still measurable/.test(fn),
+    'the all-measurable case has no wording of its own');
+  assert.ok(!/only measurable for/.test(fn),
+    '"only measurable for N of N" is back');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
