@@ -9880,6 +9880,120 @@ test('a name is still only a label', () => {
   assert.ok(/userId:u,/.test(data), 'the team row no longer carries a user id');
 });
 
+console.log('\n--- connecting a calendar lands back in the app ---');
+
+/* Reported from real use: approving at Google dropped you on a bare page on
+   functions.supabase.co, you navigated back to Ghost Recall yourself, you
+   often had to sign in again, and then you pressed "Sync calendar" by hand.
+
+   Three separate causes. The callback finished on a dead-end page. That page
+   is a different origin, so getting back to the app was manual and could
+   present a fresh session. And nothing told the app a calendar had just been
+   connected — so people pressed sync for a run the callback had already
+   performed and awaited before responding.
+
+   The return origin travels in `state`, which nothing signs, so the thing to
+   get right is that it cannot become an open redirect. */
+
+test('the return origin is allow-listed, not trusted', () => {
+  const cb = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-callback', 'index.ts'), 'utf8');
+  assert.ok(/const ALLOWED_ORIGINS = \[/.test(cb),
+    'the callback redirects to whatever origin the state asked for. That state '
+      + 'is unsigned base64 the browser wrote, so this is an open redirect: '
+      + 'craft one, send somebody through a real Google consent screen, land '
+      + 'them anywhere.');
+  assert.ok(/ALLOWED_ORIGINS\.includes\(u\.origin\)/.test(cb),
+    'the allow-list exists but is not what the decision is made on');
+  assert.ok(/return htmlResponse\(fallbackTitle, fallbackBody, status\)/.test(cb),
+    'an origin that is not allowed has nowhere to go — it must fall back to '
+      + 'the plain page rather than redirecting anyway');
+  // Matching on origin, not a substring: "ghostrecallcrm.com.evil.test" must
+  // not pass.
+  assert.ok(!/startsWith|indexOf\(.https/.test(cb),
+    'the origin is being matched loosely, so a lookalike hostname passes');
+});
+
+test('localhost is allowed for development, https elsewhere', () => {
+  const cb = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-callback', 'index.ts'), 'utf8');
+  const fn = cb.slice(cb.indexOf('function appUrl('), cb.indexOf('function backToApp('));
+  assert.ok(/u\.hostname === 'localhost' \|\| u\.hostname === '127\.0\.0\.1'/.test(fn),
+    'a dev build cannot exercise this flow without editing the function');
+  assert.ok(/u\.protocol === 'http:'/.test(fn),
+    'the localhost exception is not pinned to http, so it widens more than intended');
+  GB.buildDefaultState();   // keep this file's vm warm; no behavioural claim
+});
+
+test('success and failure both come home', () => {
+  const cb = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-callback', 'index.ts'), 'utf8');
+  assert.ok(/backToApp\(state\.origin, \{calendar: 'connected', cal: calendarId\}/.test(cb),
+    'a successful connection still finishes on a page telling somebody to '
+      + 'close the tab themselves');
+  /* Every failure after the state is readable comes home, carrying WHY.
+     The no-refresh-token case in particular has real instructions attached —
+     remove the old grant in Google first — and spending those on a page
+     nobody returns from is how somebody gets stuck in a loop of reconnecting
+     and failing the same way. */
+  // One alternation covering every reason would let any single one be
+  // deleted while the others kept the pattern true, so each is checked on
+  // its own exact spelling.
+  ['save', 'account'].forEach(function(reason){
+    assert.ok(cb.indexOf("calendar: 'error', reason: '" + reason + "'") !== -1,
+      'the "' + reason + '" failure does not come back to the app, so the '
+        + 'person is stranded on the callback domain and the app cannot say '
+        + 'what went wrong');
+  });
+  assert.ok(cb.indexOf("calendar: 'error', reason: already ? 'already' : 'exchange'") !== -1,
+    'the token-exchange failures do not come home, which loses the one '
+      + 'message that tells somebody how to unstick themselves');
+  assert.ok(/status: 303/.test(cb),
+    'the redirect is not a 303, so a back button can re-submit the exchange');
+});
+
+test('the app says so, once, and cleans the address bar', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function noteCalendarReturn()'),
+                       app.indexOf('async function init()'));
+  assert.ok(/q\.get\('calendar'\)/.test(fn), 'nothing reads the flag the callback sends back');
+  assert.ok(/history\.replaceState/.test(fn),
+    'the parameter is left in the address bar, so a refresh or a shared link '
+      + 'replays "calendar connected" to somebody who did nothing');
+  assert.ok(/status === 'connected'/.test(fn) && /failed/.test(fn),
+    'the failure case is not distinguished from the success case');
+  /* The "already connected once" case keeps its instructions and gets a panel
+     rather than a toast, because it asks somebody to go and change a setting
+     in another product — more than a line that fades after four seconds. */
+  assert.ok(/reason === 'already'/.test(fn),
+    'the no-refresh-token case is shown as a generic failure, losing the only '
+      + 'instructions that actually unstick it');
+  assert.ok(/Third-party/.test(fn),
+    'the panel no longer tells them where in Google to go, which is the whole '
+      + 'content of that message');
+  assert.ok(/openModalHtml/.test(fn),
+    'instructions somebody has to act on in another product are being shown '
+      + 'as a toast that disappears');
+
+  const init = app.slice(app.indexOf('async function init()'),
+                         app.indexOf('async function init()') + 400);
+  assert.ok(/noteCalendarReturn\(\)/.test(init), 'init never checks for the return');
+  assert.ok(init.indexOf('renderAll()') < init.indexOf('noteCalendarReturn()'),
+    'the toast fires before the render, so it lands over an empty screen '
+      + 'instead of the bookings that just arrived');
+});
+
+test('the browser sends an origin to come back to', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'connect-calendar':"), app.indexOf("case 'sync-calendar-now':"));
+  assert.ok(/origin: window\.location\.origin/.test(h),
+    'the state carries no origin, so the callback has nowhere to send anybody '
+      + 'and falls back to the dead-end page for everyone');
+  assert.ok(/redirect_uri: 'https:\/\/gqfpsjksosxvszzhhezu\.functions\.supabase\.co\/google-calendar-callback'/.test(h),
+    'the Google redirect_uri changed — it is registered in Google Cloud '
+      + 'Console and changing it here breaks the consent screen');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

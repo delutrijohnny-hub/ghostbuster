@@ -3684,7 +3684,13 @@ document.addEventListener('click', function(ev){
       window.GB_SUPABASE.auth.getUser().then(function(res){
         var userId = res.data.user && res.data.user.id;
         if(!userId) return;
-        var state = btoa(JSON.stringify({userId: userId, priority: priority, label: label}));
+        /* Where to come back to. The callback lives on functions.supabase.co
+           and used to finish there on a dead-end page; it now returns here,
+           which also keeps the session — arriving at a different origin is
+           how people ended up signing in again. Checked against an allow-list
+           at the other end, because nothing signs this. */
+        var state = btoa(JSON.stringify({userId: userId, priority: priority,
+                                         label: label, origin: window.location.origin}));
         var params = new URLSearchParams({
           client_id: '1060862353263-1tfnpumq29898ffrnc5oh65b211v8ovr.apps.googleusercontent.com',
           redirect_uri: 'https://gqfpsjksosxvszzhhezu.functions.supabase.co/google-calendar-callback',
@@ -5099,9 +5105,53 @@ function renderEndOfDay(){
    14) BOOT
    ============================================================ */
 
+/* Coming back from connecting a calendar.
+
+   The callback redirects here with ?calendar=connected. Say so, and take the
+   parameter straight back out of the address bar so a refresh or a shared
+   link does not replay the message. The sync already ran inside the callback,
+   so the bookings are in by the time this runs — there is nothing to press. */
+function noteCalendarReturn(){
+  var q;
+  try{ q = new URLSearchParams(window.location.search); }catch(e){ return; }
+  var status = q.get('calendar');
+  if(!status) return;
+  var cal = q.get('cal');
+  var reason = q.get('reason');
+  q.delete('calendar'); q.delete('cal'); q.delete('reason');
+  try{
+    var rest = q.toString();
+    window.history.replaceState({}, '', window.location.pathname + (rest ? '?' + rest : ''));
+  }catch(e){}
+  if(status === 'connected'){
+    showToast(cal ? cal + ' connected. Your bookings are in.' : 'Calendar connected. Your bookings are in.');
+  } else if(reason === 'already'){
+    /* The one failure with a real instruction attached. Shown as a panel
+       rather than a toast: it asks the person to go and do something in
+       another product, which is more than a line that fades. */
+    openModalHtml(
+      '<div class="modal-head"><h2>Google needs you to disconnect first</h2>' +
+      '<button class="btn-ghost btn" data-action="close-modal">\u2715</button></div>' +
+      '<p class="hint">Google did not send back the permission Ghost Recall needs to ' +
+      'keep reading your calendar. That almost always means this Google account was ' +
+      'connected once before and the old access was never removed.</p>' +
+      '<p class="hint">Open your Google Account \u2192 Security \u2192 <strong>Third-party ' +
+      'access</strong>, remove Ghost Recall, then connect again here.</p>' +
+      '<div class="modal-foot" style="text-align:right;margin-top:14px;">' +
+      '<button class="btn btn-green" data-action="close-modal">Got it</button></div>');
+  } else {
+    showToast(reason === 'save'
+      ? 'Google connected, but saving it failed. Try connecting again.'
+      : 'Could not finish connecting to Google. Try again.');
+  }
+}
+
 async function init(){
   STATE = await loadState();
   renderAll();
+  // After the render, so the toast lands on a screen that already has the
+  // newly imported bookings on it rather than over an empty one.
+  noteCalendarReturn();
 }
 
 // A countdown that only updates on reload is worse than none — it reads as

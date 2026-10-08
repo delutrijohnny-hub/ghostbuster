@@ -14,6 +14,52 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FUNCTION_SELF_URL = `${SUPABASE_URL.replace('.supabase.co', '.functions.supabase.co')}/google-calendar-callback`;
 
+/* Where we are allowed to send somebody afterwards.
+
+   The return origin travels in `state`, which is base64 JSON the browser
+   wrote and nothing signs. Redirecting to whatever it says would be an open
+   redirect: craft a state, send somebody through a real Google consent screen,
+   and land them anywhere. So the origin is matched against this list and
+   anything else falls back to the plain page it used to show.
+
+   localhost and 127.0.0.1 on any port, so the flow can be exercised against a
+   dev build without editing this file. */
+const ALLOWED_ORIGINS = [
+  'https://www.ghostrecallcrm.com',
+  'https://ghostrecallcrm.com',
+  'https://www.ghostbustercrm.com',
+  'https://ghostbustercrm.com',
+];
+
+function appUrl(origin: string | undefined, params: Record<string, string>): string | null {
+  if (!origin) return null;
+  let u: URL;
+  try { u = new URL(origin); } catch { return null; }
+  const ok = ALLOWED_ORIGINS.includes(u.origin) ||
+             ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && u.protocol === 'http:');
+  if (!ok) return null;
+  const out = new URL('/app', u.origin);
+  for (const k of Object.keys(params)) out.searchParams.set(k, params[k]);
+  return out.toString();
+}
+
+/* Back to the app, not a dead end.
+
+   This used to finish on a page saying "you can close this tab and go back to
+   GhostBuster". Three things went wrong with that, all of them reported from
+   real use: the page lives on functions.supabase.co, so it looks nothing like
+   the product and reads as something having gone wrong; getting back is
+   manual; and arriving at the app from a different origin is how people ended
+   up signing in again. Then, because nothing told the app a calendar had just
+   been connected, they pressed "Sync calendar" by hand — for a sync this
+   function has already run and awaited. */
+function backToApp(origin: string | undefined, params: Record<string, string>,
+                   fallbackTitle: string, fallbackBody: string, status = 200) {
+  const to = appUrl(origin, params);
+  if (!to) return htmlResponse(fallbackTitle, fallbackBody, status);
+  return new Response(null, { status: 303, headers: { Location: to } });
+}
+
 function htmlResponse(title: string, body: string, status = 200) {
   return new Response(
     `<!doctype html><html><head><title>${title}</title><style>
@@ -31,13 +77,16 @@ Deno.serve(async (req) => {
   const errorParam = url.searchParams.get('error');
 
   if (errorParam) {
-    return htmlResponse('Connection cancelled', `Google reported: ${errorParam}. You can close this tab and try again from GhostBuster.`, 400);
+    /* No state has been parsed yet, so there is no origin to go back to and
+       this one still has to be a page. Cancelling at the Google screen is the
+       common case and reads fine. */
+    return htmlResponse('Connection cancelled', `Google reported: ${errorParam}. You can close this tab and try again from Ghost Recall.`, 400);
   }
   if (!code || !stateRaw) {
     return htmlResponse('Missing parameters', 'This link is missing required information. Close this tab and try connecting again from GhostBuster.', 400);
   }
 
-  let state: { userId: string; priority: number; label: string };
+  let state: { userId: string; priority: number; label: string; origin?: string };
   try {
     state = JSON.parse(atob(decodeURIComponent(stateRaw)));
   } catch {
@@ -58,10 +107,15 @@ Deno.serve(async (req) => {
   const tokenJson = await tokenRes.json();
   if (!tokenRes.ok || !tokenJson.refresh_token) {
     console.error('Google token exchange failed', tokenJson);
-    return htmlResponse(
+    /* The reason travels home rather than being spent on a page nobody
+       returns from. The no-refresh-token case has real instructions attached
+       — remove the old grant in Google first — and those are worth keeping
+       wherever the person actually ends up. */
+    const already = tokenJson.refresh_token === undefined && tokenRes.ok;
+    return backToApp(state.origin, {calendar: 'error', reason: already ? 'already' : 'exchange'},
       'Connection failed',
-      tokenJson.refresh_token === undefined && tokenRes.ok
-        ? 'Google did not return a refresh token — this usually means the account was already connected once before without revoking access first. Go to your Google Account\'s "Third-party access" settings, remove GhostBuster, then try connecting again.'
+      already
+        ? 'Google did not return a refresh token — this usually means the account was already connected once before without revoking access first. Go to your Google Account\'s "Third-party access" settings, remove Ghost Recall, then try connecting again.'
         : 'Something went wrong exchanging the authorization code. Close this tab and try again.',
       400
     );
@@ -73,7 +127,8 @@ Deno.serve(async (req) => {
   const userinfo = await userinfoRes.json();
   const calendarId = userinfo.email;
   if (!calendarId) {
-    return htmlResponse('Connection failed', 'Could not determine which Google account this is. Close this tab and try again.', 400);
+    return backToApp(state.origin, {calendar: 'error', reason: 'account'},
+      'Connection failed', 'Could not determine which Google account this is. Close this tab and try again.', 400);
   }
 
   const tokenExpiry = new Date(Date.now() + tokenJson.expires_in * 1000).toISOString();
@@ -97,7 +152,8 @@ Deno.serve(async (req) => {
   });
   if (!upsertRes.ok) {
     console.error('Failed to store token', await upsertRes.text());
-    return htmlResponse('Connection failed', 'Connected to Google, but saving the connection failed. Close this tab and try again.', 500);
+    return backToApp(state.origin, {calendar: 'error', reason: 'save'},
+      'Connection failed', 'Connected to Google, but saving the connection failed. Close this tab and try again.', 500);
   }
 
   // Connecting only stores the token — nothing pulls events until something
@@ -118,8 +174,9 @@ Deno.serve(async (req) => {
     console.error('Post-connect sync trigger failed (non-fatal)', e);
   }
 
-  return htmlResponse(
+  // The sync above is awaited, so the bookings are already in by the time this
+  // lands. Nothing left for the person to press.
+  return backToApp(state.origin, {calendar: 'connected', cal: calendarId},
     'Calendar connected!',
-    `${calendarId} (${state.label}) is now connected. You can close this tab and go back to GhostBuster.`
-  );
+    `${calendarId} (${state.label}) is now connected. You can close this tab and go back to Ghost Recall.`);
 });
