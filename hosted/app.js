@@ -186,7 +186,13 @@ function assignFromPicker(target){
   var toLabel = target.options && target.options[target.selectedIndex]
     ? target.options[target.selectedIndex].text : 'them';
   target.disabled = true;
-  reassignClient(moveId, moveTo).then(function(r){
+  // Names, so the contact's timeline reads "Ronin -> Ethan (by Johnny)"
+  // rather than three uuids nobody can place.
+  reassignClient(moveId, moveTo, {
+    fromUserId: (STATE.team || []).filter(function(x){ return x.name === moveFrom; })
+                  .map(function(x){ return x.userId; })[0] || null,
+    fromName: moveFrom, toName: toLabel, byName: STATE.senderName || null
+  }).then(function(r){
     if(!r.ok){
       showToast('Could not move it: ' + (r.error || 'refused'));
       target.disabled = false;
@@ -3993,7 +3999,9 @@ document.addEventListener('click', function(ev){
         '\n\nYou can move any of them back individually afterwards.')) break;
       target.disabled = true;
       target.textContent = 'Moving...';
-      reassignMany(bMember.queue.map(function(q){ return q.clientId; }), bSel.value)
+      reassignMany(bMember.queue.map(function(q){ return q.clientId; }), bSel.value,
+        {fromUserId: bMember.userId, fromName: bWho, toName: bTo,
+         byName: STATE.senderName || null})
         .then(function(r){
           if(!r.moved){
             showToast('Nothing moved: ' + (r.error || 'refused'));

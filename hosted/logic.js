@@ -2757,7 +2757,12 @@ var EVENT_LABELS = {
   'stage.changed':          'Stage changed',
   'outcome.logged':         'Outcome logged',
   'interaction.outcome':    'Outcome recorded',
-  'followup.snoozed':       'Follow-up snoozed'
+  'followup.snoozed':       'Follow-up snoozed',
+  /* Handing an appointment to somebody else.
+     A rep opening their list to find seventeen calls they have never seen
+     deserves to know where they came from, and whoever moved them deserves a
+     record that they did. */
+  'owner.changed':          'Moved to a different owner'
 };
 
 function buildTimeline(client, events, now){
@@ -2811,6 +2816,10 @@ function buildTimeline(client, events, now){
     else if(e.kind === 'interaction.outcome') detail = String(d.outcome || '').replace(/_/g, ' ');
     else if(e.kind === 'message.sent') detail = (d.stage || '') + (d.variantId ? ' · ' + d.variantId : '');
     else if(e.kind === 'outcome.logged') detail = d.outcome || '';
+    else if(e.kind === 'owner.changed'){
+      detail = (d.fromName || 'someone') + ' \u2192 ' + (d.toName || 'someone');
+      if(d.byName) detail += ' (by ' + d.byName + ')';
+    }
     out.push(timelineEntry(e.at, e.kind, EVENT_LABELS[e.kind] || e.kind, detail, 'event'));
   });
 

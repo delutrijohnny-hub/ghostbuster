@@ -7129,17 +7129,22 @@ test('taking an appointment reports refusal honestly', async () => {
      read as success the manager is told the call was moved while it sits
      exactly where it was — the worst kind of wrong, because they stop
      worrying about it. */
-  const ok = makeLoadCtx({ clients: {data: [{id:'c1'}], error: null} });
+  const ok = makeLoadCtx({ reassign_client: {data: {ok:true}, error: null} });
   assert.deepStrictEqual(
     await ok.run('reassignClient("c1","u1").then(r => JSON.stringify(r))').then(JSON.parse),
     {ok: true});
 
-  const refused = makeLoadCtx({ clients: {data: [], error: null} });
+  /* reassign_client reports a refusal in its BODY rather than raising, the
+     same way accept_org_invite and set_member_role do — so a wrapper checking
+     only res.error would tell the manager the call moved while it sits exactly
+     where it was. The worst kind of wrong, because they stop worrying. */
+  const refused = makeLoadCtx({
+    reassign_client: {data: {ok:false, error:'not allowed'}, error: null} });
   const r = JSON.parse(await refused.run('reassignClient("c1","u1").then(r => JSON.stringify(r))'));
-  assert.strictEqual(r.ok, false, 'an empty result was treated as a successful move');
+  assert.strictEqual(r.ok, false, 'a refusal in the body was treated as a successful move');
   assert.strictEqual(r.error, 'not allowed');
 
-  const broke = makeLoadCtx({ clients: {data: null, error: {message: 'boom'}} });
+  const broke = makeLoadCtx({ reassign_client: {data: null, error: {message: 'boom'}} });
   const b = JSON.parse(await broke.run('reassignClient("c1","u1").then(r => JSON.stringify(r))'));
   assert.strictEqual(b.ok, false);
   assert.strictEqual(b.error, 'boom');
@@ -8847,7 +8852,7 @@ console.log('\n--- covering for somebody who is away ---');
    happened that did not. */
 
 test('a clean sweep reports what it moved', async () => {
-  const d = makeLoadCtx({clients: {data: [{id:'c1'}], error: null}});
+  const d = makeLoadCtx({reassign_client: {data: {ok:true}, error: null}});
   const r = await d.run('reassignMany(["c1","c2","c3"], "u2")');
   assert.strictEqual(r.moved, 3);
   assert.strictEqual(r.failed, 0);
@@ -8855,7 +8860,8 @@ test('a clean sweep reports what it moved', async () => {
 
 test('a refusal partway through is reported, not rounded up', async () => {
   // RLS refusing shows up as zero rows returned, not as an error.
-  const d = makeLoadCtx({clients: {data: [], error: null}});
+  const d = makeLoadCtx({
+    reassign_client: {data: {ok:false, error:'not allowed'}, error: null}});
   const r = await d.run('reassignMany(["c1","c2"], "u2")');
   assert.strictEqual(r.moved, 0, 'a refused move was counted as a success');
   assert.strictEqual(r.failed, 2);
@@ -9479,6 +9485,105 @@ test('nothing the renderer reads off a member is missing from the state', () => 
     'the team view reads these off a member and teamMemberState does not '
       + 'return them, so they are undefined at render time and whatever they '
       + 'drive silently does nothing: ' + missing.join(', '));
+});
+
+console.log('\n--- a handover leaves a trace ---');
+
+/* Moving an appointment wrote nothing anywhere. A rep opened their list to
+   find calls they had never seen, with nothing saying where they came from or
+   who moved them — and with two managers and a bulk cover that moves
+   seventeen at once, "why is this on my list" needs an answer.
+
+   The events table is append-only by policy (insert and select, no update or
+   delete), so this is a record rather than a field somebody can quietly
+   correct later. */
+
+test('the timeline knows how to say it', () => {
+  const now = new Date();
+  const client = GB.sanitizeClient({name:'A', bookedDate: now.toISOString()}, 'c1');
+  const line = GB.buildTimeline(client, [{
+    at: now.toISOString(), kind: 'owner.changed',
+    data: {fromName: 'Ronin', toName: 'Ethan', byName: 'Johnny'}
+  }], now).filter(e => e.kind === 'owner.changed')[0];
+  assert.ok(line, 'a recorded handover does not appear on the timeline at all');
+  assert.ok(/Ronin/.test(line.detail) && /Ethan/.test(line.detail),
+    'the entry does not say who it moved between: ' + line.detail);
+  assert.ok(/Johnny/.test(line.detail),
+    'the entry does not say who moved it, which is the half a manager is '
+      + 'accountable for: ' + line.detail);
+  assert.notStrictEqual(line.label, 'owner.changed',
+    'the raw event kind is being shown to a salesperson as a label');
+});
+
+test('it degrades to something readable when names are missing', () => {
+  const now = new Date();
+  const client = GB.sanitizeClient({name:'A', bookedDate: now.toISOString()}, 'c1');
+  const line = GB.buildTimeline(client, [{
+    at: now.toISOString(), kind: 'owner.changed', data: {}
+  }], now).filter(e => e.kind === 'owner.changed')[0];
+  assert.ok(line && !/undefined|null/.test(line.detail),
+    'a handover with no names renders "undefined" into the timeline: ' + (line && line.detail));
+});
+
+test('the move and its record are one statement, in the database', () => {
+  /* Done as two writes from the browser, the contact changed hands and the
+     record was REFUSED outright: events_org_insert requires
+     user_id = auth.uid(), so a browser may only write history about itself.
+     That is the right rule, and a handover has to cross it — the entry
+     belongs on the NEW OWNER's timeline or the person inheriting the work
+     cannot read where it came from. Verified against the real database, not
+     assumed: the direct insert came back "new row violates row-level security
+     policy for table events". */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const fn = data.slice(data.indexOf('async function reassignClient'),
+                        data.indexOf('async function loadTeamRows'));
+  assert.ok(/sb\.rpc\('reassign_client'/.test(fn),
+    'the handover is back to writing from the browser, where the record is '
+      + 'refused and only the move lands');
+  assert.ok(!/from\('events'\)\.insert/.test(fn),
+    'the browser is inserting the event directly again — RLS refuses it');
+  assert.ok(!/from\('clients'\)[\s\S]*\.update\(/.test(fn),
+    'the move is being written separately from its record, so one can land '
+      + 'without the other');
+  assert.ok(/r\.ok \? \{ok:true\}/.test(fn),
+    'a refusal reported in the function body is being read as success');
+});
+
+test('the database function is the thing enforcing it', () => {
+  const dir = path.join(__dirname, 'supabase', 'migrations');
+  const sql = fs.readdirSync(dir).map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  const fn = sql.slice(sql.indexOf('function public.reassign_client'));
+  assert.ok(fn.length, 'reassign_client is not defined in any migration');
+  const body = fn.slice(0, fn.indexOf('$$;') + 3);
+
+  assert.ok(/security definer/i.test(body),
+    'without definer rights the event insert is refused, which is the whole '
+      + 'reason this function exists');
+  assert.ok(/user_managed_org_ids\(\)/.test(body),
+    'anybody can move anybody else\u2019s work');
+  assert.ok(/from public\.memberships m\s*\n?\s*where m\.user_id = p_to and m\.org_id = c_org/.test(body),
+    'the destination is not checked for membership. The clients WITH CHECK '
+      + 'constrains org_id and manager-ness but never the incoming user_id, so '
+      + 'a contact could be handed to any uuid at all and stranded with an '
+      + 'owner who cannot see it.');
+  assert.ok(/values \(p_to, p_client, c_org, 'owner\.changed'/.test(body),
+    'the record is filed against somebody other than the new owner, so it '
+      + 'does not appear on the contact where it now lives');
+  assert.ok(/'by', me/.test(body),
+    'the actor is not recorded \u2014 user_id is the new OWNER, a different '
+      + 'person, and that difference is the point');
+});
+
+test('bulk cover carries the same context', () => {
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  assert.ok(/async function reassignMany\(clientIds, toUserId, ctx\)/.test(data),
+    'reassignMany takes no context, so seventeen appointments move with no '
+      + 'record of who moved them or from whom');
+  assert.ok(/reassignClient\(ids\[i\], toUserId, ctx\)/.test(data),
+    'the context is accepted but not passed through');
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const h = app.slice(app.indexOf("case 'bulk-assign':"), app.indexOf("case 'set-role':"));
+  assert.ok(/fromName: bWho, toName: bTo/.test(h), 'the bulk handler sends no names');
 });
 
 Promise.all(pendingTests).then(() => {

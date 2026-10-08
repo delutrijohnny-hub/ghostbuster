@@ -160,12 +160,12 @@ async function loadSentInvites(sb, uid){
 
    Never throws. A caller gets counts and the first reason, so a half-finished
    move is reported as a half-finished move rather than as success. */
-async function reassignMany(clientIds, toUserId){
+async function reassignMany(clientIds, toUserId, ctx){
   var ids = Array.isArray(clientIds) ? clientIds : [];
   var moved = 0, failed = 0, firstError = null;
   for(var i = 0; i < ids.length; i++){
     try{
-      var r = await reassignClient(ids[i], toUserId);
+      var r = await reassignClient(ids[i], toUserId, ctx);
       if(r && r.ok){ moved++; }
       else { failed++; if(!firstError) firstError = (r && r.error) || 'refused'; }
     }catch(e){
@@ -209,17 +209,35 @@ async function setMemberRole(userId, role){
    org_id is untouched because both people are in the same organisation —
    moving work across organisations is a different question with a different
    answer. */
-async function reassignClient(clientId, toUserId){
+async function reassignClient(clientId, toUserId, ctx){
   var sb = window.GB_SUPABASE;
   if(!clientId || !toUserId) return {ok:false, error:'missing id'};
-  var res = await sb.from('clients')
-    .update({user_id: toUserId, updated_at: new Date().toISOString()})
-    .eq('id', clientId)
-    .select('id');
+  /* One call, not two writes from the browser.
+
+     The move and its record have to happen together or not at all. Done
+     separately from here the contact changed hands and the record was refused
+     outright — events_org_insert requires user_id = auth.uid(), so a browser
+     may only write history about itself, which is the right rule and which a
+     handover must cross: the entry belongs on the NEW OWNER's timeline or the
+     person inheriting the work cannot see where it came from.
+
+     reassign_client also checks the thing nothing checked before — that the
+     destination is actually on the team. The clients policy constrains org_id
+     and manager-ness but never the incoming user_id, so a reassignment to any
+     uuid was permitted and would strand the contact with an owner who cannot
+     see it. */
+  var res = await sb.rpc('reassign_client', {
+    p_client: clientId,
+    p_to: toUserId,
+    p_meta: {
+      fromName: (ctx && ctx.fromName) || null,
+      toName: (ctx && ctx.toName) || null,
+      byName: (ctx && ctx.byName) || null
+    }
+  });
   if(res.error) return {ok:false, error: res.error.message || String(res.error)};
-  // RLS refusing shows up as zero rows, not as an error.
-  if(!res.data || !res.data.length) return {ok:false, error:'not allowed'};
-  return {ok:true};
+  var r = res.data || {};
+  return r.ok ? {ok:true} : {ok:false, error: r.error || 'not allowed'};
 }
 
 async function loadTeamRows(sb, uid){
