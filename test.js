@@ -10172,6 +10172,121 @@ test('the contact’s clock keeps its label wherever it is shown', () => {
     'the On Deck headline is unlabelled AND on the contact’s clock again');
 });
 
+console.log('\n--- does following up first change anything ---');
+
+/* The question this product was pointed at from the start, refused three
+   times for want of data. It is answerable now for anybody who has both
+   halves, and the first honest answer on the first book to have them is NO:
+
+     followed up first   43%   61 decided calls
+     nothing sent        45%   58 decided calls
+
+   Two points, the wrong way. That belongs on the screen precisely BECAUSE it
+   is not the expected answer — a manager who assumes follow-up drives
+   attendance will push for more of it and read noise as confirmation. */
+
+test('it refuses when one side of the comparison is thin', () => {
+  /* Somebody who always follows up has no control group, and 33% from their
+     three exceptions would read as a catastrophe. This is the real shape of
+     one person on this book: 97 untouched against 3 touched. */
+  const e = GB.touchEffect({decidedWithTouch: 3, decidedWithoutTouch: 97,
+                            showedWithTouch: 1, showedWithoutTouch: 54});
+  assert.strictEqual(e.measurable, false,
+    'a three-call band was compared against a ninety-seven-call band');
+  assert.strictEqual(e.shortSide, 'touched', 'the panel cannot say which side is short');
+
+  // And the mirror: somebody who never follows up.
+  const f = GB.touchEffect({decidedWithTouch: 40, decidedWithoutTouch: 2,
+                            showedWithTouch: 20, showedWithoutTouch: 2});
+  assert.strictEqual(f.measurable, false);
+  assert.strictEqual(f.shortSide, 'untouched');
+});
+
+test('with both sides real, it reports the difference', () => {
+  // The actual figures off this book.
+  const e = GB.touchEffect({decidedWithTouch: 61, decidedWithoutTouch: 58,
+                            showedWithTouch: 26, showedWithoutTouch: 26});
+  assert.strictEqual(e.measurable, true);
+  assert.strictEqual(e.withPct, 43);
+  assert.strictEqual(e.withoutPct, 45);
+  assert.strictEqual(e.diff, -2, 'the direction of the difference is wrong');
+});
+
+test('the threshold is the same on both sides and not nothing', () => {
+  assert.ok(GB.TOUCH_EFFECT_MIN >= 20,
+    'the minimum band size dropped low enough to report noise as a finding');
+  const justUnder = GB.touchEffect({
+    decidedWithTouch: GB.TOUCH_EFFECT_MIN - 1, decidedWithoutTouch: 500,
+    showedWithTouch: 0, showedWithoutTouch: 250});
+  assert.strictEqual(justUnder.measurable, false, 'one below the threshold is reported');
+  const justOn = GB.touchEffect({
+    decidedWithTouch: GB.TOUCH_EFFECT_MIN, decidedWithoutTouch: GB.TOUCH_EFFECT_MIN,
+    showedWithTouch: 10, showedWithoutTouch: 5});
+  assert.strictEqual(justOn.measurable, true, 'exactly on the threshold is refused');
+});
+
+test('a small difference is called no difference', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function touchEffectPanel('),
+                                app.indexOf('function activityBars(')));
+  assert.ok(/Math\.abs\(e\.diff\) < 5/.test(fn),
+    'any difference at all is reported as a finding, so two points of noise '
+      + 'reads as evidence');
+  assert.ok(/No measurable difference/.test(fn),
+    'the no-effect case has no wording of its own, so it renders as a number '
+      + 'that looks like a result');
+  /* And it must not claim causation. Whether somebody texts before a call is
+     not random — you chase the ones you are worried about — so the touched
+     group is pre-selected for doubt. */
+  assert.ok(!/does not work|doesn’t work|no effect/i.test(fn),
+    'the panel states a cause rather than a measurement');
+  assert.ok(/already in doubt/.test(fn),
+    'the selection effect is no longer mentioned where the difference is '
+      + 'negative, which is where somebody would most likely misread it');
+});
+
+test('the panel is actually on the screen', () => {
+  // The logic can be perfect and render nowhere — that exact gap cost four
+  // features earlier in this file.
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = codeOnly(app.slice(app.indexOf('function renderTeamTab()'),
+                                app.indexOf('function renderOwnerTab()')));
+  assert.ok(/list\.appendChild\(touchEffectPanel\(m\)\)/.test(fn),
+    'touchEffectPanel is never called, so the whole comparison renders nowhere');
+});
+
+test('both halves survive the trip from loader to screen', async () => {
+  const now = Date.now();
+  const past = new Date(now - 5*86400000).toISOString();
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [
+      {id:'a', user_id:'u2', name:'A', call_date_time:past, status:'Completed', timezone:'UTC'},
+      {id:'b', user_id:'u2', name:'B', call_date_time:past, status:'No-show',   timezone:'UTC'},
+      {id:'c', user_id:'u2', name:'C', call_date_time:past, status:'Completed', timezone:'UTC'}
+    ], error: null},
+    message_log: {data: [
+      // Only 'a' was followed up before the call.
+      {client_id:'a', sent_at: new Date(now - 6*86400000).toISOString(), responded:false, reviewed:true}
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.decidedWithTouch, 1, 'a call preceded by a message was not counted as touched');
+  assert.strictEqual(rep.showedWithTouch, 1);
+  assert.strictEqual(rep.decidedWithoutTouch, 2, 'the untouched side is wrong');
+  assert.strictEqual(rep.showedWithoutTouch, 1, 'a no-show was counted as having shown up');
+
+  // And through teamMemberState, which has dropped fields before.
+  const m = GB.teamMemberState(rep, new Date());
+  assert.strictEqual(m.decidedWithTouch, 1, 'the split is lost at the state boundary');
+  assert.strictEqual(m.decidedWithoutTouch, 2);
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

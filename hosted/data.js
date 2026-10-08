@@ -300,6 +300,7 @@ async function loadTeamRows(sb, uid){
     if(cRes.error || !cRes.data) return [];
 
     var ownerOf = {}, callTimeOf = {}, tzOf = {}, ignoredOf = {}, agg = {};
+    var decidedOf = {}, touchedBefore = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
@@ -310,6 +311,7 @@ async function loadTeamRows(sb, uid){
            never carry a contact's name. */
         sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0, sentAt: [],
         outsideHours:0, awaitingReview:0,
+        decidedWithTouch:0, decidedWithoutTouch:0, showedWithTouch:0, showedWithoutTouch:0,
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -347,6 +349,12 @@ async function loadTeamRows(sb, uid){
          performance figure on this screen, so it is counted rather than
          assumed. */
       if(!isNaN(t)) callTimeOf[c.id] = t;
+      /* Kept for the touch comparison below, which cannot be done in this
+         pass: whether a call was followed up beforehand is only known once
+         the message log has been read. */
+      if(role === 'won' || role === 'missed'){
+        decidedOf[c.id] = {user: c.user_id, showed: role === 'won'};
+      }
       if(!isNaN(t) && t < now){
         b.pastCalls++;
         // 'open' is exactly Booked/Confirmed/Reminded on the default pipeline,
@@ -410,7 +418,26 @@ async function loadTeamRows(sb, uid){
          affect whether somebody turns up. Counted as activity, not as a
          claim about cause. */
       var ct = callTimeOf[m.client_id];
-      if(ct && t < ct) b.touchesBeforeCall++;
+      if(ct && t < ct){ b.touchesBeforeCall++; touchedBefore[m.client_id] = true; }
+    });
+
+    /* Did following up beforehand change whether they turned up?
+
+       Only answerable once both passes are done: which calls reached a yes or
+       no comes from the contacts, whether anything preceded them comes from
+       the message log. Counted per person, both halves, so touchEffect can
+       refuse when one side is too thin to compare — which it is for anybody
+       who always follows up, or never does. */
+    Object.keys(decidedOf).forEach(function(cid){
+      var d = decidedOf[cid];
+      var b = bucket(d.user);
+      if(touchedBefore[cid]){
+        b.decidedWithTouch++;
+        if(d.showed) b.showedWithTouch++;
+      } else {
+        b.decidedWithoutTouch++;
+        if(d.showed) b.showedWithoutTouch++;
+      }
     });
 
     /* Sync health comes through a function, not the table.

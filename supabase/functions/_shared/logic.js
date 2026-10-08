@@ -375,6 +375,53 @@ function remapStatusesByRole(state, newStages){
   return {moved: moved, kept: kept, noCounterpart: noCounterpart};
 }
 
+/* Does following up before the call change whether they turn up?
+
+   The question asked at the start of all this, refused three times for want
+   of data, and now answerable for somebody who has both halves of the
+   comparison. The honest answer on the first book to have them is NO: 45%
+   showed up across 58 calls with nothing sent beforehand, 43% across 61 with
+   at least one text. Two points, the wrong way, on sixty-odd calls each side.
+
+   Which is exactly why it belongs in the product rather than in a note. A
+   manager who believes follow-up drives attendance will push their team to
+   send more and read any wobble as proof. A number that says "no measurable
+   difference" is worth more than a number that says 43%.
+
+   BOTH SIDES NEED TO BE REAL. One band of three calls against one of
+   ninety-seven is not a comparison, it is a person who always follows up
+   being measured against their own exceptions — and 33% from three calls
+   would read as a catastrophe. So this refuses unless each side has
+   TOUCH_EFFECT_MIN decided calls, and says which side is short.
+
+   It reports a difference and never a cause. Whether somebody texts before a
+   call is not random: you chase the ones you are worried about, so the
+   touched group is pre-selected for doubt. That alone can swallow a real
+   effect, and it is why the wording is "no measurable difference" rather than
+   "following up does not work". */
+var TOUCH_EFFECT_MIN = 20;
+
+function touchEffect(m){
+  var withT = Number(m && m.decidedWithTouch) || 0;
+  var withoutT = Number(m && m.decidedWithoutTouch) || 0;
+  var showedWith = Number(m && m.showedWithTouch) || 0;
+  var showedWithout = Number(m && m.showedWithoutTouch) || 0;
+  if(withT < TOUCH_EFFECT_MIN || withoutT < TOUCH_EFFECT_MIN){
+    return {
+      measurable: false,
+      shortSide: withT < TOUCH_EFFECT_MIN ? 'touched' : 'untouched',
+      withCalls: withT, withoutCalls: withoutT
+    };
+  }
+  var a = Math.round(100 * showedWith / withT);
+  var b = Math.round(100 * showedWithout / withoutT);
+  return {
+    measurable: true,
+    withPct: a, withoutPct: b, diff: a - b,
+    withCalls: withT, withoutCalls: withoutT
+  };
+}
+
 function teamAppointmentWords(rows){
   var def = buildDefaultTerminology();
   var one = null, many = null, mixed = false;
@@ -4359,6 +4406,12 @@ function teamMemberState(m, now){
        that would fix it is visible. Like the unlogged count, the number IS
        the finding rather than an error. */
     awaitingReview: Number(m.awaitingReview) || 0,
+    // Both halves of the follow-up comparison, so touchEffect can refuse on
+    // the thin side rather than reporting 33% from three calls.
+    decidedWithTouch: Number(m.decidedWithTouch) || 0,
+    decidedWithoutTouch: Number(m.decidedWithoutTouch) || 0,
+    showedWithTouch: Number(m.showedWithTouch) || 0,
+    showedWithoutTouch: Number(m.showedWithoutTouch) || 0,
     rescheduled: Number(m.rescheduled) || 0,
     calendar: cal,
     state: state,
@@ -5417,6 +5470,7 @@ var __LOGIC_EXPORTS__ = {
   LOCAL_HOURS_START: LOCAL_HOURS_START, LOCAL_HOURS_END: LOCAL_HOURS_END,
   weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
+  touchEffect: touchEffect, TOUCH_EFFECT_MIN: TOUCH_EFFECT_MIN,
   teamAppointmentWords: teamAppointmentWords,
   pipelineRoleMap: pipelineRoleMap,
   retireVariant: retireVariant,

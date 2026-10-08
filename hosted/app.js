@@ -346,6 +346,56 @@ function invitePanel(){
    Counts, not rates. A weekly show-up rate on three to sixteen decided calls
    swings fifteen points on noise; how many messages somebody sent is simply
    true. */
+/* Whether following up beforehand actually changes attendance, for this
+   person, on their own calls.
+
+   The question this product was pointed at from the start, refused three
+   times for want of data, and answerable now for anybody with both halves.
+   The first honest answer it produces is that there is no measurable
+   difference — 45% against 43% across sixty-odd calls each side — which is
+   worth far more on this screen than a number that merely looks like
+   progress. A manager who assumes follow-up drives attendance will push for
+   more of it and read noise as proof.
+
+   Says "no measurable difference" rather than "it does not work", because
+   whether somebody texts before a call is not random: you chase the ones you
+   are worried about, so the touched group is pre-selected for doubt. That can
+   hide a real effect, and the panel should not pretend otherwise. */
+function touchEffectPanel(m){
+  var e = touchEffect(m);
+  var wrap = h('div',{class:'te-wrap'},[]);
+  wrap.appendChild(h('div',{class:'act-head'},['Does following up first change anything?']));
+  if(!e.measurable){
+    wrap.appendChild(h('div',{class:'act-foot'},[
+      e.shortSide === 'touched'
+        ? 'Only ' + e.withCalls + ' decided ' + (e.withCalls === 1 ? 'call' : 'calls') +
+          ' had a message sent beforehand, against ' + e.withoutCalls +
+          ' with none. Not enough on the followed-up side to compare yet.'
+        : 'Only ' + e.withoutCalls + ' decided ' + (e.withoutCalls === 1 ? 'call' : 'calls') +
+          ' had nothing sent beforehand, against ' + e.withCalls +
+          ' that did. Nothing to compare against yet.'
+    ]));
+    return wrap;
+  }
+  var same = Math.abs(e.diff) < 5;
+  wrap.appendChild(h('div',{class:'te-cmp'},[
+    h('div',{},[h('b',{},[e.withPct + '%']), 'followed up first',
+                h('i',{},[e.withCalls + ' calls'])]),
+    h('div',{},[h('b',{},[e.withoutPct + '%']), 'nothing sent',
+                h('i',{},[e.withoutCalls + ' calls'])])
+  ]));
+  wrap.appendChild(h('div',{class:'act-foot'},[
+    same
+      ? 'No measurable difference. Following up before the call is not what '
+        + 'moves attendance here \u2014 worth knowing before pushing for more of it.'
+      : (e.diff > 0
+          ? e.diff + ' points better when something was sent first.'
+          : Math.abs(e.diff) + ' points worse when something was sent first \u2014 '
+            + 'most likely because the ones chased are the ones already in doubt.')
+  ]));
+  return wrap;
+}
+
 function activityBars(m){
   var weeks = m.weeks || [];
   var wrap = h('div',{class:'act-wrap'},[]);
@@ -637,6 +687,7 @@ function renderTeamTab(){
     if(open){
       var list = h('div',{class:'team-queue'},[]);
       list.appendChild(activityBars(m));
+      list.appendChild(touchEffectPanel(m));
       if(m.untouched){
         list.appendChild(h('div',{class:'team-queue-head'},[
           m.untouched + ' of ' + m.queue.length + ' with nothing sent yet'
