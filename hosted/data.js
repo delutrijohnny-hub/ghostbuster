@@ -278,10 +278,10 @@ async function loadTeamRows(sb, uid){
     }
 
     var cRes = await sb.from('clients')
-      .select('id, user_id, name, call_date_time, status, created_at, ignored');
+      .select('id, user_id, name, call_date_time, status, created_at, ignored, timezone');
     if(cRes.error || !cRes.data) return [];
 
-    var ownerOf = {}, callTimeOf = {}, agg = {};
+    var ownerOf = {}, callTimeOf = {}, tzOf = {}, agg = {};
     function bucket(u){
       if(!agg[u]) agg[u] = {userId:u, name: nameFor[u] || 'teammate', contacts:0,
         upcoming:0, sentEver:0, sent7d:0, replies:0, completed:0, noshows:0,
@@ -291,6 +291,7 @@ async function loadTeamRows(sb, uid){
            on the team rows: the owner view looks at other businesses and must
            never carry a contact's name. */
         sentPrev7d:0, pastCalls:0, unlogged:0, touchesBeforeCall:0, sentAt: [],
+        outsideHours:0,
         upcomingList: [], lastSignIn: null, signedUp: null};
       return agg[u];
     }
@@ -299,6 +300,7 @@ async function loadTeamRows(sb, uid){
     var now = Date.now();
     cRes.data.forEach(function(c){
       ownerOf[c.id] = c.user_id;
+      tzOf[c.id] = c.timezone || null;
       var b = bucket(c.user_id);
       /* An ignored contact is not work, so it must not read as a booked
          appointment nobody has spoken to. Zachary had 132 occurrences of one
@@ -355,6 +357,15 @@ async function loadTeamRows(sb, uid){
       // Kept raw so weeklyActivity can bucket them. The log already holds
       // every timestamp; nothing new is stored or fetched for the history.
       b.sentAt.push(m.sent_at);
+      /* Texts that landed at an unreasonable hour where the person RECEIVING
+         them lives. The same 8am-9pm window the contact card already warns
+         about, so the count and the warning cannot disagree.
+
+         A quality signal to sit beside the volume one. Without it the team
+         view rewards sending hard and says nothing about sending well — and
+         on this book the highest-volume newcomer is also the one texting
+         people at eleven at night. */
+      if(isOutsideLocalHours(m.sent_at, tzOf[m.client_id])) b.outsideHours++;
       sentPer[m.client_id] = (sentPer[m.client_id] || 0) + 1;
       /* Touches that landed BEFORE the call, which is the only kind that can
          affect whether somebody turns up. Counted as activity, not as a

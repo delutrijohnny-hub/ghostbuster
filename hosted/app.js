@@ -502,7 +502,23 @@ function renderTeamTab(){
             [lastSeenLabel(m.daysSinceSignIn)]),
         m.unlogged ? h('span',{class:'team-seen is-away',
                                title:'Finished calls with no outcome recorded'},
-          [' \u00b7 ' + m.unlogged + ' unlogged']) : ''
+          [' \u00b7 ' + m.unlogged + ' unlogged']) : '',
+        /* Sending well, beside sending a lot.
+
+           Without this the row rewards volume and says nothing about quality,
+           and on this book the highest-volume newcomer is also the one texting
+           people at eleven at night.
+
+           Shown as a count with the window spelled out, never a rate, and only
+           once there are a few — one late text is a person working late, not a
+           habit. The tooltip says the timezone is a guess from the area code,
+           because a wrong guess looks exactly like a badly timed text and a
+           manager should not open that conversation certain. */
+        m.outsideHours >= 3 ? h('span',{class:'team-seen is-away',
+          title:'Sent before 8am or after 9pm where the contact lives. Their '
+              + 'timezone is guessed from the phone number, so some of these '
+              + 'may be the guess being wrong rather than the timing.'},
+          [' \u00b7 ' + m.outsideHours + ' out of hours']) : ''
       ]),
       h('span',{class:'team-state ' + (TEAM_STATE_CLASS[m.state] || 's-setup')},[m.state]),
       h('div',{class:'team-nums'}, nums),

@@ -4302,6 +4302,16 @@ function teamMemberState(m, now){
     sentEver: sentEver,
     completed: Number(m.completed) || 0,
     noshows: Number(m.noshows) || 0,
+    /* Texts that landed outside 8am-9pm where the recipient lives.
+
+       A raw count, never a rate and never part of the state above. Somebody
+       with eight hundred sends and forty early ones is not doing the same
+       thing as somebody with forty-four sends and sixteen late ones, and a
+       percentage flattens that. It is also not a verdict: the recipient's
+       timezone is guessed from their area code, so a wrong guess looks
+       identical to a badly timed text and anything showing this has to say
+       so. */
+    outsideHours: Number(m.outsideHours) || 0,
     rescheduled: Number(m.rescheduled) || 0,
     calendar: cal,
     state: state,
@@ -5013,12 +5023,25 @@ function trendHtml(currentVal, prevVal, opts){
 
 
 /* ---- touch card ---- */
+/* What counts as a reasonable hour to receive a text, where the recipient is.
+
+   Named and shared so the card's warning and the team view's count cannot
+   drift apart: the moment they disagree, a manager is counting something
+   different from what the salesperson was warned about. */
+var LOCAL_HOURS_START = 8;
+var LOCAL_HOURS_END = 21;      // 9pm; 21:00 itself is already outside
+
+function isOutsideLocalHours(when, tz){
+  var d = (when instanceof Date) ? when : safeDate(when);
+  if(!d) return false;         // unknowable is not a violation
+  var hour = localHourInTZ(d, tz || 'America/New_York');
+  return hour < LOCAL_HOURS_START || hour >= LOCAL_HOURS_END;
+}
+
 function tzChipInfo(client, now){
   var tz = client.timezone || 'America/New_York';
-  var hour = localHourInTZ(now, tz);
-  var warn = hour < 8 || hour >= 21;
   var timeLabel = fmtTime(now, tz);
-  return {timeLabel:timeLabel, warn:warn};
+  return {timeLabel:timeLabel, warn: isOutsideLocalHours(now, tz)};
 }
 
 
@@ -5327,6 +5350,8 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
+  isOutsideLocalHours: isOutsideLocalHours,
+  LOCAL_HOURS_START: LOCAL_HOURS_START, LOCAL_HOURS_END: LOCAL_HOURS_END,
   weeklyActivity: weeklyActivity, startOfUTCWeek: startOfUTCWeek,
   remapStatusesByRole: remapStatusesByRole,
   teamAppointmentWords: teamAppointmentWords,

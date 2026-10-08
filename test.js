@@ -9006,6 +9006,124 @@ test('the loader attaches the history and drops its scaffolding', async () => {
       + '— it is scaffolding for the buckets, not state');
 });
 
+console.log('\n--- sending well, not just sending a lot ---');
+
+/* Every number on the team row measured volume. Nothing measured whether the
+   messages were any good to receive, so the view rewarded sending hard and
+   said nothing about sending well.
+
+   On this book that inverts the leaderboard: Ronin is the highest-volume
+   newcomer and 16 of his 44 texts landed outside 8am-9pm where the recipient
+   lives, latest 11pm. Ethan sent none outside hours at all. The row showed
+   Ronin as the one doing well. */
+
+test('the team count and the card warning use the same window', () => {
+  /* If these drift, a manager counts something the salesperson was never
+     warned about, which is the worst possible version of this feature. */
+  const tz = 'America/New_York';
+  const inside  = new Date('2026-10-07T18:00:00Z');   // 2pm ET
+  const late    = new Date('2026-10-08T03:00:00Z');   // 11pm ET
+  const early   = new Date('2026-10-07T10:00:00Z');   // 6am ET
+  assert.strictEqual(GB.isOutsideLocalHours(inside, tz), false);
+  assert.strictEqual(GB.isOutsideLocalHours(late, tz), true, '11pm counted as a reasonable hour');
+  assert.strictEqual(GB.isOutsideLocalHours(early, tz), true, '6am counted as a reasonable hour');
+  // The card's chip must agree, because it is now the same function.
+  assert.strictEqual(GB.tzChipInfo({timezone: tz}, late).warn, true);
+  assert.strictEqual(GB.tzChipInfo({timezone: tz}, inside).warn, false);
+});
+
+test('the boundaries are where they claim to be', () => {
+  const tz = 'UTC';
+  assert.strictEqual(GB.isOutsideLocalHours(new Date('2026-10-07T07:59:00Z'), tz), true);
+  assert.strictEqual(GB.isOutsideLocalHours(new Date('2026-10-07T08:00:00Z'), tz), false,
+    '8am sharp should be allowed');
+  assert.strictEqual(GB.isOutsideLocalHours(new Date('2026-10-07T20:59:00Z'), tz), false);
+  assert.strictEqual(GB.isOutsideLocalHours(new Date('2026-10-07T21:00:00Z'), tz), true,
+    '9pm sharp should already be outside');
+});
+
+test('it is the RECIPIENT\u2019s hour that counts, not the sender\u2019s', () => {
+  // 11pm in New York is 8pm in Los Angeles: same instant, different answer.
+  const when = new Date('2026-10-08T03:00:00Z');
+  assert.strictEqual(GB.isOutsideLocalHours(when, 'America/New_York'), true);
+  assert.strictEqual(GB.isOutsideLocalHours(when, 'America/Los_Angeles'), false,
+    'the sender\u2019s timezone is being used instead of the contact\u2019s');
+});
+
+test('an unknowable time is not counted as a violation', () => {
+  assert.strictEqual(GB.isOutsideLocalHours(null, 'UTC'), false);
+  assert.strictEqual(GB.isOutsideLocalHours('not-a-date', 'UTC'), false,
+    'a junk timestamp was counted against somebody');
+  assert.doesNotThrow(() => GB.isOutsideLocalHours(new Date(), null));
+});
+
+test('the count rides on the team row as a count, never a rate', async () => {
+  const d = makeLoadCtx({
+    memberships: {data: [
+      {org_id:'o1', user_id:'u1', role:'admin'},
+      {org_id:'o1', user_id:'u2', role:'member'}
+    ], error: null},
+    app_settings: {data: [{user_id:'u2', sender_name:'Rep'}], error: null},
+    clients: {data: [
+      {id:'c1', user_id:'u2', name:'A', timezone:'America/New_York'}
+    ], error: null},
+    message_log: {data: [
+      {client_id:'c1', sent_at:'2026-10-08T03:00:00Z', responded:false},  // 11pm ET
+      {client_id:'c1', sent_at:'2026-10-07T10:00:00Z', responded:false},  // 6am ET
+      {client_id:'c1', sent_at:'2026-10-07T18:00:00Z', responded:false}   // 2pm ET
+    ], error: null}
+  });
+  const rows = await d.run('loadTeamRows(window.GB_SUPABASE, "u1")');
+  const rep = rows.filter(r => r.name === 'Rep')[0];
+  assert.strictEqual(rep.outsideHours, 2,
+    'out-of-hours texts are not being counted against the right person');
+  assert.strictEqual(rep.sentEver, 3, 'the volume count was disturbed');
+});
+
+test('the row says it is a guess, and stays quiet about one-offs', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('function renderTeamTab()'), app.indexOf('/* The owner view'));
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, ' ')
+                 .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
+  assert.ok(/m\.outsideHours >= 3/.test(code),
+    'a single late text is flagged — that is somebody working late, not a habit');
+  assert.ok(/out of hours/.test(code), 'the count is not shown at all');
+  assert.ok(/timezone is guessed from the phone number/.test(code),
+    'the row no longer says the timezone is a guess. A wrong guess looks '
+      + 'identical to a badly timed text, and a manager should not open that '
+      + 'conversation certain of it.');
+  assert.ok(!/outsideHours[^)]*\/[^)]*sentEver|outsideHours.*\* 100/.test(code),
+    'this is being shown as a percentage. 40 early out of 800 is not the same '
+      + 'behaviour as 16 late out of 44, and a rate hides the difference.');
+});
+
+test('the contact timezone is actually fetched', () => {
+  /* The stub returns whole fixture rows whatever you select, so dropping the
+     column passes every behavioural test above and then, against the real
+     database, silently treats every contact as America/New_York — which both
+     invents violations and hides them. Same trap that the pipeline column
+     fell into earlier. */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const fn = data.slice(data.indexOf('async function loadTeamRows'));
+  assert.ok(/from\('clients'\)\s*\.select\('[^']*\btimezone\b[^']*'\)/.test(fn),
+    'loadTeamRows no longer selects timezone, so every contact falls back to '
+      + 'America/New_York and the out-of-hours count is measured against the '
+      + 'wrong clock');
+});
+
+test('the state and the reason never mention it', () => {
+  /* It is a coaching signal, not a verdict. Somebody texting at 11pm is still
+     working their list, and folding this into the state would hide the thing
+     the state is for. */
+  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const fn = logic.slice(logic.indexOf('function teamMemberState'),
+                         logic.indexOf('function teamOverview'));
+  const stateBlock = fn.slice(0, fn.indexOf('return {'));
+  assert.ok(!/outsideHours/.test(stateBlock),
+    'out-of-hours sending is deciding somebody\u2019s state or their reason, '
+      + 'which buries whether they are actually working their list');
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);
