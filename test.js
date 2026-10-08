@@ -10058,6 +10058,63 @@ test('"Unknown" still greets somebody as "there"', () => {
   assert.strictEqual(GB.firstName('Josh Degan'), 'Josh');
 });
 
+console.log('\n--- a new booking lands in YOUR pipeline ---');
+
+/* The sync stamped every newly imported contact with the literal string
+   'Booked'. That is the default template's first stage and nobody else's.
+
+   Surfaced switching a real account off the recruiting template: all thirteen
+   of its contacts were sitting on 'Booked' while its pipeline ran Sourced ->
+   Contacted -> Screen Scheduled and contained no such stage. Harmless by luck
+   — an unrecognised stage reads as 'open', so they kept being followed up —
+   but it means the industry templates were not actually working for the
+   people they exist for: pick Recruiting, sync your calendar, and every
+   candidate arrives on a stage your own settings do not list. */
+
+test('the first open stage is read from the account, not assumed', () => {
+  const sync = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/select=calendar_filter,pipeline/.test(sync),
+    'the sync does not fetch the pipeline, so it cannot know where a new '
+      + 'booking belongs and falls back to one template’s vocabulary');
+  assert.ok(/\(st\.role \|\| 'open'\) === 'open'/.test(sync),
+    'the landing stage is not chosen by ROLE, which is the rule the rest of '
+      + 'the engine uses and the only thing that survives a rename');
+  assert.ok(/status: openStage/.test(sync),
+    "the insert still hardcodes a stage name");
+  assert.ok(!/status: 'Booked'/.test(sync), "a literal 'Booked' is back in the insert");
+});
+
+test('an account with no pipeline still gets the default open stage', () => {
+  const sync = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    'google-calendar-sync', 'index.ts'), 'utf8');
+  assert.ok(/let openStage = 'Booked';/.test(sync),
+    'there is no fallback, so an account that never set a pipeline would '
+      + 'import contacts onto undefined');
+  assert.ok(/openStage = 'Booked',/.test(sync),
+    'the parameter has no default, so a caller that omits it imports onto '
+      + 'undefined rather than the default template’s open stage');
+  // And 'Booked' must genuinely be the default template's open stage, or the
+  // fallback is just another guess.
+  const def = GB.buildDefaultPipeline();
+  const firstOpen = def.filter(st => (st.role || 'open') === 'open')[0];
+  assert.strictEqual(firstOpen.key, 'Booked',
+    'the default pipeline’s first open stage is no longer Booked, so the '
+      + 'sync fallback now contradicts it');
+});
+
+test('every industry template has somewhere for a booking to land', () => {
+  /* If a template had no open stage the sync would silently fall back to
+     'Booked' for it, which is the bug again wearing a fallback. */
+  GB.buildIndustryTemplates().forEach(function(t){
+    if(!t.pipeline) return;   // 'custom' keeps the defaults
+    const open = t.pipeline.filter(st => (st.role || 'open') === 'open');
+    assert.ok(open.length,
+      'the ' + t.key + ' template has no open stage, so a synced booking has '
+        + 'nowhere of its own to land');
+  });
+});
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

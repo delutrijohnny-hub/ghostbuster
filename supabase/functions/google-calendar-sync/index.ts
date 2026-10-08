@@ -161,7 +161,8 @@ async function syncOneCalendar(
   conn: { calendar_id: string; refresh_token: string; sync_token: string | null },
   byEventId: Map<string, any>,
   byEmailTime: Map<string, any>,
-  calendarFilter?: CalendarFilter
+  calendarFilter?: CalendarFilter,
+  openStage = 'Booked',
 ) {
   const { access_token, expires_in } = await refreshAccessToken(conn.refresh_token);
   await db(`/google_oauth_tokens?user_id=eq.${userId}&calendar_id=eq.${encodeURIComponent(conn.calendar_id)}`, {
@@ -274,7 +275,7 @@ async function syncOneCalendar(
         name: parsed.name, phone: parsed.phone, email: parsed.email,
         youtube_link: parsed.youtubeLink, meet_link: parsed.meetLink,
         call_date_time: parsed.callDateTime, booked_date: parsed.bookedDate,
-        timezone: parsed.timezone, status: 'Booked',
+        timezone: parsed.timezone, status: openStage,
         manually_added: false, snoozed_until: {},
       }),
     });
@@ -315,16 +316,33 @@ async function syncUserCalendars(userId: string) {
   // rule" — one customer's event titles — which is what made three new
   // accounts in a row import nothing at all.
   let calendarFilter: CalendarFilter | undefined;
+  /* Where a newly imported booking lands in THIS account's pipeline.
+
+     It was the literal string 'Booked'. That is the default template's first
+     stage and nobody else's: a recruiting account's pipeline runs Sourced ->
+     Contacted -> Screen Scheduled, so every candidate the sync created arrived
+     on a stage that account does not have. Harmless by luck — an unrecognised
+     stage reads as 'open', so they still got followed up — but the contact
+     showed a stage name absent from their own settings, which is the industry
+     templates not actually working for the people they were built for.
+
+     First stage carrying the 'open' role, which is the same rule the rest of
+     the engine uses. Falls back to 'Booked' when there is no pipeline set,
+     because that IS the default template's open stage. */
+  let openStage = 'Booked';
   try {
-    const sres = await db(`/app_settings?user_id=eq.${userId}&select=calendar_filter`);
+    const sres = await db(`/app_settings?user_id=eq.${userId}&select=calendar_filter,pipeline`);
     const srow = (await sres.json())?.[0];
     if (srow?.calendar_filter) calendarFilter = srow.calendar_filter as CalendarFilter;
+    const stages = Array.isArray(srow?.pipeline) ? srow.pipeline : [];
+    const firstOpen = stages.find((st: any) => st && (st.role || 'open') === 'open' && st.key);
+    if (firstOpen) openStage = String(firstOpen.key);
   } catch (_e) { /* use the general default rather than failing the sync */ }
 
   const perCalendar = [];
   for (const conn of connections) {
     try {
-      const result = await syncOneCalendar(userId, conn, byEventId, byEmailTime, calendarFilter);
+      const result = await syncOneCalendar(userId, conn, byEventId, byEmailTime, calendarFilter, openStage);
       perCalendar.push({ calendar: conn.calendar_id, ...result });
     } catch (e) {
       perCalendar.push({ calendar: conn.calendar_id, error: String(e) });
