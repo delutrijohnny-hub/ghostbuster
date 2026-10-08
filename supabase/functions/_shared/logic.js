@@ -3584,6 +3584,44 @@ function internalDomain(email){
   return (!d || isSharedMailDomain(d)) ? '' : d;
 }
 
+/* Your own company's mailbox, living on a domain you don't own.
+
+   Mirrors isOwnCompanyMailbox in supabase/functions/_shared/parse.ts.
+
+   MarketMaker's team calendar has a daily internal "sales call" whose only
+   guest is marketmakermgmt@gmail.com — the company's own shared inbox. Both
+   existing reference points miss it: gmail.com is a shared domain, so it is
+   neither the organizer's nor the owner's company domain, and the meeting
+   therefore looked like a booking with an outside guest. It imported as a
+   fresh contact every day on every rep's list — four reps, one new fake
+   client each per day, 9 rows and still growing when this was found, and
+   each one named "Unknown" so the follow-up would have opened "Hey there,".
+
+   The giveaway is that the mailbox is named after the company: local part
+   "marketmakermgmt" against the domain marketmakermgmt.com. That generalises
+   — acmeroofing@gmail.com on acmeroofing.com is the same shape — and it is
+   the only thing distinguishing the address from a real prospect's Gmail.
+
+   Punctuation is ignored so market-maker-mgmt@ still matches. The match is
+   exact, never a substring: a company on nevada.com would otherwise claim
+   nevadahomeowner@gmail.com as staff and drop a real prospect on the floor.
+   And a company label under four characters is refused outright, because
+   "me.com" or "hi.io" must not turn me@gmail.com into a colleague. */
+function mailboxLabel(text){
+  return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isOwnCompanyMailbox(email, companyDomains){
+  var lp = mailboxLabel(String(email == null ? '' : email).split('@')[0]);
+  var doms = companyDomains || [];
+  for(var i = 0; i < doms.length; i++){
+    if(!doms[i]) continue;
+    var label = mailboxLabel(String(doms[i]).split('.')[0]);
+    if(label.length >= 4 && label === lp) return true;
+  }
+  return false;
+}
+
 function matchesCalendarFilter(ev, filter, ownerEmail){
   var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
   var title = (ev.summary || '').toLowerCase();
@@ -3621,6 +3659,8 @@ function matchesCalendarFilter(ev, filter, ownerEmail){
       if(!d) continue;
       if(organizer && d === organizer) continue;    // the organizer's colleague
       if(owner && d === owner) continue;            // your colleague
+      // Your own company's inbox, parked on a shared domain.
+      if(isOwnCompanyMailbox(g.email, [organizer, owner])) continue;
       return true;
     }
     return false;
@@ -5763,6 +5803,7 @@ var __LOGIC_EXPORTS__ = {
   platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
   TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS,
   TEAM_MIN_COVERAGE: TEAM_MIN_COVERAGE, TEAM_MIN_LOGGED: TEAM_MIN_LOGGED, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
+  isOwnCompanyMailbox: isOwnCompanyMailbox,
   matchesCalendarFilter: matchesCalendarFilter,
   isSharedMailDomain: isSharedMailDomain, internalDomain: internalDomain,
   recurringSeriesKey: recurringSeriesKey, collapseRecurringSeries: collapseRecurringSeries,

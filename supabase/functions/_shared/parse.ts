@@ -177,6 +177,46 @@ function internalDomain(email?: string): string {
   return !d || isSharedMailDomain(d) ? '' : d;
 }
 
+/* Your own company's mailbox, living on a domain you don't own.
+
+   Mirrors isOwnCompanyMailbox in logic.js.
+
+   MarketMaker's team calendar has a daily internal "sales call" whose only
+   guest is marketmakermgmt@gmail.com — the company's own shared inbox. Both
+   existing reference points miss it: gmail.com is a shared domain, so it is
+   neither the organizer's nor the owner's company domain, and the meeting
+   therefore looked like a booking with an outside guest. It imported as a
+   fresh contact every day on every rep's list — four reps, one new fake
+   client each per day, and each one named "Unknown", so the follow-up would
+   have opened "Hey there,".
+
+   The giveaway is that the mailbox is named after the company: local part
+   "marketmakermgmt" against the domain marketmakermgmt.com. That generalises
+   — acmeroofing@gmail.com on acmeroofing.com is the same shape — and it is
+   the only thing distinguishing the address from a real prospect's Gmail.
+
+   Punctuation is ignored so market-maker-mgmt@ still matches. The match is
+   exact, never a substring: a company on nevada.com would otherwise claim
+   nevadahomeowner@gmail.com as staff and drop a real prospect on the floor.
+   And a company label under four characters is refused outright, because
+   "me.com" or "hi.io" must not turn me@gmail.com into a colleague. */
+function mailboxLabel(text?: string): string {
+  return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+export function isOwnCompanyMailbox(
+  email?: string,
+  companyDomains?: Array<string | undefined>,
+): boolean {
+  const lp = mailboxLabel(String(email == null ? '' : email).split('@')[0]);
+  for (const dom of companyDomains || []) {
+    if (!dom) continue;
+    const label = mailboxLabel(String(dom).split('.')[0]);
+    if (label.length >= 4 && label === lp) return true;
+  }
+  return false;
+}
+
 /* Does this calendar event represent someone worth following up with?
 
    'attendees' is the default for anyone new because it needs no setup to be
@@ -223,6 +263,8 @@ export function matchesCalendarFilter(
       if (!d) continue;
       if (organizer && d === organizer) continue;  // the organizer's colleague
       if (owner && d === owner) continue;          // your colleague
+      // Your own company's inbox, parked on a shared domain.
+      if (isOwnCompanyMailbox(g.email, [organizer, owner])) continue;
       return true;
     }
     return false;

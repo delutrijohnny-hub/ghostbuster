@@ -5168,6 +5168,103 @@ test('the sync actually calls the collapse, not just defines it', () => {
     'a newly inserted occurrence must register its series');
 });
 
+/* --- your own company's inbox is not a prospect --- */
+
+test('the company’s own shared inbox is not imported as a client', () => {
+  /* Found in live data, not imagined. MarketMaker runs a daily internal
+     "sales call" whose only guest is marketmakermgmt@gmail.com -- the
+     company's own inbox. gmail.com is a shared domain, so it was neither the
+     organizer's nor the owner's company domain, and the meeting read as a
+     booking with an outside guest.
+
+     It imported a brand new contact every day onto every rep's list. Nine
+     rows across four reps when it was found, all named "Unknown", each one
+     due a "Hey there," text. */
+  const internal = ev({summary: 'sales call',
+    organizer: {email: 'colin@marketmakermgmt.com'},
+    attendees: [{email: 'marketmakermgmt@gmail.com'}]});
+  assert.strictEqual(
+    GB.matchesCalendarFilter(internal, {mode: 'attendees'}, 'colin@marketmakermgmt.com'),
+    false, 'the team’s own standing meeting is still importing as a client');
+});
+
+test('and it is recognised from the owner’s domain alone', () => {
+  // The organizer is often on a personal inbox, which gives no company
+  // domain at all -- the owner's is then the only reference point there is.
+  const e = ev({summary: 'sales call', organizer: {email: 'someone@gmail.com'},
+    attendees: [{email: 'marketmakermgmt@gmail.com'}]});
+  assert.strictEqual(
+    GB.matchesCalendarFilter(e, {mode: 'attendees'}, 'tanner.b@marketmakermgmt.com'),
+    false, e.summary);
+});
+
+test('a real prospect on a shared domain is still a prospect', () => {
+  /* The guard that keeps this from eating the business. Most of these
+     companies book homeowners and agents, who are overwhelmingly on Gmail;
+     a rule that quietly dropped Gmail guests would empty the product. */
+  for (const guest of ['joshdegan42@gmail.com', 'brian@nevadagroup.com',
+                       'erica@realtychicks.com', 'homeowner@yahoo.com']) {
+    assert.strictEqual(GB.matchesCalendarFilter(
+      ev({summary: 'Intro call', organizer: {email: 'colin@marketmakermgmt.com'},
+          attendees: [{email: guest}]}),
+      {mode: 'attendees'}, 'colin@marketmakermgmt.com'),
+      true, guest + ' stopped counting as a booking');
+  }
+});
+
+test('punctuation in the mailbox does not hide it', () => {
+  assert.strictEqual(
+    GB.isOwnCompanyMailbox('market-maker-mgmt@gmail.com', ['marketmakermgmt.com']), true);
+  assert.strictEqual(
+    GB.isOwnCompanyMailbox('MarketMakerMGMT@gmail.com', ['marketmakermgmt.com']), true);
+});
+
+test('a short company label cannot make strangers into colleagues', () => {
+  /* The one way this rule could do real damage. A business on me.com, hi.io
+     or a three-letter domain would otherwise match a huge number of ordinary
+     mailboxes and silently stop importing real bookings. */
+  assert.strictEqual(GB.isOwnCompanyMailbox('me@gmail.com', ['me.com']), false);
+  assert.strictEqual(GB.isOwnCompanyMailbox('hi@gmail.com', ['hi.io']), false);
+  assert.strictEqual(GB.isOwnCompanyMailbox('abc@gmail.com', ['abc.com']), false);
+  // And a different company's name is not yours.
+  assert.strictEqual(
+    GB.isOwnCompanyMailbox('nevadagroup@gmail.com', ['marketmakermgmt.com']), false);
+});
+
+test('the company name must be the whole mailbox, not merely inside it', () => {
+  /* A substring test reads as more forgiving and is strictly more dangerous.
+     A company on nevada.com would claim nevadahomeowner@gmail.com as its own
+     staff -- so the one real prospect whose address happens to start with the
+     company name silently stops importing, which is the worst possible row to
+     lose and the hardest to notice missing. */
+  assert.strictEqual(GB.isOwnCompanyMailbox('nevada@gmail.com', ['nevada.com']), true);
+  assert.strictEqual(
+    GB.isOwnCompanyMailbox('nevadahomeowner@gmail.com', ['nevada.com']), false,
+    'a prospect was absorbed into the company by a substring match');
+  assert.strictEqual(
+    GB.isOwnCompanyMailbox('mynevada@gmail.com', ['nevada.com']), false);
+});
+
+test('it holds up on nothing at all', () => {
+  assert.strictEqual(GB.isOwnCompanyMailbox(undefined, undefined), false);
+  assert.strictEqual(GB.isOwnCompanyMailbox('', []), false);
+  assert.strictEqual(GB.isOwnCompanyMailbox('x@y.com', [null, undefined, '']), false);
+});
+
+test('the Edge Function copy carries the same rule, since it runs the sync', () => {
+  /* logic.js is not what imports anybody -- the Deno function is. These two
+     have drifted before, and a fix that lands only in logic.js is a fix that
+     changes nothing in production. */
+  const src = fs.readFileSync(path.join(__dirname, 'supabase', 'functions',
+    '_shared', 'parse.ts'), 'utf8');
+  assert.ok(/export function isOwnCompanyMailbox\(/.test(src),
+    'parse.ts has no isOwnCompanyMailbox');
+  assert.ok(/if \(isOwnCompanyMailbox\(g\.email, \[organizer, owner\]\)\) continue;/.test(src),
+    'parse.ts defines the rule but the attendee loop never consults it');
+  assert.ok(/label\.length >= 4 && label === lp/.test(src),
+    'the copy that actually runs is missing the exact-match or short-label guard');
+});
+
 /* --- and the rule, said out loud --- */
 
 test('an unset filter is described as what the syncer actually does', () => {
