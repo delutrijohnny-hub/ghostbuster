@@ -3685,6 +3685,41 @@ function isOwnCompanyMailbox(email, companyDomains){
   return false;
 }
 
+/* Everyone on this event who could actually be the contact.
+
+   Mirrors contactCandidates in supabase/functions/_shared/parse.ts — see the
+   long comment there for the meeting that forced this.
+
+   One list, used by two decisions that used to be made separately: whether
+   the event is a booking at all, and whose address the follow-up goes to. An
+   event could import on the strength of a guest the contact-selection chain
+   then refused, so a daily internal meeting organised from a personal Gmail
+   produced a new fake client for four reps every day. If nobody on the event
+   could be the contact, it is not a booking. */
+function contactCandidates(ev, ownerEmail){
+  var e2 = ev || {};
+  var organizerSelf = String((e2.organizer && e2.organizer.email) || '').toLowerCase();
+  var organizerDomain = internalDomain(e2.organizer && e2.organizer.email);
+  var ownerSelf = String(ownerEmail || '').toLowerCase();
+  var ownerDomain = internalDomain(ownerEmail);
+  var out = [];
+  var guests = e2.attendees || [];
+  for(var i = 0; i < guests.length; i++){
+    var g = guests[i];
+    if(!g || g.self || g.resource) continue;          // you, and meeting rooms
+    var e = String(g.email || '').toLowerCase();
+    if(!e) continue;
+    // The organizer is never the customer, whatever their domain — and while
+    // this list was not shared, their mere presence imported the event.
+    if(e === organizerSelf || e === ownerSelf) continue;
+    if(organizerDomain && emailDomain(e) === organizerDomain) continue;
+    if(ownerDomain && emailDomain(e) === ownerDomain) continue;
+    if(isOwnCompanyMailbox(e, [organizerDomain, ownerDomain])) continue;
+    out.push(e);
+  }
+  return out;
+}
+
 function matchesCalendarFilter(ev, filter, ownerEmail){
   var f = (filter && filter.mode) ? filter : DEFAULT_CALENDAR_FILTER;
   var title = (ev.summary || '').toLowerCase();
@@ -3701,32 +3736,14 @@ function matchesCalendarFilter(ev, filter, ownerEmail){
   if(f.mode === 'all') return true;
 
   if(f.mode === 'attendees'){
-    /* An outside guest is the signal, and "outside" has two reference points.
+    /* A guest who could be the contact is the signal.
 
-       The organizer's domain was the only one, and internalDomain returns ''
-       for a personal inbox — so an internal meeting organised from somebody's
-       Gmail had no internal domain at all, every colleague on it counted as
-       an outside guest, and the meeting imported as a booking. One standing
-       meeting did exactly that across three accounts.
-
-       The calendar owner's domain closes it: this is their calendar, so their
-       colleagues are internal to them whoever organised. An owner on a
-       personal inbox is unchanged — they have no colleagues to exclude. */
-    var organizer = internalDomain(ev.organizer && ev.organizer.email);
-    var owner = internalDomain(ownerEmail);
-    var guests = ev.attendees || [];
-    for(i = 0; i < guests.length; i++){
-      var g = guests[i];
-      if(!g || g.self || g.resource) continue;      // you, and meeting rooms
-      var d = emailDomain(g.email);
-      if(!d) continue;
-      if(organizer && d === organizer) continue;    // the organizer's colleague
-      if(owner && d === owner) continue;            // your colleague
-      // Your own company's inbox, parked on a shared domain.
-      if(isOwnCompanyMailbox(g.email, [organizer, owner])) continue;
-      return true;
-    }
-    return false;
+       This walked the attendee list itself and disagreed with the list the
+       Edge Function builds to choose a contact, so an event could import on
+       the strength of a guest that was then refused as the contact. Asking
+       the shared list makes "worth importing" and "somebody to follow up
+       with" the same question. */
+    return contactCandidates(ev, ownerEmail).length > 0;
   }
 
   var inc = f.include || [];
@@ -5866,6 +5883,7 @@ var __LOGIC_EXPORTS__ = {
   platformOverview: platformOverview, accountDiagnosis: accountDiagnosis,
   TEAM_IDLE_DAYS: TEAM_IDLE_DAYS, TEAM_AWAY_DAYS: TEAM_AWAY_DAYS,
   TEAM_MIN_COVERAGE: TEAM_MIN_COVERAGE, TEAM_MIN_LOGGED: TEAM_MIN_LOGGED, TEAM_STATE_ORDER: TEAM_STATE_ORDER,
+  contactCandidates: contactCandidates,
   nameFromEmail: nameFromEmail,
   isOwnCompanyMailbox: isOwnCompanyMailbox,
   matchesCalendarFilter: matchesCalendarFilter,

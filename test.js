@@ -5168,6 +5168,119 @@ test('the sync actually calls the collapse, not just defines it', () => {
     'a newly inserted occurrence must register its series');
 });
 
+/* --- the organiser is not an outside guest --- */
+
+// The real event, as the live rows describe it: a daily internal "sales call"
+// organised from a personal Gmail that is also in the attendee list, with the
+// company's own inbox and a colleague alongside.
+const theJunkMeeting = (owner) => ({
+  summary: 'sales call', description: '',
+  organizer: {email: 'gauravbatra791@gmail.com'},
+  attendees: [
+    {email: 'gauravbatra791@gmail.com'},
+    {email: 'marketmakermgmt@gmail.com'},
+    {email: 'vionna@marketmakermgmt.com'},
+    {email: owner, self: true},
+  ],
+});
+
+test('an event whose only outsider is the organiser is not a booking', () => {
+  /* The bug the first attempt at this missed, caught by checking the live
+     data the next morning rather than trusting the deploy.
+
+     isOwnCompanyMailbox correctly excluded marketmakermgmt@gmail.com, and the
+     meeting imported anyway: the ORGANISER was sitting in the attendee list
+     on a personal Gmail, so attendee mode found its outside guest in them.
+     The contact picker then dropped the organiser -- "never the customer,
+     whatever their domain" -- and saved the company inbox as the client. The
+     guest that justified importing was the one refused as the contact.
+
+     Four reps, one new fake client each, every day, through the fix. */
+  assert.strictEqual(
+    GB.matchesCalendarFilter(theJunkMeeting('colin@marketmakermgmt.com'),
+      {mode: 'attendees'}, 'colin@marketmakermgmt.com'),
+    false, 'the meeting that produced four junk rows a day still imports');
+});
+
+test('and there is nobody on it who could be contacted', () => {
+  // The invariant that makes the above impossible to regress by halves: the
+  // two questions are now one list, so "imported" and "has a contact" cannot
+  // come apart.
+  assert.deepStrictEqual(
+    GB.contactCandidates(theJunkMeeting('colin@marketmakermgmt.com'),
+      'colin@marketmakermgmt.com'),
+    []);
+});
+
+test('importing and having a contact are the same question', () => {
+  /* Stated directly, over every shape in this file, because the failure was
+     not a wrong rule -- each rule was right -- but two rules that disagreed. */
+  const cases = [
+    [theJunkMeeting('colin@marketmakermgmt.com'), 'colin@marketmakermgmt.com'],
+    [ev({summary: 'Intro', organizer: {email: 'colin@marketmakermgmt.com'},
+         attendees: [{email: 'brian@nevadagroup.com'}]}), 'colin@marketmakermgmt.com'],
+    [ev({summary: 'Call', organizer: {email: 'john@gmail.com'},
+         attendees: [{email: 'john@gmail.com'}, {email: 'client@gmail.com'}]}), 'john@gmail.com'],
+    [ev({summary: 'Standup', organizer: {email: 'a@acme.com'},
+         attendees: [{email: 'b@acme.com'}]}), 'a@acme.com'],
+    /* A real Google room lives on resource.calendar.google.com, NOT on your
+       own domain -- so the domain rules do not exclude it and the resource
+       flag is the only thing standing between "booked the big meeting room"
+       and a contact named after it. An earlier version of this case put the
+       room on acme.com, where the owner-domain rule already caught it, so
+       deleting the resource check broke nothing and the test proved nothing. */
+    [ev({summary: 'Room check', organizer: {email: 'a@acme.com'},
+         attendees: [{email: 'c_188hk@resource.calendar.google.com', resource: true}]}),
+     'a@acme.com'],
+    [ev({summary: 'Nobody', organizer: {email: 'a@acme.com'}, attendees: []}), 'a@acme.com'],
+  ];
+  for (const [e, owner] of cases) {
+    const imported = GB.matchesCalendarFilter(e, {mode: 'attendees'}, owner);
+    const hasContact = GB.contactCandidates(e, owner).length > 0;
+    assert.strictEqual(imported, hasContact,
+      e.summary + ': imported=' + imported + ' but contacts=' + hasContact);
+  }
+});
+
+test('a meeting room is not a person to follow up with', () => {
+  // Rooms are not on your domain -- Google puts them on
+  // resource.calendar.google.com -- so the resource flag is the only rule
+  // that excludes them.
+  const e = ev({summary: 'Big room', organizer: {email: 'a@acme.com'},
+    attendees: [{email: 'c_188hk@resource.calendar.google.com', resource: true}]});
+  assert.deepStrictEqual(GB.contactCandidates(e, 'a@acme.com'), []);
+  assert.strictEqual(
+    GB.matchesCalendarFilter(e, {mode: 'attendees'}, 'a@acme.com'), false);
+});
+
+test('a solo operator on Gmail still gets their clients', () => {
+  /* The thing all of this must not break. Their own inbox is a shared domain,
+     so none of the domain rules apply, and the organiser exclusion must not
+     take the client with it. */
+  const e = ev({summary: 'Call', organizer: {email: 'john@gmail.com'},
+    attendees: [{email: 'john@gmail.com'}, {email: 'client@gmail.com'}]});
+  assert.strictEqual(
+    GB.matchesCalendarFilter(e, {mode: 'attendees'}, 'john@gmail.com'), true);
+  assert.deepStrictEqual(
+    GB.contactCandidates(e, 'john@gmail.com'), ['client@gmail.com']);
+});
+
+test('the calendar owner is never their own contact', () => {
+  // Their address appears without self:true when the invite came from
+  // elsewhere, which would otherwise make every event a booking with
+  // themselves as the client.
+  const e = ev({summary: 'Call', organizer: {email: 'someone@elsewhere.com'},
+    attendees: [{email: 'john@gmail.com'}]});
+  assert.deepStrictEqual(GB.contactCandidates(e, 'john@gmail.com'), []);
+});
+
+test('it holds up on a malformed attendee list', () => {
+  assert.doesNotThrow(() => GB.contactCandidates(null, 'a@b.com'));
+  assert.doesNotThrow(() => GB.contactCandidates({}, undefined));
+  assert.deepStrictEqual(
+    GB.contactCandidates({attendees: [null, {}, {email: ''}]}, 'a@b.com'), []);
+});
+
 /* --- a name from the address, and never "Hey Unknown," --- */
 
 test('nobody is ever greeted as "Unknown"', () => {
@@ -5345,8 +5458,8 @@ test('the Edge Function copy carries the same rule, since it runs the sync', () 
     '_shared', 'parse.ts'), 'utf8');
   assert.ok(/export function isOwnCompanyMailbox\(/.test(src),
     'parse.ts has no isOwnCompanyMailbox');
-  assert.ok(/if \(isOwnCompanyMailbox\(g\.email, \[organizer, owner\]\)\) continue;/.test(src),
-    'parse.ts defines the rule but the attendee loop never consults it');
+  assert.ok(/!isOwnCompanyMailbox\(e, \[organizerDomain, ownerDomain\]\)/.test(src),
+    'parse.ts defines the rule but contactCandidates never consults it');
   assert.ok(/label\.length >= 4 && label === lp/.test(src),
     'the copy that actually runs is missing the exact-match or short-label guard');
 });
@@ -8757,7 +8870,11 @@ test('a solo operator on Gmail keeps their bookings', () => {
 test('the Edge Function passes the calendar owner through', () => {
   /* parse.ts is the live import path for everyone — the ICS version above is
      the local build. A fix that lands only in logic.js would leave production
-     importing colleagues exactly as before. */
+     importing colleagues exactly as before.
+
+     These are source assertions, not behaviour: the suite is deliberately
+     dependency-free and cannot execute TypeScript, so parse.ts is never run
+     here. The behaviour is covered against its twin in logic.js above. */
   const parse = fs.readFileSync(
     path.join(__dirname, 'supabase', 'functions', '_shared', 'parse.ts'), 'utf8');
   assert.ok(/export function matchesCalendarFilter\([\s\S]{0,200}ownerEmail\?: string/.test(parse),
@@ -8768,51 +8885,32 @@ test('the Edge Function passes the calendar owner through', () => {
     'clientFromGCalEvent calls the filter without the owner, so the event is '
       + 'still admitted even though the contact would be dropped');
 
-  /* The logic itself, line by line.
+  /* Both exclusions, now in the one list both decisions ask.
 
-     These are source assertions, not behaviour: the suite is deliberately
-     dependency-free and cannot execute TypeScript, so parse.ts is never run
-     here. The behaviour is covered against its twin in logic.js above, which
-     has the same two rules. Checking only the signatures was not enough —
-     deleting either rule left every signature intact and the tests green. */
-  const attendeeBranch = parse.slice(parse.indexOf("if (f.mode === 'attendees')"),
-                                     parse.indexOf('for (const term of f.include'));
-  assert.ok(/const owner = internalDomain\(ownerEmail\)/.test(attendeeBranch),
-    'attendees mode no longer works out the calendar owner\u2019s domain');
-  assert.ok(/if \(owner && d === owner\) continue;/.test(attendeeBranch),
-    'attendees mode no longer skips the owner\u2019s own colleagues, so an '
+     They used to be asserted twice because the code said them twice: once in
+     the attendee branch and once in the contact picker. That duplication is
+     the bug this file now exists to prevent -- the two copies disagreed, and
+     an event imported on the strength of a guest the picker then dropped. */
+  const cands = parse.slice(parse.indexOf('export function contactCandidates'),
+                            parse.indexOf('export function matchesCalendarFilter'));
+  assert.ok(cands.length > 100, 'contactCandidates is gone from parse.ts');
+  assert.ok(/const ownerDomain = internalDomain\(ownerEmail\)/.test(cands),
+    'the shared list no longer works out the calendar owner\u2019s domain');
+  assert.ok(/!ownerDomain \|\| domainOf\(e\) !== ownerDomain/.test(cands),
+    'the shared list no longer excludes the owner\u2019s own colleagues, so an '
       + 'internal meeting organised from a personal inbox imports as a booking');
-  assert.ok(/if \(organizer && d === organizer\) continue;/.test(attendeeBranch),
-    'attendees mode no longer skips the organizer\u2019s colleagues');
+  assert.ok(/!organizerDomain \|\| domainOf\(e\) !== organizerDomain/.test(cands),
+    'the shared list no longer excludes the organizer\u2019s colleagues');
+  assert.ok(/e !== organizerSelf/.test(cands),
+    'the organizer is a candidate contact again, which is what made their '
+      + 'mere presence import an internal meeting');
 
-  const picker = parse.slice(parse.indexOf('export function clientFromGCalEvent'));
-  assert.ok(/const ownerDomain = internalDomain\(ownerEmail\)/.test(picker),
-    'the contact picker no longer knows the owner\u2019s domain');
-  assert.ok(/!ownerDomain \|\| domainOf\(e\) !== ownerDomain/.test(picker),
-    'the contact picker no longer excludes the owner\u2019s colleagues, so a '
-      + 'teammate is saved as the customer and the follow-up goes to them');
-  assert.ok(/e !== organizerSelf && e !== ownerSelf/.test(picker),
-    'the contact picker no longer excludes the owner\u2019s own address');
-  const sync = fs.readFileSync(
-    path.join(__dirname, 'supabase', 'functions', 'google-calendar-sync', 'index.ts'), 'utf8');
-  assert.ok(/clientFromGCalEvent\(ev, calendarFilter, conn\.calendar_id\)/.test(sync),
-    'the sync does not pass the calendar being synced, so the parser has no '
-      + 'owner to compare against and the fix is inert in production');
+  // And both decisions must actually ask it, or the duplication is back.
+  assert.ok(/return contactCandidates\(ev, ownerEmail\)\.length > 0;/.test(parse),
+    'attendee mode decides for itself again instead of asking the shared list');
+  assert.ok(/const emails = contactCandidates\(ev, ownerEmail\);/.test(parse),
+    'the contact picker builds its own list again');
 });
-
-console.log('\n--- a second manager ---');
-
-/* Asked for: the actual sales manager should be able to use the manager role
-   too. The policies already allowed it — user_managed_org_ids accepts
-   ('owner','admin') and nothing assumed one of them — so the gap was only
-   that role lived in the database and every change was a hand-written UPDATE.
-
-   The thing worth defending is lockout. An organisation with no manager
-   cannot recover from inside the product: nobody can invite, nobody can
-   appoint, the team view belongs to nobody. The guard is NOT a count of
-   remaining managers, which races with a second manager doing the same thing.
-   It is that nobody may change their OWN role, so a demotion always leaves
-   its author in place. */
 
 test('the role rules live in the database, not in the button', () => {
   const dir = path.join(__dirname, 'supabase', 'migrations');
@@ -9686,11 +9784,24 @@ function tmRow(name, opts){
 /* todayUntouched is DERIVED inside teamMemberState from upcomingList, not
    passed in — so a fixture has to supply real appointments later today with
    nothing sent against them, or it silently measures zero. */
+/* Both the appointments and "now" are pinned to local noon and 1pm, rather
+   than taken from the clock.
+
+   This used to build them at 23:00 local with the note "still today, still
+   ahead of now". That is only true before 23:00: teamMemberState counts an
+   appointment as today when it is between `at` and local end of day, so from
+   23:00 onwards the fixture's calls were in the PAST and the count came back
+   0 instead of 14. It failed in Asia/Tokyo purely because the suite happened
+   to be run at 23:38 JST, and would have failed in any zone during that last
+   hour -- a test that passes depending on what time of day it runs is a test
+   that will eventually accuse working code. */
+const NOON_TODAY = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d; })();
+
 function callsLaterToday(n){
   const out = [];
   for(let i = 0; i < n; i++){
-    const when = new Date();
-    when.setHours(23, 0, 0, 0);          // still today, still ahead of now
+    const when = new Date(NOON_TODAY);
+    when.setHours(13, 0, 0, 0);          // after NOON_TODAY, before midnight
     out.push({clientId: 'x' + i, name: 'C' + i, when: when.toISOString(),
               status: 'Booked', sent: 0});
   }
@@ -9698,7 +9809,8 @@ function callsLaterToday(n){
 }
 
 test('a call today with nothing sent counts whoever owns it', () => {
-  const now = new Date();
+  // Pinned, not the wall clock -- see NOON_TODAY above.
+  const now = NOON_TODAY;
   // One person working their list, three who have never sent anything.
   const rows = [
     tmRow('Working', {sentEver: 50, sent7d: 10, lastSentAt: now.getTime(),
