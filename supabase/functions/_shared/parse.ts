@@ -212,15 +212,30 @@ const ROLE_MAILBOXES = new Set([
   'postmaster', 'abuse', 'notifications', 'reply', 'do_not_reply',
 ]);
 const NAME_PART_MAX = 14;
+/* A single run-together local part is a handle more often than a name.
+
+   "Marinosarahk" is what the 14-character cap produced from
+   marinosarahk@gmail.com on a live calendar, having been described one commit
+   earlier as refusing "anything it cannot be confident about". It is not a
+   wrong name so much as not a name at all, and "Hey Marinosarahk," is exactly
+   the mail-merge read this was meant to avoid.
+
+   Separated parts keep the longer cap, because john.smith@ tells you where
+   the words end and marinosarahk@ does not. Ten is a judgement, not a
+   measurement: it refuses Christopher along with Marinosarahk, and refusing
+   is the safe direction -- an unnamed contact gets the neutral greeting and
+   waits for a human, which is a floor, while a bad one goes out repeatedly. */
+const NAME_SINGLE_MAX = 10;
 
 export function nameFromEmail(email?: string): string {
   const lp = String(email == null ? '' : email).split('@')[0].trim().toLowerCase();
   if (!lp) return '';
   const parts = lp.split(/[._\-+]+/).filter((x) => x);
   if (!parts.length || parts.length > 3) return '';
+  const cap = parts.length === 1 ? NAME_SINGLE_MAX : NAME_PART_MAX;
   for (const part of parts) {
     if (!/^[a-z]+$/.test(part)) return '';
-    if (part.length < 2 || part.length > NAME_PART_MAX) return '';
+    if (part.length < 2 || part.length > cap) return '';
     if (ROLE_MAILBOXES.has(part)) return '';
   }
   return parts.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');

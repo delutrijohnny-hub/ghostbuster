@@ -5332,6 +5332,8 @@ test('and it refuses rather than inventing one', () => {
     'sales@acme.com': 'a role, not a person',
     'bookings@acme.com': 'a role, not a person',
     'a@b.com': 'a single letter',
+    'marinosarahk@gmail.com': 'a run-together handle, not a name',
+    'andreagouldrealtor@gmail.com': 'a name with a job title stuck to it',
     'john.paul.george.ringo@x.com': 'four parts is a system address, not a name',
     '': 'nothing at all',
   };
@@ -5341,6 +5343,28 @@ test('and it refuses rather than inventing one', () => {
   }
   assert.strictEqual(GB.nameFromEmail(null), '');
   assert.strictEqual(GB.nameFromEmail(undefined), '');
+});
+
+test('a run-together local part is refused, even though it is all letters', () => {
+  /* Found in live data one commit after this function was described as
+     refusing "anything it cannot be confident about": the 14-character cap
+     turned marinosarahk@gmail.com into "Marinosarahk" and put it in a text.
+     Not a wrong name so much as not a name -- and exactly the mail-merge
+     read the function exists to avoid.
+
+     A single part now gets a tighter cap than a separated one, because
+     john.smith@ says where the words end and marinosarahk@ does not. */
+  assert.strictEqual(GB.nameFromEmail('marinosarahk@gmail.com'), '');
+  assert.strictEqual(GB.nameFromEmail('andreagouldrealtor@gmail.com'), '');
+
+  // It costs real names too, and that is the accepted side of the trade:
+  // unnamed gets the neutral greeting, which is a floor rather than a wrong.
+  assert.strictEqual(GB.nameFromEmail('christopher@acme.com'), '',
+    'the tighter single-part cap is not being applied');
+
+  // Separated parts keep the longer cap, so this must still work.
+  assert.strictEqual(GB.nameFromEmail('christopher.jones@acme.com'), 'Christopher Jones');
+  assert.strictEqual(GB.nameFromEmail('brian@nevadagroup.com'), 'Brian');
 });
 
 test('a refused address leaves the contact unnamed, not half-named', () => {
