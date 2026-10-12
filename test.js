@@ -5444,6 +5444,24 @@ test('the app lives at /app and the landing page owns the root', () => {
   }
   assert.ok(!landing.includes('id="app-root"'), 'index.html should be the landing page, not the app');
   assert.ok(landing.includes('href="/app"'), 'the landing page must link to the app');
+
+  /* Terms exists, and is not linked while it still has blanks in it.
+
+     A public legal page reading "[STATE — to be completed]" is worse than no
+     page: it tells a prospective customer the operator has not finished
+     thinking about what they are agreeing to. The file is written and
+     reachable by URL; the footer link waits for the two placeholders. */
+  const terms = fs.readFileSync(path.join(__dirname, 'hosted', 'terms.html'), 'utf8');
+  const unfilled = /\[(STATE|COUNTY)[^\]]*\]/.test(terms);
+  assert.ok(/Limitation of liability/.test(terms) && /Messaging, consent and the law/.test(terms),
+    'terms.html is missing sections it should not ship without');
+  if (unfilled) {
+    assert.ok(!/href="\/terms"/.test(landing),
+      'the landing page links Terms while it still contains [STATE] / [COUNTY] placeholders');
+  } else {
+    assert.ok(/href="\/terms"/.test(landing),
+      'Terms is complete but nothing links to it, so nobody can find it');
+  }
 });
 
 test('cleanUrls is configured, or /app 404s in production', () => {
