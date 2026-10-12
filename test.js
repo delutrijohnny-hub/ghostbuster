@@ -4965,6 +4965,36 @@ console.log('\n--- the cadence is editable, per industry ---');
     assert.strictEqual(GB.cadenceTriggerChoice('repeat_while_role'), null);
   });
 
+  test('the editor is usable on a phone, not just present', () => {
+    /* Asked for after the fact and it was right to ask: on a 375px screen
+       the six controls shared one flex line and the two dropdowns came out
+       about 50px wide, reading "W" and "as" where they should read "Welcome"
+       and "as soon as they come in". The row was there and told you nothing.
+
+       A source test, and honest about it -- the suite cannot run CSS. What
+       it pins is that the rule exists, covers both selects, and sits at a
+       breakpoint wide enough to matter. The measuring was done in a browser:
+       at 600px "shortly before the appointment" had 101px of box for 182px
+       of text, and clean at 860. A <select> truncates rather than overflows,
+       so nothing in the DOM reports this -- scrollWidth says it fits. */
+    const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+    const m = html.match(/@media \(max-width: (\d+)px\)\{([\s\S]*?)\n\}/g) || [];
+    const block = m.filter(b => /\.cad-row/.test(b))[0];
+    assert.ok(block, 'the cadence rows have no narrow-screen layout at all');
+
+    const width = parseInt(block.match(/max-width: (\d+)px/)[1], 10);
+    assert.ok(width >= 820,
+      'the breakpoint is ' + width + 'px, but the row was still clipping at 600px '
+        + '-- measured in a browser, not guessed');
+
+    // Both selects must get their own line, or one of them stays unreadable.
+    assert.ok(/\.cad-row > select\{[^}]*flex:\s*1 1 100%/.test(block),
+      'the dropdowns still share a line on a narrow screen');
+    // And the spacer must not survive into a wrapped layout as a blank line.
+    assert.ok(/\.cad-row > \.cad-num-gap\{[^}]*display:\s*none/.test(block),
+      'the desktop spacer leaves an empty row on a phone');
+  });
+
   test('there is a way in that names what it is', () => {
     /* Reported, not imagined: "i still dont see where i can cutomize my
        touches". The editor had shipped and was live, three sections into a
@@ -6225,6 +6255,137 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   const label = GB.interactionLabel(GB.lastInteraction(c, new Date()));
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
+
+console.log('\n--- what the shared learning actually records ---');
+
+{
+  /* A context whose pooled RPC is a spy, so what would have been sent to
+     Supabase can be asserted. The real one fires and forgets. */
+  const ctxWithSpy = () => {
+    const ctx = makeHostedCtx();
+    vm.runInContext(`
+      POOLED_CALLS = [];
+      GB_SUPABASE.rpc = function(name, args){
+        POOLED_CALLS.push(args.p_stage + '/' + args.p_variant_key + ' ' +
+                          args.p_field + ' ' + (args.p_delta === undefined ? 1 : args.p_delta));
+        return {then: function(cb){ cb({error:null}); return {catch:function(){}}; }};
+      };
+      STATE = buildDefaultState();
+      STATE.poolsLearning = true;
+      STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Booked',
+        bookedDate: new Date(Date.now()-10*86400000).toISOString(),
+        callDateTime: new Date(Date.now()+2*86400000).toISOString()});
+      var vid = STATE.variants.welcome[0].id;
+      STATE.clients['c1'].messageLog.push({id:'m1', stage:'welcome', variantId:vid,
+        text:'x', sentAt:new Date().toISOString(), responded:false, respondedAt:null,
+        reviewed:false, channel:'sms'});
+    `, ctx);
+    return ctx;
+  };
+  /* Pulled across as JSON. An array returned straight out of the vm realm
+     has that realm's Array prototype, so deepStrictEqual reports "same
+     structure but not reference-equal" and the test fails on something that
+     has nothing to do with the code under test. */
+  const calls = (ctx) => JSON.parse(vm.runInContext('JSON.stringify(POOLED_CALLS)', ctx));
+
+  test('a send does not enter the shared denominator until it is reviewed', () => {
+    /* The second of the two faults that emptied the pooled table. Sends were
+       counted when the message went out and responses when somebody reviewed
+       it, so every unreviewed send sat in the denominator with no chance of
+       ever reaching the numerator.
+
+       markSent's own comment refuses to make this mistake for per-account
+       stats -- "an unreviewed send is simply absent from the math instead of
+       being counted as a failure" -- and it was made one layer out. */
+    const ctx = ctxWithSpy();
+    vm.runInContext("doMarkSent('c1', 'welcome');", ctx);
+    assert.deepStrictEqual(calls(ctx), [],
+      'sending a message moved the shared numbers before anyone reviewed it');
+  });
+
+  test('reviewing records the send and the reply together', () => {
+    const ctx = ctxWithSpy();
+    vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
+    const got = calls(ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    assert.deepStrictEqual(got,
+      ['welcome/' + vid + ' sends 1', 'welcome/' + vid + ' responses 1'],
+      'got: ' + JSON.stringify(got));
+  });
+
+  test('a reviewed no-reply counts the send and nothing else', () => {
+    // The case that has to be counted, not skipped: a message that got no
+    // answer is evidence, and it is the denominator.
+    const ctx = ctxWithSpy();
+    vm.runInContext("doReviewMessage('c1', 0, false);", ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    assert.deepStrictEqual(calls(ctx), ['welcome/' + vid + ' sends 1']);
+  });
+
+  test('the buttons people actually press go through it', () => {
+    /* The first fault. "replied" and "no reply" called reviewMessage
+       directly and touched the pooled table not at all, so across 370
+       recorded sends it held zero responses -- every builtin scored
+       (0+1)/(sends+2), which is not a bandit but a counter that prefers
+       whatever has been used least. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const sw = app.slice(app.indexOf("case 'review-replied':"), app.indexOf("case 'toggle-recent-sends'"));
+    assert.ok(/doReviewMessage\(cid, parseInt\(target\.getAttribute\('data-idx'\),10\), true\)/.test(sw),
+      '"replied" does not record a pooled response');
+    assert.ok(/doReviewMessage\(cid, parseInt\(target\.getAttribute\('data-idx'\),10\), false\)/.test(sw),
+      '"no reply" does not record a pooled send');
+    assert.ok(!/reviewMessage\(STATE,/.test(sw),
+      'a review path still bypasses the pooled accounting');
+  });
+
+  test('changing your mind adjusts the reply, not the send', () => {
+    const ctx = ctxWithSpy();
+    vm.runInContext("doReviewMessage('c1', 0, false); POOLED_CALLS = [];", ctx);
+    vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    assert.deepStrictEqual(calls(ctx), ['welcome/' + vid + ' responses 1'],
+      'a second review counted the send twice');
+    vm.runInContext("POOLED_CALLS = []; doReviewMessage('c1', 0, false);", ctx);
+    assert.deepStrictEqual(calls(ctx), ['welcome/' + vid + ' responses -1'],
+      'unticking a reply never comes back out of the shared numbers');
+  });
+
+  test('re-confirming the same answer changes nothing', () => {
+    // Clicking "replied" twice is not two replies.
+    const ctx = ctxWithSpy();
+    vm.runInContext("doReviewMessage('c1', 0, true); POOLED_CALLS = [];", ctx);
+    vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
+    assert.deepStrictEqual(calls(ctx), []);
+  });
+
+  test('the per-account numbers agree with what was pooled', () => {
+    /* The two tables are read as interchangeable -- loadState overwrites one
+       with the other -- so they have to be counting the same events. */
+    const ctx = ctxWithSpy();
+    vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    const own = vm.runInContext('JSON.stringify(STATE.variantStats.welcome[' + JSON.stringify(vid) + '])', ctx);
+    assert.deepStrictEqual(JSON.parse(own), {sends: 1, responses: 1},
+      'per-account says ' + own + ' while the pooled table was sent sends 1 / responses 1');
+  });
+
+  test('a hand-edited message contributes to neither', () => {
+    // 'custom' is nobody's template; crediting it would attribute a reply to
+    // copy that was never sent.
+    const ctx = ctxWithSpy();
+    vm.runInContext("STATE.clients['c1'].messageLog[0].variantId = 'custom';", ctx);
+    vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
+    assert.deepStrictEqual(calls(ctx), []);
+  });
+
+  test('an account that has not opted in moves nothing', () => {
+    const ctx = ctxWithSpy();
+    vm.runInContext("STATE.poolsLearning = false; doReviewMessage('c1', 0, true);", ctx);
+    assert.deepStrictEqual(calls(ctx), [],
+      'an account that never logs replies is dragging the shared numbers down');
+  });
+}
 
 console.log('\n--- the copy does not assume one industry ---');
 

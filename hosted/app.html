@@ -691,6 +691,53 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 /* Two seconds of highlight on the section you asked for, so arriving three
    sections into a long modal does not look like arriving at the top of it. */
 .build-stamp{margin-top:10px;text-align:right;font-size:10.5px;color:var(--muted);opacity:.7;}
+
+/* Settings rows on a narrow screen.
+
+   A touch row carries six controls, and a flex row shares the slack between
+   the two selects -- which on a 375px phone left them about 50px wide,
+   reading "W" and "as" where they should read "Welcome" and "as soon as they
+   come in". The row was technically present and genuinely unusable: you
+   could not tell which message a touch sent or when it fired.
+
+   So below the breakpoint the row wraps into bands instead of competing for
+   one line: what it sends, when it fires, and what you can do to it. Same
+   markup and the same controls -- a narrow screen gets a different shape,
+   not a cut-down version with pieces missing.
+
+   860px, not the 560 this started at. Measured rather than guessed: at 600px
+   "shortly before the appointment" had 101px of box for 182px of text, and a
+   <select> truncates rather than overflows, so nothing about the element
+   reports that it is unreadable -- scrollWidth says it fits. Comparing the
+   rendered label against the usable width is the only check that catches it.
+   Clean at 860, clipped at 600, so the line stacks below 860 and a laptop in
+   a half-width window is readable. Erring high on purpose: a tall row costs
+   a scroll, an unreadable one costs the feature. */
+@media (max-width: 860px){
+  .stage-row{flex-wrap:wrap;row-gap:6px;}
+  /* Pipeline rows: the stage name gets its own line, the role and the
+     buttons share the next one. */
+  .stage-row > input[type="text"]{flex:1 1 100%;order:1;}
+  .stage-row > select{flex:1 1 auto;order:2;}
+  .stage-row > button{order:3;}
+
+  /* Cadence rows: each select gets a full line, so both are readable. */
+  .cad-row > select{flex:1 1 100%;min-width:0;}
+  .cad-row > select[data-action="set-step-stage"]{order:1;}
+  .cad-row > select[data-action="set-step-trigger"]{order:2;}
+  .cad-row > .cad-num{order:3;flex:0 0 72px;width:72px;}
+  .cad-row > .cad-unit{order:4;margin-right:auto;}
+  /* The spacer is only there to stop desktop rows jumping width; on a
+     wrapped layout it would add an empty line. */
+  .cad-row > .cad-num-gap{display:none;}
+  .cad-row > button{order:5;}
+  /* Touch targets, not 20px squares: these sit next to a destructive ✕. */
+  .cad-row > button, .stage-row > button{min-width:40px;min-height:36px;}
+
+  .cad-row > .grip{order:0;flex:0 0 auto;}
+  .cad-row > .cad-fixed{flex:1 1 100%;order:1;}
+  .cad-row > .cad-every{order:2;}
+}
 .set-section.set-landed{animation:setLanded 2s ease-out;}
 @keyframes setLanded{
   0%,60%{box-shadow:0 0 0 2px var(--accent);border-radius:var(--radius-sm);}
@@ -1441,9 +1488,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261012-0443391"></script>
-<script src="data.js?v=20261012-0443391"></script>
-<script src="app.js?v=20261012-0443391"></script>
-<script src="auth.js?v=20261012-0443391"></script>
+<script src="logic.js?v=20261012-d415065b"></script>
+<script src="data.js?v=20261012-d415065b"></script>
+<script src="app.js?v=20261012-d415065b"></script>
+<script src="auth.js?v=20261012-d415065b"></script>
 </body>
 </html>

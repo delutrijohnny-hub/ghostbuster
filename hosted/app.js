@@ -3539,7 +3539,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-0443391';
+var BUILD_STAMP = '20261012-d415065b';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4652,11 +4652,11 @@ document.addEventListener('click', function(ev){
       renderGhostToday();
       break;
     case 'review-replied':
-      reviewMessage(STATE, cid, parseInt(target.getAttribute('data-idx'),10), true);
+      doReviewMessage(cid, parseInt(target.getAttribute('data-idx'),10), true);
       renderAll();
       break;
     case 'review-silent':
-      reviewMessage(STATE, cid, parseInt(target.getAttribute('data-idx'),10), false);
+      doReviewMessage(cid, parseInt(target.getAttribute('data-idx'),10), false);
       renderAll();
       break;
     case 'toggle-recent-sends':
@@ -5263,14 +5263,65 @@ function pooledIncrementIfBuiltin(stage, variantId, field, delta){
     .then(function(res){ if(res.error) console.error('pooled stat increment failed', res.error); });
 }
 
-// toggleReplied() can flip a reply mark back off (checked by mistake) — the
-// pooled table needs the matching -1 in that case, or it drifts out of sync
-// with the real per-message state forever.
+/* Every route that reviews a message, and the only place pooled numbers move.
+
+   The pooled table held 370 sends and zero responses -- every row, across
+   every variant, while the real reply rates ran 6% to 43%. Two separate
+   faults produced that, and either alone would have been enough:
+
+     1. Replies were recorded only here, from the old checkbox. The buttons
+        people actually press -- "replied" and "no reply" -- called
+        reviewMessage directly and touched nothing. So responses never moved.
+     2. Sends were counted at SEND time, by doMarkSent and markSentOnChannel,
+        while responses were counted at review time. Mismatched denominators:
+        the pooled rate was diluted by every message nobody had got to yet.
+
+   The second is the mistake markSent's own comment describes and refuses to
+   make for per-account stats -- "an unreviewed send is simply absent from the
+   math instead of being counted as a failure" -- reintroduced one layer out.
+
+   The damage was not cosmetic. This account is the only one with pooled
+   learning on, and loadState OVERWRITES its per-account stats with the
+   pooled rows, so pickVariant was scoring every builtin message at
+   (0+1)/(sends+2). That is not a bandit; it is a counter that prefers
+   whatever has been used least. It had not been learning for as long as the
+   pooled table has existed.
+
+   So: one helper, mirroring reviewMessage's own accounting exactly. A send
+   enters the pooled denominator at the same moment it enters the per-account
+   one, and never before. */
+function doReviewMessage(cid, idx, didReply){
+  var client = STATE.clients[cid];
+  var msg = client && client.messageLog[idx];
+  if(!msg) return;
+  // Read BEFORE reviewMessage mutates the row, or "was this already
+  // reviewed" is always true and a first review never counts its send.
+  var wasReviewed = !!msg.reviewed;
+  var wasReplied = !!msg.responded;
+
+  reviewMessage(STATE, cid, idx, didReply);
+
+  /* No 'custom' check here: pooledIncrementIfBuiltin already refuses any
+     variant that is not in this account's list and flagged builtin, and
+     'custom' is in neither. A second guard would read as load-bearing while
+     being impossible to fail -- mutation proved it. */
+  if(!wasReviewed){
+    pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'sends');
+    if(didReply) pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses');
+  } else if(didReply !== wasReplied){
+    // Changed their mind. The pooled table needs the matching ±1 or it
+    // drifts from the per-message truth forever.
+    pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses', didReply ? 1 : -1);
+  }
+}
+
+// The old checkbox: ticking means "yes they replied", unticking "no". Routed
+// through the same helper so it cannot drift from the buttons.
 function doToggleReplied(cid, idx){
   var client = STATE.clients[cid];
   var msg = client && client.messageLog[idx];
-  toggleReplied(STATE, cid, idx);
-  if(msg && msg.variantId !== 'custom') pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses', msg.responded ? 1 : -1);
+  if(!msg) return;
+  doReviewMessage(cid, idx, !msg.responded);
 }
 
 /* Records a send on a specific channel.
@@ -5366,9 +5417,10 @@ function markSentOnChannel(cid, stage, text, channel){
     logged.channel = channel || 'sms';
     // Only SMS templates carry the shared bandit stats. Crediting an email
     // send to an SMS variant would make both numbers meaningless.
-    if(channel !== 'email' && logged.variantId !== 'custom'){
-      pooledIncrementIfBuiltin(stage, logged.variantId, 'sends');
-    }
+    /* No pooled 'sends' here. It is counted when the message is reviewed,
+       alongside the per-account one -- see doReviewMessage. Counting it now
+       put every unreviewed send in the denominator and none of them in the
+       numerator. */
   }
   saveState(STATE);
 }
@@ -5380,8 +5432,8 @@ function doMarkSent(cid, stage, deferRender){
   if(!client) return;
   var text = getCardText(STATE, client, stage);
   markSent(STATE, cid, stage, text);   // persists; saveState lives in markSent
-  var logged = client.messageLog[client.messageLog.length - 1];
-  if(logged && logged.variantId !== 'custom') pooledIncrementIfBuiltin(stage, logged.variantId, 'sends');
+  // No pooled 'sends' here either: it is counted at review time, with the
+  // per-account one. See doReviewMessage.
   /* Re-rendering can be deferred, but the save above never is.
 
      renderAll() rebuilds the morning list and removes the <a> that was just
