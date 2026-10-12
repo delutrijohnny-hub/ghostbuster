@@ -67,6 +67,9 @@ function buildDefaultPipeline(){
    Stripe's own status words are stored and read verbatim rather than mapped
    to ours, because mapping means guessing at states Stripe adds later. */
 var BILLING_GRACE_DAYS = 7;
+// 14 days, no card. Kept here as well as in the database trigger so the
+// copy the customer reads and the clock they are on cannot disagree.
+var TRIAL_DAYS = 14;
 
 /* The rule that matters most here is the one about not knowing.
 
@@ -99,7 +102,13 @@ function subscriptionState(sub, memberCount, now){
 
   var st = String(sub.status);
   var seatsPaid = Math.max(0, Number(sub.seats) || 0);
-  var periodEnd = sub.currentPeriodEnd ? Date.parse(sub.currentPeriodEnd) : NaN;
+  /* A no-card trial has no Stripe period, because there is no Stripe
+     subscription yet -- nothing to charge means nothing to create. The
+     trial's clock is trialEndsAt, written by the database when the
+     organization was made. A Stripe trial sets both, and trialEndsAt is the
+     one that means "the trial", so it wins for a trialing row. */
+  var endsAt = (st === 'trialing' && sub.trialEndsAt) ? sub.trialEndsAt : sub.currentPeriodEnd;
+  var periodEnd = endsAt ? Date.parse(endsAt) : NaN;
   var daysLeft = isNaN(periodEnd) ? null
     : Math.ceil((periodEnd - now.getTime()) / 86400000);
   var extra = {seatsPaid: seatsPaid,
@@ -6371,6 +6380,7 @@ var __LOGIC_EXPORTS__ = {
   defaultOpenStage: defaultOpenStage,
   READ_ONLY_BLOCKED_ACTIONS: READ_ONLY_BLOCKED_ACTIONS,
   isReadOnlyBlocked: isReadOnlyBlocked,
+  TRIAL_DAYS: TRIAL_DAYS,
   billingAllowsWrite: billingAllowsWrite,
   subscriptionState: subscriptionState,
   canManageBilling: canManageBilling,

@@ -6213,6 +6213,47 @@ console.log('\n--- billing: what a subscription means for the people in front of
     assert.strictEqual(GB.canManageBilling('Owner'), false, 'role matching is exact');
   });
 
+  test('a no-card trial runs off its own clock, not Stripe\u2019s', () => {
+    /* No card means no Stripe subscription during the trial: there is
+       nothing to charge and no payment method to attach, so there is no
+       currentPeriodEnd to read. The clock is trialEndsAt, written by the
+       database when the organization was created. Reading the wrong field
+       gives daysLeft null, which reads as "trial in progress" forever. */
+    const s = GB.subscriptionState(
+      {status: 'trialing', seats: 0, trialEndsAt: days(14)}, 3);
+    assert.strictEqual(s.daysLeft, 14, 'the trial clock was not read');
+    assert.strictEqual(s.mode, 'full');
+    assert.ok(/14 days left/.test(s.detail), s.detail);
+
+    // Ended, by its own clock, with no Stripe row to say so.
+    const over = GB.subscriptionState(
+      {status: 'trialing', seats: 0, trialEndsAt: days(-1)}, 3);
+    assert.strictEqual(over.mode, 'read_only');
+
+    /* A Stripe trial sets both fields. trialEndsAt is the one that means
+       "the trial", so it wins -- otherwise a Stripe trial would be judged
+       by the billing period around it. */
+    const both = GB.subscriptionState(
+      {status: 'trialing', seats: 5, trialEndsAt: days(-1), currentPeriodEnd: days(20)}, 3);
+    assert.strictEqual(both.mode, 'read_only',
+      'the billing period overrode the trial end');
+  });
+
+  test('the trial length is one number, not two', () => {
+    // The database trigger grants 14 days and the copy says 14 days. Kept in
+    // step deliberately: a customer counting down from a different number
+    // than the one enforcing it is a support ticket.
+    assert.strictEqual(GB.TRIAL_DAYS, 14);
+    const sql = fs.readdirSync(path.join(__dirname, 'supabase', 'migrations'))
+      .filter(f => /trial/.test(f))
+      .map(f => fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', f), 'utf8'))
+      .join('\n');
+    if (sql) {
+      assert.ok(new RegExp("interval '" + GB.TRIAL_DAYS + " days'").test(sql),
+        'the migration grants a different number of days than TRIAL_DAYS says');
+    }
+  });
+
   test('an ended trial drops to read-only', () => {
     /* The thing that was asked for, stated on its own. A trial whose last
        day has passed stops being a trial, whether or not Stripe has caught
