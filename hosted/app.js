@@ -3534,7 +3534,14 @@ function applyOnboarding(){
    matters. The send-email Edge Function is untouched and still works if a
    provider route is ever wanted again. */
 
-function openSettingsModal(){
+/* Which settings section to scroll to once the modal is up.
+
+   Null for the ordinary "Business settings" route, which should open at the
+   top as it always has. */
+var SETTINGS_FOCUS = null;
+
+function openSettingsModal(focusSection){
+  SETTINGS_FOCUS = focusSection || null;
   // Edited against a draft, not live state: a half-finished pipeline (a stage
   // mid-rename, a blank row) would otherwise be what computeDue sees on the
   // next render.
@@ -3637,7 +3644,7 @@ function renderSettingsModal(){
        what was missing was a way to reach it. The trigger vocabulary is a
        closed set from logic.js, so the form cannot offer a trigger the
        evaluator does not implement -- one that would silently never fire. */
-    '<div class="set-section"><h3>Follow-up cadence</h3>' +
+    '<div class="set-section" id="set-cadence"><h3>Follow-up cadence</h3>' +
     '<div class="hint">How many times Ghost Recall chases, and when. ' +
       'Removing a touch stops it firing; its message templates stay put, so ' +
       'nothing is lost if you add it back. Order sets the numbering you see on ' +
@@ -3857,6 +3864,28 @@ function renderSettingsModal(){
     '</div>',
     true
   );
+
+  /* Land on the section that was asked for.
+
+     The cadence editor sits three sections into a long modal reached from a
+     menu item called "Business settings" -- which is how the first person
+     who went looking for it did not find it. Opening the modal at the top
+     and hoping is the same miss again.
+
+     Cleared once used, so a later Save-and-reopen behaves normally; and the
+     scroll runs after paint, since the element does not exist until
+     openModalHtml has written it. */
+  if(SETTINGS_FOCUS === 'cadence'){
+    SETTINGS_FOCUS = null;
+    setTimeout(function(){
+      var sec = el('set-cadence');
+      if(!sec) return;
+      if(sec.scrollIntoView) sec.scrollIntoView({block:'start'});
+      // Briefly marked, so it is obvious which of ten sections you landed on.
+      sec.classList.add('set-landed');
+      setTimeout(function(){ sec.classList.remove('set-landed'); }, 2000);
+    }, 0);
+  }
 }
 
 /* A step copied deeply enough that editing the draft cannot reach the
@@ -4232,6 +4261,10 @@ document.addEventListener('click', function(ev){
     }
     case 'open-settings':
       openSettingsModal();
+      break;
+    case 'open-cadence':
+      el('overflow-menu').classList.add('hidden');
+      openSettingsModal('cadence');
       break;
     case 'add-stage':
       SETTINGS_DRAFT.pipeline.push({key:'', label:'', role:'open'});

@@ -688,6 +688,13 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .cad-row .cad-fixed{flex:1 1 0;min-width:0;font-size:12.5px;}
 .cad-row .cad-every{flex:0 0 auto;font-size:11.5px;color:var(--muted);}
 .cad-sub{margin:12px 0 6px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+/* Two seconds of highlight on the section you asked for, so arriving three
+   sections into a long modal does not look like arriving at the top of it. */
+.set-section.set-landed{animation:setLanded 2s ease-out;}
+@keyframes setLanded{
+  0%,60%{box-shadow:0 0 0 2px var(--accent);border-radius:var(--radius-sm);}
+  100%{box-shadow:0 0 0 2px transparent;border-radius:var(--radius-sm);}
+}
 .stage-row .grip{color:var(--ink-faint);font-size:12px;width:16px;text-align:center;}
 .stage-row button{flex:0 0 auto;padding:5px 9px;font-size:12px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;}
 .stage-row button:hover{border-color:var(--red);color:var(--red);}
@@ -1215,6 +1222,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <button class="btn" data-action="toggle-menu">⋯ Menu</button>
     <div class="menu-dropdown hidden" id="overflow-menu">
       <button data-action="open-settings">⚙ Business settings</button>
+      <!-- Named separately because "Business settings" says nothing about
+           follow-up timing. The cadence editor shipped inside that modal,
+           three sections down, and the first person to go looking for it
+           could not find it. -->
+      <button data-action="open-cadence">↻ Follow-up cadence</button>
       <button data-action="sync-calendar-now">Sync calendar now</button>
       <button data-action="connect-calendar" data-priority="0" data-label="Market Maker">Connect Market Maker calendar</button>
       <button data-action="connect-calendar" data-priority="1" data-label="Personal">Connect personal calendar</button>

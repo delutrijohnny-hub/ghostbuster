@@ -4965,6 +4965,45 @@ console.log('\n--- the cadence is editable, per industry ---');
     assert.strictEqual(GB.cadenceTriggerChoice('repeat_while_role'), null);
   });
 
+  test('there is a way in that names what it is', () => {
+    /* Reported, not imagined: "i still dont see where i can cutomize my
+       touches". The editor had shipped and was live, three sections into a
+       modal behind a menu item called "Business settings" -- which says
+       nothing about follow-up timing. A feature nobody can find is a feature
+       nobody has.
+
+       The same mistake this codebase already made once with the industry
+       templates, which were reachable only from an onboarding wizard that
+       never came back. */
+    const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+    assert.ok(/data-action="open-cadence"/.test(html),
+      'nothing in the menu leads to the cadence editor');
+    const entry = html.slice(html.indexOf('data-action="open-cadence"'),
+                             html.indexOf('data-action="open-cadence"') + 120);
+    assert.ok(/cadence|follow-up/i.test(entry),
+      'the menu entry does not say what it opens: ' + entry);
+
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(/case 'open-cadence':/.test(app), 'the menu entry is not wired up');
+    assert.ok(/openSettingsModal\('cadence'\)/.test(app),
+      'it opens settings without asking for the cadence section');
+    assert.ok(/id="set-cadence"/.test(app),
+      'the cadence section has no anchor to scroll to');
+    assert.ok(/scrollIntoView/.test(app.slice(app.indexOf('function renderSettingsModal'))),
+      'nothing scrolls to it, so it opens at the top of a long modal again');
+  });
+
+  test('landing on a section does not stick for the next open', () => {
+    /* SETTINGS_FOCUS is module state. Left set, every later Save-and-reopen
+       would jump to the cadence instead of the top -- a scroll nobody asked
+       for, on the screen people use to fix things. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderSettingsModal'));
+    const guard = fn.slice(fn.indexOf("SETTINGS_FOCUS === 'cadence'"));
+    assert.ok(/SETTINGS_FOCUS = null;/.test(guard.slice(0, 300)),
+      'the focus is never cleared, so it fires on every subsequent open');
+  });
+
   test('the settings screen renders the editor without throwing', () => {
     /* The markup is built in one expression per section, so a mistake inside
        it takes the whole settings screen down rather than one row -- and
@@ -4994,7 +5033,7 @@ console.log('\n--- the cadence is editable, per industry ---');
     // Removing every pre-appointment touch is allowed -- somebody may want
     // only the rescue steps -- but it must not look like a working setup.
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-    const sec = app.slice(app.indexOf("'<div class=\"set-section\"><h3>Follow-up cadence</h3>'"),
+    const sec = app.slice(app.indexOf('<h3>Follow-up cadence</h3>'),
                           app.indexOf("'<div class=\"set-section\"><h3>How appointments get in</h3>'"));
     assert.ok(/No touches before the appointment/.test(sec),
       'an empty cadence gives no warning');
@@ -5041,7 +5080,7 @@ console.log('\n--- the cadence is editable, per industry ---');
       'reset hardcodes the default cadence instead of asking for the recommended one');
 
     // And the label must not claim an industry when none was identified.
-    const sec = app.slice(app.indexOf("'<div class=\"set-section\"><h3>Follow-up cadence</h3>'"),
+    const sec = app.slice(app.indexOf('<h3>Follow-up cadence</h3>'),
                           app.indexOf("'<div class=\"set-section\"><h3>How appointments get in</h3>'"));
     assert.ok(/industryFromPipeline\(SETTINGS_DRAFT\.pipeline\)/.test(sec),
       'the reset button does not check whose cadence it is about to offer');
