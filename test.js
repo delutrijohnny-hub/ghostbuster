@@ -1131,12 +1131,45 @@ test('no-show client 45 min out -> cadence stopped, no hourbefore', () => {
   assert.ok(!GB.computeDue(c, new Date()).includes('hourbefore'));
 });
 
-test('every hourbefore variant promises a link and renders one', () => {
-  const c = freshClient({ callDateTime: minsFromNow(45) });
-  GB.buildDefaultVariants().hourbefore.forEach(v => {
-    assert.ok(v.text.includes('{link}'), 'variant ' + v.id + ' should carry the meet link');
-    const out = GB.renderTemplate(v.text, c, 'Johnny');
+test('an hour before, anyone who has a link is given it', () => {
+  /* This asserted that EVERY hourbefore variant carries {link}, which was
+     true and is no longer the right shape: it also meant a business meeting
+     in person got "(no link on file — paste one before sending)" in a live
+     text, an hour before the job.
+
+     The guarantee underneath it is real and kept exactly: if there IS a
+     link, the reminder hands it over. So the variants a link-having client
+     can draw are still only the ones carrying a link -- gating the link
+     texts alone would have let the in-person copy into everyone's pool and
+     quietly dropped this. */
+  const withLink = freshClient({ callDateTime: minsFromNow(45),
+    meetLink: 'https://meet.google.com/abc-defg-hij' });
+  const state = GB.buildDefaultState();
+  const pool = GB.eligibleVariants(state, 'hourbefore', withLink);
+  assert.ok(pool.length, 'nothing is sendable an hour before');
+  pool.forEach(v => {
+    assert.ok(v.text.includes('{link}'),
+      'variant ' + v.id + ' can reach a client who has a link but does not give it to them');
+    const out = GB.renderTemplate(v.text, withLink, 'Johnny');
     assert.ok(!out.includes('{'), 'variant ' + v.id + ' left an unrendered placeholder: ' + out);
+  });
+});
+
+test('and anyone who has no link is not sent a placeholder', () => {
+  /* The other half, and the reason the first changed. {link} renders
+     "(no link on file — paste one before sending)" -- fine as a warning on
+     a screen, not something to text a homeowner an hour before you turn up. */
+  const noLink = freshClient({ callDateTime: minsFromNow(45), meetLink: '' });
+  const state = GB.buildDefaultState();
+  ['dayof', 'hourbefore'].forEach(stage => {
+    const pool = GB.eligibleVariants(state, stage, noLink);
+    assert.ok(pool.length, stage + ' has nothing to send without a link');
+    pool.forEach(v => {
+      const out = GB.renderTemplate(v.text, noLink, 'Johnny');
+      assert.ok(!/no link on file/.test(out),
+        stage + '/' + v.id + ' texts a placeholder to someone with no link: ' + out);
+      assert.ok(!out.includes('{'), stage + '/' + v.id + ' left a placeholder: ' + out);
+    });
   });
 });
 
@@ -6209,6 +6242,87 @@ console.log('\n--- the copy does not assume one industry ---');
     assert.ok(/\{appointment\}/.test(fixed.text), fixed.text);
     assert.ok(!/our call/.test(fixed.text),
       'it still says "our call", which is the wrong noun for most of these businesses');
+  });
+
+  test('no starter text reaches a business it does not fit', () => {
+    /* The whole claim, stated once over the real data rather than per
+       variant: every text that assumes something about the business --
+       a YouTube channel, or a room to join -- is gated on that thing being
+       present. Anything ungated has to read correctly for a roofer, a
+       recruiter and an agency alike.
+
+       Counted rather than listed, so adding a variant that assumes a video
+       call without gating it fails here instead of surprising a homeowner. */
+    const v = GB.buildDefaultState().variants;
+    const ungated = [];
+    Object.keys(v).forEach(stage => v[stage].forEach(x => {
+      if (x.needsChannel || x.onlyWithoutLink) return;
+      if (/\{link\}/.test(x.text)) return;          // gated by the link rule
+      if (/\{channel\}/.test(x.text)) return;       // gated by the channel rule
+      if (/\b(zoom|video call|room link|hop(ping)? on|jump in)\b/i.test(x.text)) {
+        ungated.push(stage + '/' + x.id + ': ' + x.text);
+      }
+    }));
+    assert.deepStrictEqual(ungated, [],
+      'these assume a video meeting and are sent to everyone:\n' + ungated.join('\n'));
+  });
+
+  test('a variant that needs a link is gated on having one', () => {
+    const state = GB.buildDefaultState();
+    const noLink = GB.sanitizeClient({id:'c', name:'D', phone:'2135550100',
+      timezone:'America/New_York', status:'Booked',
+      callDateTime:'2026-10-20T15:00:00Z', meetLink:''});
+    for (const stage of ['dayof','hourbefore']) {
+      const ids = GB.eligibleVariants(state, stage, noLink).map(x => x.id);
+      assert.ok(ids.length, stage + ' has nothing sendable without a link');
+      ids.forEach(id => {
+        const text = state.variants[stage].filter(x => x.id === id)[0].text;
+        assert.ok(!/\{link\}/.test(text), stage + '/' + id + ' needs a link and has none');
+      });
+    }
+  });
+
+  test('the rule is read off the text, so hand-written copy is covered too', () => {
+    /* Same as needsChannel: derived, not declared, so somebody who writes
+       their own day-of text with a link in it is gated by a rule they never
+       had to know about. */
+    assert.strictEqual(GB.variantNeedsLink({text:'join here {link}'}), true);
+    assert.strictEqual(GB.variantNeedsLink({text:'see you at {time}'}), false);
+    // A stored flag wins, for rows written before the rule existed.
+    assert.strictEqual(GB.variantNeedsLink({text:'no token', needsLink:true}), true);
+    assert.strictEqual(GB.variantNeedsLink({text:'{link}', needsLink:false}), false);
+    assert.strictEqual(GB.variantNeedsLink(null), false);
+    assert.strictEqual(GB.variantNeedsLink({}), false);
+  });
+
+  test('editing a variant to add a link gates it from then on', () => {
+    // editVariant maintains needsChannel the same way; a link added later
+    // must not escape the rule just because the row already existed.
+    const state = GB.buildDefaultState();
+    const v = state.variants.dayof.filter(x => x.id === 'd2-v3')[0];
+    state.variantStats.dayof[v.id] = {sends: 0, responses: 0};
+    GB.editVariant(state, 'dayof', v.id, 'Hi {name}, join here: {link}');
+    const after = state.variants.dayof.filter(x => x.id === v.id)[0];
+    assert.strictEqual(after.needsLink, true,
+      'a variant that gained a link is still offered to clients who have none');
+  });
+
+  test('the two sets are disjoint, so neither side gets the other\u2019s copy', () => {
+    /* A client with a link draws exactly the variants that existed before
+       any of this; a client without draws only the in-person ones. Checked
+       as a partition rather than two separate rules, because the failure
+       that matters is one text leaking into the wrong pool. */
+    const state = GB.buildDefaultState();
+    const mk = (link) => GB.sanitizeClient({id:'c', name:'D', phone:'2135550100',
+      timezone:'America/New_York', status:'Booked',
+      callDateTime:'2026-10-20T15:00:00Z', meetLink: link});
+    for (const stage of ['dayof','hourbefore']) {
+      const withL = GB.eligibleVariants(state, stage, mk('https://meet.google.com/x')).map(x => x.id);
+      const without = GB.eligibleVariants(state, stage, mk('')).map(x => x.id);
+      assert.ok(withL.length && without.length, stage + ' leaves one side with nothing');
+      const overlap = withL.filter(id => without.includes(id));
+      assert.deepStrictEqual(overlap, [], stage + ' sends the same text to both: ' + overlap);
+    }
   });
 
   test('the other three day-of messages are left alone', () => {

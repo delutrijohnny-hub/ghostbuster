@@ -928,7 +928,7 @@ function buildDefaultVariants(){
          across every account, so reusing d2-v2 would have this copy ranked
          by numbers earned by copy that no longer exists -- the exact mistake
          the -v2 suffixes above were introduced to undo. */
-      {id:'d2-v3', builtin:true, text:"Hi {name}, ready for your {appointment} at {time}."},
+      {id:'d2-v3', builtin:true, onlyWithoutLink:true, text:"Hi {name}, ready for your {appointment} at {time}."},
       {id:'d3-v2', builtin:true, text:"Hey {name}, talk at {time}. Room link is here: {link}"},
       {id:'d4-v2', builtin:true, text:"Hi {name}, see you at {time}. Join here: {link}"}
     ],
@@ -939,7 +939,15 @@ function buildDefaultVariants(){
     hourbefore: [
       {id:'h1', builtin:true, text:"Hey {name}, we're on in about an hour at {time}. Here's the link so it's handy: {link}"},
       {id:'h2', builtin:true, text:"{name}, coming up on {time}. Link's right here when you're ready: {link}"},
-      {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"}
+      {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"},
+      /* The hour-before text for everyone who does not meet on video.
+
+         All three above hand over a link, and eligibleVariants falls back to
+         the whole list rather than leave a stage with nothing to send -- so
+         without a linkless option here, gating on the link would change
+         nothing at all for the businesses it exists to help. dayof already
+         had one; this stage had none. */
+      {id:'h4', builtin:true, onlyWithoutLink:true, text:"Hey {name}, about an hour out from your {appointment} at {time}. See you then."}
     ],
     recovery: [
       {id:'r1-v2', builtin:true, text:"Hey {name}, know your schedule gets crazy. Still want to get this on the calendar? Let me know if I should drop a couple of new times."},
@@ -1791,7 +1799,7 @@ function migrateState(raw){
       rawArr.forEach(function(v){
         if(!v || typeof v !== 'object' || typeof v.id !== 'string' || typeof v.text !== 'string') return;
         if(!builtinIds[stage][v.id]){
-          state.variants[stage].push({id:v.id, text:v.text, needsChannel: !!v.needsChannel, builtin:false, retired: !!v.retired});
+          state.variants[stage].push({id:v.id, text:v.text, needsChannel: !!v.needsChannel, needsLink: /\{link\}/.test(String(v.text || '')), builtin:false, retired: !!v.retired});
           return;
         }
         /* A builtin that was reworded, and so retired.
@@ -2342,9 +2350,33 @@ function extractChannelHandle(youtubeLink){
 }
 
 
+/* Does this variant depend on a meeting link?
+
+   Read off the text, with the stored flag honoured when it is there, so it
+   works for builtin copy, for variants an account wrote, and for rows that
+   predate the flag entirely. */
+function variantNeedsLink(v){
+  if(!v) return false;
+  if(typeof v.needsLink === 'boolean') return v.needsLink;
+  return /\{link\}/.test(String(v.text || ''));
+}
+
 function eligibleVariants(state, stage, client){
   var list = (state.variants && Array.isArray(state.variants[stage]) && state.variants[stage].length) ? state.variants[stage] : buildDefaultVariants()[stage];
   var hasChannel = !!extractChannelHandle(client.youtubeLink);
+  /* A message built around a room link is not sendable without one.
+
+     Exactly the needsChannel rule, for the other thing starter copy assumes.
+     Six of the twenty-eight texts hand over a {link}, and for a business
+     that meets in person there is none -- so {link} rendered its "(no link
+     on file — paste one before sending)" placeholder into a real message, on
+     the two touches closest to the appointment. A roofer's 8am confirmation
+     read like a half-finished draft.
+
+     Derived from the text rather than declared, like needsChannel, so a
+     variant somebody writes themselves is gated by the same rule without
+     having to know it exists. */
+  var hasLink = !!String(client.meetLink || '').trim();
   /* Retired variants are never sent again but are never deleted either.
 
      A variant carries its own reply history, so rewriting one whose wording
@@ -2354,7 +2386,23 @@ function eligibleVariants(state, stage, client){
      of overwriting, and the original is retired: out of the running, still in
      the table, its numbers still attached to the words that produced them. */
   var filtered = list.filter(function(v){
-    return !v.retired && !(v.needsChannel && !hasChannel);
+    return !v.retired
+        && !(v.needsChannel && !hasChannel)
+        && !(variantNeedsLink(v) && !hasLink)
+        /* And the inverse, declared rather than derived.
+
+           An hour-before reminder to somebody who DOES meet on video should
+           hand over the link -- that was already guaranteed, by every
+           variant on the stage carrying one, and it is a guarantee worth
+           keeping rather than a symptom of the single-industry assumption.
+           Gating the link texts alone would have quietly dropped it: the
+           in-person text would join the pool for everyone and the bandit
+           would sometimes send a video client a reminder with no link in it.
+
+           So the two sets are disjoint. A client with a link draws from
+           exactly the variants that were available before any of this; a
+           client without draws from the ones written for them. */
+        && !(v.onlyWithoutLink && hasLink);
   });
   // Never leave a stage with nothing to send. Falling back to the unretired
   // set, then to the whole list, beats the 'fallback' stub text.
@@ -2421,11 +2469,13 @@ function editVariant(state, stage, id, newText){
   if(sends === 0){
     cur.text = text;
     cur.needsChannel = /\{channel\}/.test(text);
+    cur.needsLink = /\{link\}/.test(text);
     return {ok:true, action:'edited', id:id};
   }
 
   var newId = stage + '_edit_' + Date.now().toString(36);
-  list.push({id:newId, text:text, needsChannel: /\{channel\}/.test(text), builtin:false});
+  list.push({id:newId, text:text, needsChannel: /\{channel\}/.test(text),
+             needsLink: /\{link\}/.test(text), builtin:false});
   state.variantStats[stage][newId] = {sends:0, responses:0};
   cur.retired = true;
   return {ok:true, action:'forked', id:newId, retiredId:id, keptSends:sends};
@@ -6095,7 +6145,8 @@ var __LOGIC_EXPORTS__ = {
   recommendedSequenceFor: recommendedSequenceFor,
   buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
   describeTrigger: describeTrigger,
-  extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,
+  extractChannelHandle: extractChannelHandle, variantNeedsLink: variantNeedsLink,
+  eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
   markSent: markSent, snoozeTouch: snoozeTouch, skipTouch: skipTouch, unskipTouch: unskipTouch,
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
