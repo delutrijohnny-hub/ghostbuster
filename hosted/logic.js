@@ -84,62 +84,134 @@ function subscriptionState(sub, memberCount, now){
   now = now || new Date();
   var seatsUsed = Math.max(0, Number(memberCount) || 0);
 
+  function out(status, mode, headline, detail, extra){
+    var o = {status: status, mode: mode, readOnly: mode === 'read_only',
+             seatsUsed: seatsUsed, seatsPaid: 0, overSeats: 0, daysLeft: null,
+             headline: headline, detail: detail};
+    if(extra) Object.keys(extra).forEach(function(k){ o[k] = extra[k]; });
+    return o;
+  }
+
   if(!sub || !sub.status){
-    return {status: 'none', access: true, blocking: false,
-            seatsUsed: seatsUsed, seatsPaid: 0, overSeats: 0, daysLeft: null,
-            headline: 'No subscription on file',
-            detail: 'Nothing is being charged for this team yet.'};
+    return out('none', 'full', 'No subscription on file',
+               'Nothing is being charged for this team yet.');
   }
 
   var st = String(sub.status);
   var seatsPaid = Math.max(0, Number(sub.seats) || 0);
-  var overSeats = Math.max(0, seatsUsed - seatsPaid);
   var periodEnd = sub.currentPeriodEnd ? Date.parse(sub.currentPeriodEnd) : NaN;
   var daysLeft = isNaN(periodEnd) ? null
     : Math.ceil((periodEnd - now.getTime()) / 86400000);
-
-  var out = {status: st, seatsUsed: seatsUsed, seatsPaid: seatsPaid,
-             overSeats: overSeats, daysLeft: daysLeft,
-             access: true, blocking: false, headline: '', detail: ''};
+  var extra = {seatsPaid: seatsPaid,
+               overSeats: Math.max(0, seatsUsed - seatsPaid),
+               daysLeft: daysLeft};
 
   if(st === 'trialing'){
-    out.headline = 'Free trial';
-    out.detail = daysLeft === null ? 'Trial in progress.'
-      : daysLeft <= 0 ? 'Trial has ended.'
-      : daysLeft + (daysLeft === 1 ? ' day left.' : ' days left.');
-  } else if(st === 'active'){
-    out.headline = seatsPaid + (seatsPaid === 1 ? ' seat' : ' seats');
-    out.detail = sub.cancelAtPeriodEnd
-      ? 'Cancels at the end of this period.'
-      : 'Renews automatically.';
-  } else if(st === 'past_due' || st === 'unpaid'){
-    /* Still working, deliberately. The payment failed; the people using it
-       did nothing wrong and usually do not know yet. */
-    var over = (daysLeft !== null && daysLeft < -BILLING_GRACE_DAYS);
-    out.access = !over;
-    out.blocking = over;
-    out.headline = 'Payment failed';
-    out.detail = over
-      ? 'Access is paused until the card is updated.'
-      : 'Update the card to avoid losing access.';
-  } else if(st === 'canceled' || st === 'incomplete_expired'){
-    out.access = false;
-    out.blocking = true;
-    out.headline = 'Subscription ended';
-    out.detail = 'Resubscribe to carry on.';
-  } else if(st === 'paused'){
-    out.access = false;
-    out.blocking = true;
-    out.headline = 'Subscription paused';
-    out.detail = 'Resume it to carry on.';
-  } else {
-    /* incomplete, and anything Stripe invents later. Unknown is not a
-       licence to lock people out -- it is a reason to say so and leave them
-       working until a status we understand says otherwise. */
-    out.headline = 'Subscription ' + st;
-    out.detail = 'Check the billing portal.';
+    /* An expired trial degrades even if Stripe has not moved the status yet.
+       Stripe normally does -- to past_due, incomplete or canceled depending
+       on how the price is configured -- but a webhook that was missed or
+       retried late would otherwise leave a finished trial reading as a live
+       one indefinitely. */
+    if(daysLeft !== null && daysLeft <= 0){
+      return out(st, 'read_only', 'Trial has ended',
+                 'Your data is all here. Subscribe to start working it again.', extra);
+    }
+    return out(st, 'full', 'Free trial',
+      daysLeft === null ? 'Trial in progress.'
+        : daysLeft + (daysLeft === 1 ? ' day left.' : ' days left.'), extra);
   }
-  return out;
+
+  if(st === 'active'){
+    return out(st, 'full', seatsPaid + (seatsPaid === 1 ? ' seat' : ' seats'),
+      sub.cancelAtPeriodEnd ? 'Cancels at the end of this period.'
+                            : 'Renews automatically.', extra);
+  }
+
+  if(st === 'past_due' || st === 'unpaid'){
+    /* Still fully working through a grace week. The payment failed; the
+       people using it did nothing wrong and usually do not know yet. */
+    var spent = (daysLeft !== null && daysLeft < -BILLING_GRACE_DAYS);
+    return out(st, spent ? 'read_only' : 'full', 'Payment failed',
+      spent ? 'Update the card to start working the list again.'
+            : 'Update the card to avoid dropping to read-only.', extra);
+  }
+
+  if(st === 'canceled' || st === 'incomplete_expired' || st === 'paused'){
+    return out(st, 'read_only',
+      st === 'paused' ? 'Subscription paused' : 'Subscription ended',
+      'Your data is all here. Subscribe to start working it again.', extra);
+  }
+
+  /* incomplete, and anything Stripe invents later. Unknown is not a licence
+     to take a team off the air -- it is a reason to say so and leave them
+     working until a status we understand says otherwise. */
+  return out(st, 'full', 'Subscription ' + st, 'Check the billing portal.', extra);
+}
+
+/* The actions read-only stops, named in one list.
+
+   Enumerated rather than inferred. A guess at what "writes" means -- every
+   handler that calls saveState, say -- would quietly include things that
+   must keep working, and would silently start blocking anything added
+   later. A list is auditable: you can read it and say whether it is right.
+
+   Everything NOT here still works, and that is the important half: viewing
+   the daily list, opening a contact, reading message history, searching,
+   switching tabs, and both exports. A customer whose card expired can still
+   get their own data out, which the privacy policy already promises and
+   which is not something to hold hostage. */
+var READ_ONLY_BLOCKED_ACTIONS = [
+  // Working the list
+  'open-sms', 'mark-sent', 'copy-text', 'copy-remaining', 'generate-ai',
+  'interaction-outcome', 'interaction-confirm', 'review-replied', 'review-silent',
+  'toggle-replied', 'toggle-replied-quick', 'focus-send', 'focus-copy',
+  'focus-skip', 'focus-snooze', 'focus-skip-forever', 'snooze-touch', 'skip-touch',
+  'sent-by-email', 'pick-email', 'eod-outcome', 'resolve-stale',
+  // Changing the book
+  'add-client', 'save-add-client', 'save-client-field', 'delete-client-quick',
+  'hide-duplicate', 'set-outcome', 'set-outcome-quick', 'set-close',
+  'import-ics', 'confirm-ics-import', 'bulk-paste', 'preview-bulk',
+  'confirm-bulk-import', 'trigger-import-backup', 'bulk-assign', 'team-assign',
+  'apply-exclusions',
+  // Changing how it behaves
+  'save-settings', 'use-template', 'reset-settings', 'add-stage', 'remove-stage',
+  'move-stage', 'set-stage-role', 'add-step', 'remove-step', 'move-step',
+  'restore-sequence', 'set-step-stage', 'set-step-trigger', 'set-step-param',
+  'set-step-every', 'set-booking-link', 'set-cal-mode',
+  // The copy and the email library
+  'edit-text', 'reset-text', 'add-variant', 'edit-variant', 'save-variant',
+  'retire-variant', 'set-email-doc', 'email-doc-new', 'email-doc-delete',
+  'email-lib-import', 'email-lib-starters',
+  // The team
+  'invite-send', 'invite-accept', 'set-role',
+  // Notes panel drafts
+  'np-save', 'np-draft-sms', 'np-draft-email',
+  // To-dos
+  'add-todo', 'toggle-todo', 'delete-todo', 'eod-todo'
+];
+
+function isReadOnlyBlocked(action){
+  return READ_ONLY_BLOCKED_ACTIONS.indexOf(String(action || '')) !== -1;
+}
+
+/* Read-only is the consequence, and it is deliberately not a lockout.
+
+   Everything stays visible and exportable: the daily list, every contact,
+   the message history, CSV and full backup. What stops is the work --
+   recording a send, logging an outcome, adding a contact, changing settings.
+
+   Two reasons for drawing it there. A customer whose card expired should be
+   able to get their own data out without paying a ransom for it, and the
+   privacy policy already promises export. And a team that can still see
+   their morning list is looking at exactly what they are missing, which is
+   a better argument for paying than a locked door.
+
+   Calendar sync deliberately keeps running underneath. Bookings that arrive
+   while an account is read-only are not lost -- they are waiting when
+   somebody pays, which is both kinder and the better outcome commercially
+   than a gap nobody can reconstruct. */
+function billingAllowsWrite(state){
+  return !state || state.mode !== 'read_only';
 }
 
 /* Who may change the subscription.
@@ -6297,6 +6369,9 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
   pipelineHasStages: pipelineHasStages, DEAD_ELIGIBLE_ROLES: DEAD_ELIGIBLE_ROLES,
   defaultOpenStage: defaultOpenStage,
+  READ_ONLY_BLOCKED_ACTIONS: READ_ONLY_BLOCKED_ACTIONS,
+  isReadOnlyBlocked: isReadOnlyBlocked,
+  billingAllowsWrite: billingAllowsWrite,
   subscriptionState: subscriptionState,
   canManageBilling: canManageBilling,
   BILLING_GRACE_DAYS: BILLING_GRACE_DAYS,

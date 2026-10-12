@@ -857,6 +857,21 @@ async function loadState(){
      themselves when handed an empty list, so an individual account simply
      never sees them. */
   state.team = await loadTeamRows(sb, uid);
+
+  /* What billing says about this org. Read-only to the client by policy, so
+     a tampered response can soften the state but never unlock anything that
+     matters -- the webhook is the only writer and Stripe is the truth.
+     Absent row means absent row: subscriptionState treats that as "nothing
+     recorded", not as "not paying". */
+  var subRes = await sb.from('org_subscriptions').select('*').maybeSingle();
+  state.subscription = (subRes && subRes.data) ? {
+    status: subRes.data.status,
+    seats: subRes.data.seats,
+    priceId: subRes.data.price_id,
+    currentPeriodEnd: subRes.data.current_period_end,
+    cancelAtPeriodEnd: !!subRes.data.cancel_at_period_end,
+    trialEndsAt: subRes.data.trial_ends_at
+  } : null;
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.

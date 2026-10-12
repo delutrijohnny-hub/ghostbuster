@@ -6132,10 +6132,10 @@ console.log('\n--- billing: what a subscription means for the people in front of
        day billing goes live. Not knowing is not the same as knowing they
        have not paid. */
     const s = GB.subscriptionState(null, 8);
-    assert.strictEqual(s.access, true);
-    assert.strictEqual(s.blocking, false);
+    assert.strictEqual(s.mode, 'full');
+    assert.strictEqual(s.readOnly, false);
     assert.strictEqual(s.status, 'none');
-    assert.strictEqual(GB.subscriptionState({}, 8).access, true,
+    assert.strictEqual(GB.subscriptionState({}, 8).mode, 'full',
       'a row with no status is also not evidence of non-payment');
   });
 
@@ -6145,7 +6145,7 @@ console.log('\n--- billing: what a subscription means for the people in front of
        wrong person for something they cannot fix. */
     const s = GB.subscriptionState(
       {status: 'past_due', seats: 5, currentPeriodEnd: days(-2)}, 5);
-    assert.strictEqual(s.access, true, 'cut off two days after a failed payment');
+    assert.strictEqual(s.mode, 'full', 'dropped to read-only two days after a failed payment');
     assert.ok(/Payment failed/.test(s.headline));
     assert.ok(/Update the card/.test(s.detail));
   });
@@ -6154,15 +6154,15 @@ console.log('\n--- billing: what a subscription means for the people in front of
     // Otherwise "past due" means "free forever".
     const s = GB.subscriptionState(
       {status: 'past_due', seats: 5, currentPeriodEnd: days(-(GB.BILLING_GRACE_DAYS + 1))}, 5);
-    assert.strictEqual(s.access, false);
-    assert.strictEqual(s.blocking, true);
-    assert.ok(/paused/.test(s.detail));
+    assert.strictEqual(s.mode, 'read_only');
+    assert.strictEqual(s.readOnly, true);
+    assert.ok(/working the list again/.test(s.detail), s.detail);
   });
 
   test('a cancelled subscription stops, and says how to come back', () => {
     const s = GB.subscriptionState({status: 'canceled', seats: 5}, 5);
-    assert.strictEqual(s.access, false);
-    assert.ok(/Resubscribe/.test(s.detail), s.detail);
+    assert.strictEqual(s.mode, 'read_only');
+    assert.ok(/data is all here/.test(s.detail), s.detail);
   });
 
   test('a status we have never heard of leaves people working', () => {
@@ -6170,8 +6170,7 @@ console.log('\n--- billing: what a subscription means for the people in front of
        the door means a future Stripe release takes a customer's team off the
        air with no code change here at all. */
     const s = GB.subscriptionState({status: 'some_future_state', seats: 3}, 3);
-    assert.strictEqual(s.access, true);
-    assert.strictEqual(s.blocking, false);
+    assert.strictEqual(s.mode, 'full');
     assert.ok(/some_future_state/.test(s.headline), s.headline);
   });
 
@@ -6181,7 +6180,7 @@ console.log('\n--- billing: what a subscription means for the people in front of
     assert.strictEqual(over.seatsPaid, 3);
     assert.strictEqual(over.overSeats, 2);
     // Being over does NOT cut access -- that is a conversation, not a lockout.
-    assert.strictEqual(over.access, true);
+    assert.strictEqual(over.mode, 'full');
     const under = GB.subscriptionState({status: 'active', seats: 10}, 4);
     assert.strictEqual(under.overSeats, 0, 'paying for spare seats is not an error');
   });
@@ -6194,13 +6193,13 @@ console.log('\n--- billing: what a subscription means for the people in front of
     assert.ok(/1 day left/.test(one.detail), one.detail);
     // A trial still running is access, obviously, but pin it: this is the
     // state every new customer is in.
-    assert.strictEqual(s.access, true);
+    assert.strictEqual(s.mode, 'full');
   });
 
   test('a cancelling-but-still-paid subscription says so', () => {
     const s = GB.subscriptionState(
       {status: 'active', seats: 5, cancelAtPeriodEnd: true, currentPeriodEnd: days(12)}, 5);
-    assert.strictEqual(s.access, true, 'they paid for this period');
+    assert.strictEqual(s.mode, 'full', 'they paid for this period');
     assert.ok(/Cancels at the end/.test(s.detail));
   });
 
@@ -6214,13 +6213,100 @@ console.log('\n--- billing: what a subscription means for the people in front of
     assert.strictEqual(GB.canManageBilling('Owner'), false, 'role matching is exact');
   });
 
+  test('an ended trial drops to read-only', () => {
+    /* The thing that was asked for, stated on its own. A trial whose last
+       day has passed stops being a trial, whether or not Stripe has caught
+       up -- a webhook missed or retried late would otherwise leave a
+       finished trial reading as a live one indefinitely. */
+    const ended = GB.subscriptionState(
+      {status: 'trialing', seats: 5, currentPeriodEnd: days(-1)}, 5);
+    assert.strictEqual(ended.mode, 'read_only', 'the trial ended and nothing changed');
+    assert.strictEqual(ended.readOnly, true);
+    assert.ok(/Trial has ended/.test(ended.headline));
+    assert.ok(/data is all here/.test(ended.detail),
+      'it should say the data is still there, not just that time is up');
+
+    // Today is still the trial; it ends at the end of it, not the start.
+    const lastDay = GB.subscriptionState(
+      {status: 'trialing', seats: 5, currentPeriodEnd: days(0.5)}, 5);
+    assert.strictEqual(lastDay.mode, 'full', 'cut off on the final day of the trial');
+  });
+
+  test('billingAllowsWrite is what the gate actually asks', () => {
+    /* Caught by mutation: making this return true unconditionally broke no
+       test, which means nothing was checking the one function both handlers
+       consult before every write. */
+    assert.strictEqual(GB.billingAllowsWrite({mode: 'read_only'}), false);
+    assert.strictEqual(GB.billingAllowsWrite({mode: 'full'}), true);
+    // Unknown is permissive, same rule as everywhere else here: not knowing
+    // is not a reason to take somebody's team off the air.
+    assert.strictEqual(GB.billingAllowsWrite(null), true);
+    assert.strictEqual(GB.billingAllowsWrite({}), true);
+    // And end to end, from a Stripe status to a refused action.
+    const ended = GB.subscriptionState({status: 'canceled', seats: 5}, 5);
+    assert.strictEqual(GB.billingAllowsWrite(ended), false);
+    assert.strictEqual(GB.billingAllowsWrite(GB.subscriptionState(null, 5)), true,
+      'an account nobody has billed yet must still be able to work');
+  });
+
+  test('read-only stops the work and not the data', () => {
+    /* The line this feature lives or dies on. A customer whose card expired
+       must still be able to see their book and get it out -- the privacy
+       policy promises export, and holding someone's own contacts hostage to
+       collect a debt is not a thing to build. */
+    const must = ['export-backup', 'export-csv', 'open-client', 'tab',
+                  'sort-clients', 'filter-status', 'print-sheet',
+                  'sync-calendar-now', 'connect-calendar', 'sign-out'];
+    for (const a of must) {
+      assert.strictEqual(GB.isReadOnlyBlocked(a), false,
+        a + ' is blocked in read-only, which it must not be');
+    }
+    const mustNot = ['open-sms', 'mark-sent', 'interaction-outcome', 'add-client',
+                     'save-settings', 'generate-ai', 'invite-send', 'set-role'];
+    for (const a of mustNot) {
+      assert.strictEqual(GB.isReadOnlyBlocked(a), true,
+        a + ' still works in read-only, so read-only means nothing');
+    }
+  });
+
+  test('every blocked action is one the app actually dispatches', () => {
+    /* The list is written by hand, so it can contain names that do not
+       exist -- and a typo there is a silent hole: the action keeps working
+       and nothing says so. Seven of my first draft's entries were invented
+       names, which is why this check exists. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const dispatched = new Set(
+      [...app.matchAll(/case '([a-z0-9-]+)':/g)].map(m => m[1]).concat(
+      [...app.matchAll(/data-action'\) === '([a-z0-9-]+)'/g)].map(m => m[1])));
+    const ghosts = GB.READ_ONLY_BLOCKED_ACTIONS.filter(a => !dispatched.has(a));
+    assert.deepStrictEqual(ghosts, [],
+      'blocked action names that nothing dispatches: ' + ghosts.join(', '));
+  });
+
+  test('the gate runs before the switch, on both handlers', () => {
+    /* Checked in one place by design. Sixty handlers each remembering to ask
+       is sixty chances to forget, and the change handler carries its own
+       actions -- gating only clicks would leave every dropdown in Settings
+       live on a read-only account. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const click = app.slice(app.indexOf("document.addEventListener('click'"),
+                            app.indexOf("document.addEventListener('change'"));
+    assert.ok(/isReadOnlyBlocked\(action\) && !billingAllowsWrite/.test(click),
+      'the click dispatcher does not check billing');
+    assert.ok(click.indexOf('isReadOnlyBlocked') < click.indexOf('switch(action)'),
+      'the check runs after the switch has already handled it');
+    const change = app.slice(app.indexOf("document.addEventListener('change'"));
+    assert.ok(/isReadOnlyBlocked\(t\.getAttribute\('data-action'\)\)/.test(change),
+      'the change handler does not check billing');
+  });
+
   test('it never throws on a half-written row', () => {
     // These rows are written by a webhook off a third party's payload.
     assert.doesNotThrow(() => GB.subscriptionState({status: 'active'}, null));
     assert.doesNotThrow(() => GB.subscriptionState({status: 'active', seats: 'x'}, 'y'));
     assert.doesNotThrow(() => GB.subscriptionState({status: 'past_due', currentPeriodEnd: 'nonsense'}, 2));
     const bad = GB.subscriptionState({status: 'past_due', currentPeriodEnd: 'nonsense'}, 2);
-    assert.strictEqual(bad.access, true, 'an unparseable date must not lock anyone out');
+    assert.strictEqual(bad.mode, 'full', 'an unparseable date must not drop anyone to read-only');
   });
 }
 

@@ -3568,7 +3568,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-3cbf443e';
+var BUILD_STAMP = '20261012-6d32aa3f';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -3925,6 +3925,39 @@ function renderSettingsModal(){
   }
 }
 
+/* What billing says about this account right now.
+
+   Computed rather than stored, so it cannot go stale against a webhook that
+   landed while the tab was open. Counts the team from the members already
+   loaded for the Team tab; falls back to one, because a solo account is
+   still one seat. */
+function billingState(){
+  if(!STATE) return null;
+  // STATE.team is what loadTeamRows fills and the Team tab renders from --
+  // the same list, so the seat count cannot disagree with the names shown
+  // beside it. One when there is no team: a solo account is still one seat.
+  var members = (STATE.team && STATE.team.length) ? STATE.team.length : 1;
+  return subscriptionState(STATE.subscription, members, new Date());
+}
+
+/* Said once, plainly, and never as a dead end.
+
+   The toast names what happened and what fixes it. It does not try to sell
+   from inside an error -- the billing panel in Settings does that, and this
+   points at it. */
+var billingWallShownAt = 0;
+function showBillingWall(){
+  var st = billingState();
+  var now = Date.now();
+  // One message per few seconds: a read-only account clicking around should
+  // not stack six identical toasts.
+  if(now - billingWallShownAt < 4000) return;
+  billingWallShownAt = now;
+  showToast((st && st.headline ? st.headline + '. ' : '') +
+    'Read-only until the subscription is sorted \u2014 your data is all here, ' +
+    'and exports still work.');
+}
+
 /* A step copied deeply enough that editing the draft cannot reach the
    template it came from.
 
@@ -4055,6 +4088,21 @@ document.addEventListener('click', function(ev){
   var action = target.getAttribute('data-action');
   var cid = target.getAttribute('data-cid');
   var stage = target.getAttribute('data-stage');
+
+  /* One gate, before the switch, rather than a check inside sixty handlers.
+
+     Read-only is what an ended trial or a long-dead card leaves behind. The
+     list it consults is enumerated in logic.js and deliberately not inferred
+     from "does this handler save" -- a guess would both block things that
+     must keep working and silently start blocking anything added later.
+
+     Everything not on that list still runs: the daily list, opening a
+     contact, message history, search, print, and both exports. Somebody
+     whose card expired can still get their own data out. */
+  if(isReadOnlyBlocked(action) && !billingAllowsWrite(billingState())){
+    showBillingWall();
+    return;
+  }
 
   switch(action){
     case 'toggle-menu':
@@ -5001,6 +5049,16 @@ document.addEventListener('change', function(ev){
   var t = ev.target;
   if(t.getAttribute && t.getAttribute('data-action') === 'team-assign'){
     assignFromPicker(t);
+    return;
+  }
+  /* The change handler dispatches its own actions -- the settings selects,
+     the sent checkbox, the client fields -- so the gate has to be here too.
+     Blocking only the click path would leave every dropdown in Settings
+     live on a read-only account. */
+  if(t.getAttribute && isReadOnlyBlocked(t.getAttribute('data-action'))
+     && !billingAllowsWrite(billingState())){
+    showBillingWall();
+    renderAll();   // put the control back to what the state actually says
     return;
   }
   if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-stage'){
