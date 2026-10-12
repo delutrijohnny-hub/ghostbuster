@@ -1805,7 +1805,14 @@ function renderGhostToday(){
     // stated, not asked about; only an interaction past the reply window turns
     // into a question, and then it is the single control below.
     var inter = lastInteraction(c, now);
-    var needsOutcome = inter.state === 'needs_outcome';
+    /* Ask about the send that still owes an answer, which is not always the
+       latest one. Asking only about the latest meant a new touch buried the
+       previous question permanently -- 348 sends on this book that nothing
+       will ever ask about. pendingQuestion keeps the oldest still-answerable
+       one in front of you until it is answered or expires. */
+    var pending = pendingQuestion(c, now);
+    var needsOutcome = pending.idx !== -1 || inter.state === 'needs_outcome';
+    var askingAbout = pending.idx !== -1 ? pending.message : inter.message;
 
     // Only the contributions that pushed this contact UP are worth showing —
     // the penalties explain why someone is lower, which is not what a person
@@ -1838,7 +1845,29 @@ function renderGhostToday(){
 
     // The one manual control, and only when Ghost Recall genuinely can't tell.
     if(needsOutcome){
-      var oc = h('div',{class:'gt-outcome'},[h('span',{class:'lbl'},['What happened?'])]);
+      /* Name the message being answered when it is not the obvious one.
+
+         "What happened?" is clear when it means the text you just sent. Once
+         it can mean an earlier touch, an unlabelled question gets answered
+         about the wrong message -- and a confidently wrong answer is worse
+         for the bandit than no answer, which is the whole reason the 3-day
+         ceiling exists. */
+      var ocLabel = 'What happened?';
+      if(askingAbout && pending.idx !== -1 && inter.message && askingAbout !== inter.message){
+        /* Phrased from hoursAgo, which pendingQuestion already computed --
+           no new date helper, and it cannot disagree with the window that
+           decided the question was answerable in the first place. */
+        var hrs = pending.hoursAgo || 0;
+        var whenTxt = hrs < 24 ? 'earlier today'
+          : hrs < 48 ? 'yesterday'
+          // Floor, not round: 60 hours is two and a half days, and rounding
+          // calls it three. Overstating how long ago it was makes the answer
+          // feel less reliable than it is.
+          : Math.floor(hrs / 24) + ' days ago';
+        ocLabel = 'Did they reply to your ' + touchLabel(askingAbout.stage).toLowerCase() +
+          ' text from ' + whenTxt + '?';
+      }
+      var oc = h('div',{class:'gt-outcome'},[h('span',{class:'lbl'},[ocLabel])]);
       INTERACTION_OUTCOMES.forEach(function(o){
         oc.appendChild(h('button',{class:'oc-btn','data-action':'interaction-outcome',
           'data-cid':c.id,'data-outcome':o.key},[o.label]));
@@ -3539,7 +3568,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-7a83bd2c';
+var BUILD_STAMP = '20261012-22b33f9d';
 
 /* Which settings section to scroll to once the modal is up.
 

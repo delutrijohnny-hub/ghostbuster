@@ -6256,6 +6256,111 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- a new send does not bury an unanswered question ---');
+
+{
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString();
+  const withLog = (entries) => GB.sanitizeClient({
+    id: 'c1', name: 'Dana', phone: '2135550100', timezone: 'America/New_York',
+    status: 'Booked', bookedDate: hoursAgo(24 * 20),
+    callDateTime: new Date(Date.now() + 3 * 86400000).toISOString(),
+    messageLog: entries.map((e, i) => ({
+      id: 'm' + i, stage: e.stage, variantId: e.stage + '1', text: 'x',
+      sentAt: e.sentAt, responded: !!e.responded, respondedAt: null,
+      reviewed: !!e.reviewed, channel: 'sms'
+    }))
+  });
+
+  test('the question survives the next touch going out', () => {
+    /* The regression that stopped the learning. The outcome buttons asked
+       about the LATEST message, so firing the next touch made the previous
+       unanswered question disappear -- permanently, because nothing else
+       ever asks. 348 sends on the live book are in that state, and the
+       review rate went 41% -> 0% the week after the change. */
+    const c = withLog([
+      {stage: 'monday',  sentAt: hoursAgo(30)},          // unanswered, still answerable
+      {stage: 'dayof',   sentAt: hoursAgo(1)}            // sent since, too new to ask about
+    ]);
+    const q = GB.pendingQuestion(c, new Date());
+    assert.strictEqual(q.idx, 0, 'the older unanswered send is no longer reachable');
+    assert.strictEqual(q.message.stage, 'monday');
+  });
+
+  test('it asks about the oldest answerable one, because that expires first', () => {
+    const c = withLog([
+      {stage: 'welcome',    sentAt: hoursAgo(60)},
+      {stage: 'monday',     sentAt: hoursAgo(30)},
+      {stage: 'midcheckin', sentAt: hoursAgo(5)}
+    ]);
+    assert.strictEqual(GB.pendingQuestion(c, new Date()).message.stage, 'welcome');
+  });
+
+  test('it does not ask about a send too new to have an answer', () => {
+    // Asking before a reply could plausibly have arrived teaches people to
+    // answer carelessly, and a careless "no reply" is indistinguishable from
+    // a real one.
+    const c = withLog([{stage: 'dayof', sentAt: hoursAgo(0.5)}]);
+    assert.strictEqual(GB.pendingQuestion(c, new Date()).idx, -1);
+  });
+
+  test('and it does not resurrect sends nobody can remember', () => {
+    /* The backlog stays expired on purpose. This exists to stop NEW sends
+       joining it, not to reopen three weeks of guesswork -- the 3-day
+       ceiling is the reason the August answers are worth anything. */
+    const c = withLog([{stage: 'welcome', sentAt: hoursAgo(24 * 21)}]);
+    assert.strictEqual(GB.pendingQuestion(c, new Date()).idx, -1);
+    // The boundary itself, from the constant rather than a copied number.
+    const justInside = withLog([{stage: 'welcome', sentAt: hoursAgo(24 * GB.REVIEW_MAX_AGE_DAYS - 2)}]);
+    assert.strictEqual(GB.pendingQuestion(justInside, new Date()).idx, 0);
+  });
+
+  test('an answered send stops being asked about', () => {
+    const c = withLog([
+      {stage: 'monday', sentAt: hoursAgo(30), reviewed: true, responded: false},
+      {stage: 'dayof',  sentAt: hoursAgo(26)}
+    ]);
+    assert.strictEqual(GB.pendingQuestion(c, new Date()).message.stage, 'dayof');
+  });
+
+  test('the answer lands on the message that was asked about', () => {
+    /* The half of this that would corrupt data rather than merely lose it.
+       The card can now be asking about Tuesday's touch while Thursday's is
+       the latest; recording the answer against the wrong one puts a real
+       reply on copy that never earned it. */
+    const state = GB.buildDefaultState();
+    state.clients['c1'] = withLog([
+      {stage: 'monday', sentAt: hoursAgo(30)},
+      {stage: 'dayof',  sentAt: hoursAgo(1)}
+    ]);
+    GB.recordInteractionOutcome(state, 'c1', 'no_reply', {});
+    const log = state.clients['c1'].messageLog;
+    assert.strictEqual(log[0].reviewed, true, 'the question that was asked is still unanswered');
+    assert.strictEqual(log[1].reviewed, false,
+      'the answer was recorded against the newer message, which nobody was asked about');
+  });
+
+  test('with nothing pending it still answers about the latest', () => {
+    // The ordinary case must not regress: one send, past the reply window.
+    const state = GB.buildDefaultState();
+    state.clients['c1'] = withLog([{stage: 'dayof', sentAt: hoursAgo(26)}]);
+    GB.recordInteractionOutcome(state, 'c1', 'no_reply', {});
+    assert.strictEqual(state.clients['c1'].messageLog[0].reviewed, true);
+  });
+
+  test('the card asks about it, and says which one', () => {
+    /* An unlabelled "What happened?" that can mean an earlier touch gets
+       answered about the wrong text, which is worse than not asking. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderGhostToday'), app.indexOf('function buildOutcomeDetail'));
+    assert.ok(/pendingQuestion\(c, now\)/.test(fn),
+      'the card still asks only about the latest message');
+    assert.ok(/pending\.idx !== -1 \|\| inter\.state === 'needs_outcome'/.test(fn),
+      'a buried question does not bring the outcome buttons back');
+    assert.ok(/Did they reply to your/.test(fn),
+      'the question does not say which message it is about');
+  });
+}
+
 console.log('\n--- what the shared learning actually records ---');
 
 {

@@ -3372,6 +3372,39 @@ function messageState(m, now){
   return hours < REPLY_WAIT_HOURS ? 'waiting' : 'needs_outcome';
 }
 
+/* The send this contact still owes an answer about.
+
+   Not the same question as "what happened last", and conflating them is what
+   stopped the learning. The outcome buttons asked about lastInteraction --
+   strictly the most recent message -- so the moment the cadence fired again,
+   the unanswered question about the previous touch vanished for good. On this
+   book that is 348 sends nothing will ever ask about, and the review rate
+   went from 41% to 0% in the week after the change.
+
+   Oldest first, because the oldest answerable one is the one about to expire.
+
+   Bounded at both ends, and the upper bound is the important one: a message
+   younger than REPLY_WAIT_HOURS has not had time to get a reply, and one
+   older than REVIEW_MAX_AGE_DAYS cannot be remembered accurately. Nobody
+   knows whether a text three weeks ago got an answer, and a guessed "no
+   reply" is indistinguishable from a real one -- worse for the bandit than
+   the silence it replaces. So the backlog of expired sends stays expired;
+   this exists to stop NEW ones joining it. */
+function pendingQuestion(client, now){
+  now = now || new Date();
+  var log = (client && client.messageLog) || [];
+  var newest = now.getTime() - REPLY_WAIT_HOURS * 3600000;
+  var oldest = now.getTime() - REVIEW_MAX_AGE_DAYS * 86400000;
+  for(var i = 0; i < log.length; i++){
+    var m = log[i];
+    if(!m || m.reviewed) continue;
+    var t = Date.parse(m.sentAt);
+    if(isNaN(t) || t > newest || t < oldest) continue;
+    return {message: m, idx: i, hoursAgo: (now.getTime() - t) / 3600000};
+  }
+  return {message: null, idx: -1, hoursAgo: null};
+}
+
 // The contact's current position in that lifecycle, which is what both the
 // daily queue and the card render from — so they cannot disagree.
 function lastInteraction(client, now){
@@ -3501,7 +3534,13 @@ function recordInteractionOutcome(state, clientId, outcomeKey, extra){
   INTERACTION_OUTCOMES.forEach(function(o){ if(o.key === outcomeKey) def = o; });
   if(!def) return;
 
-  var inter = lastInteraction(client, new Date());
+  /* The send that is actually being asked about, which is not always the
+     latest one -- see pendingQuestion. Answering has to land on the message
+     the card named, or the person answers about Tuesday and the record moves
+     for Thursday. */
+  var now0 = new Date();
+  var pending = pendingQuestion(client, now0);
+  var inter = pending.idx !== -1 ? pending : lastInteraction(client, now0);
   if(inter.idx !== -1){
     // Resolves the bandit's question as a side effect of the salesperson
     // telling us what happened — they never answer it as a separate chore.
@@ -6151,6 +6190,7 @@ var __LOGIC_EXPORTS__ = {
   markSent: markSent, snoozeTouch: snoozeTouch, skipTouch: skipTouch, unskipTouch: unskipTouch,
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
+  pendingQuestion: pendingQuestion,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
   recommendNextAction: recommendNextAction, consecutiveUnanswered: consecutiveUnanswered,
   UNANSWERED_SWITCH_AT: UNANSWERED_SWITCH_AT,
