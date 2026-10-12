@@ -996,6 +996,8 @@ function renderAll(){
   renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;
   var eodEl = el('eod-count'); if(eodEl) eodEl.textContent = '(' + eodCount + ')';
+  // Last, so it sees the controls this render just produced.
+  applyReadOnlyUI();
 }
 
 
@@ -3568,7 +3570,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-6d32aa3f';
+var BUILD_STAMP = '20261012-5c5887fg';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -3922,6 +3924,60 @@ function renderSettingsModal(){
       sec.classList.add('set-landed');
       setTimeout(function(){ sec.classList.remove('set-landed'); }, 2000);
     }, 0);
+  }
+}
+
+/* Say it before they click, and dim what will not work.
+
+   Tested in a browser and this was the gap: the gate worked perfectly --
+   nothing saved, nothing logged, the right toast -- and the screen looked
+   completely normal. Every button live, nothing explaining why the app had
+   stopped responding. A dead end dressed as a working app is worse than a
+   locked door, because it reads as broken software rather than an unpaid
+   bill.
+
+   Two parts. A banner that states it once, and a dimming pass over the
+   controls that will refuse.
+
+   The controls stay CLICKABLE on purpose. A disabled button cannot explain
+   itself; a dimmed one that answers "read-only, here is why" when pressed
+   is the kinder of the two. The dimming is what stops somebody trying in
+   the first place. */
+function applyReadOnlyUI(){
+  if(!STATE) return;
+  var st = billingState();
+  var ro = !billingAllowsWrite(st);
+  document.body.classList.toggle('is-read-only', ro);
+
+  var bar = el('readonly-bar');
+  if(!ro){
+    if(bar) bar.remove();
+    return;
+  }
+  if(!bar){
+    bar = h('div', {id: 'readonly-bar', class: 'ro-bar'}, []);
+    var root = el('app-root');
+    if(root) root.insertBefore(bar, root.firstChild);
+  }
+  bar.innerHTML = '';
+  /* Two elements rather than one string with a dash in it. On a phone the
+     bar wraps, and a literal "— " then starts its own line looking like a
+     typo. */
+  bar.appendChild(h('strong', {}, [st.headline]));
+  bar.appendChild(h('span', {class: 'ro-detail'}, [st.detail]));
+  bar.appendChild(h('button', {class: 'btn btn-sm', 'data-action': 'open-settings'},
+    ['Billing']));
+
+  /* One pass over whatever was just rendered, rather than a check at sixty
+     call sites. Driven by the same list the gate consults, so a control
+     cannot look live while the gate refuses it -- or look dead while it
+     still works. */
+  var nodes = document.querySelectorAll('[data-action]');
+  for(var i = 0; i < nodes.length; i++){
+    var n = nodes[i];
+    if(!isReadOnlyBlocked(n.getAttribute('data-action'))) continue;
+    n.classList.add('ro-off');
+    if(!n.getAttribute('title')) n.setAttribute('title', 'Read-only \u2014 subscribe to use this');
   }
 }
 

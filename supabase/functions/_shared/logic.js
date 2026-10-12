@@ -175,6 +175,11 @@ var READ_ONLY_BLOCKED_ACTIONS = [
   'interaction-outcome', 'interaction-confirm', 'review-replied', 'review-silent',
   'toggle-replied', 'toggle-replied-quick', 'focus-send', 'focus-copy',
   'focus-skip', 'focus-snooze', 'focus-skip-forever', 'snooze-touch', 'skip-touch',
+  /* The entrance as well as the actions inside it. Seen in a browser:
+     "Work the list" stayed the brightest thing on a read-only screen while
+     every control it leads to was dimmed. An inviting door into a room where
+     nothing works is worse than no door. */
+  'focus-start',
   'sent-by-email', 'pick-email', 'eod-outcome', 'resolve-stale',
   // Changing the book
   'add-client', 'save-add-client', 'save-client-field', 'delete-client-quick',

@@ -6290,6 +6290,36 @@ console.log('\n--- billing: what a subscription means for the people in front of
       'an account nobody has billed yet must still be able to work');
   });
 
+  test('read-only is visible before anything is clicked', () => {
+    /* Found by putting an account into read-only in a browser. The gate
+       worked perfectly -- nothing saved, nothing logged, the right toast --
+       and the screen looked entirely normal: every button bright, nothing
+       saying why the app had stopped responding. A dead end dressed as a
+       working app reads as broken software rather than an unpaid bill. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(/function applyReadOnlyUI\(\)/.test(app), 'nothing marks the UI read-only');
+    assert.ok(/readonly-bar/.test(app), 'there is no banner saying why');
+    assert.ok(/classList\.add\('ro-off'\)/.test(app),
+      'the controls that will refuse are not dimmed');
+    // Driven by the same list the gate uses, or a control can look live
+    // while the gate refuses it, or look dead while it still works.
+    const fn = app.slice(app.indexOf('function applyReadOnlyUI'));
+    assert.ok(/isReadOnlyBlocked\(n\.getAttribute\('data-action'\)\)/.test(
+      fn.slice(0, fn.indexOf('\nfunction '))),
+      'the dimming uses its own idea of what is blocked');
+    // And it has to run after a render, or it marks the previous screen.
+    assert.ok(/applyReadOnlyUI\(\);\n\}/.test(app),
+      'applyReadOnlyUI does not run at the end of renderAll');
+  });
+
+  test('the door into focus mode is blocked too, not just the room', () => {
+    /* Seen in the browser: "Work the list" stayed the brightest thing on a
+       read-only screen while every control it leads to was dimmed. An
+       inviting door into a room where nothing works. */
+    assert.strictEqual(GB.isReadOnlyBlocked('focus-start'), true);
+    assert.strictEqual(GB.isReadOnlyBlocked('focus-send'), true);
+  });
+
   test('read-only stops the work and not the data', () => {
     /* The line this feature lives or dies on. A customer whose card expired
        must still be able to see their book and get it out -- the privacy

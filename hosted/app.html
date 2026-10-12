@@ -691,6 +691,21 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 /* Two seconds of highlight on the section you asked for, so arriving three
    sections into a long modal does not look like arriving at the top of it. */
 .build-stamp{margin-top:10px;text-align:right;font-size:10.5px;color:var(--muted);opacity:.7;}
+/* Read-only, said once at the top and shown on the controls that refuse.
+
+   The dimmed controls stay clickable: a disabled button cannot explain
+   itself, and the toast that answers "read-only, here is why" is the whole
+   point of letting the click through. */
+.ro-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 10px;padding:10px 14px;border-radius:var(--radius-sm);
+  background:rgba(224,32,31,.10);border:1px solid rgba(224,32,31,.35);
+  font-size:13px;color:var(--ink);}
+.ro-bar strong{font-weight:600;}
+.ro-bar .ro-detail{color:var(--muted);}
+.ro-bar .btn{margin-left:auto;}
+body.is-read-only .ro-off{opacity:.45;}
+body.is-read-only a.ro-off, body.is-read-only button.ro-off,
+body.is-read-only input.ro-off{cursor:not-allowed;}
 
 /* Settings rows on a narrow screen.
 
@@ -1488,9 +1503,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261012-6d32aa3f"></script>
-<script src="data.js?v=20261012-6d32aa3f"></script>
-<script src="app.js?v=20261012-6d32aa3f"></script>
-<script src="auth.js?v=20261012-6d32aa3f"></script>
+<script src="logic.js?v=20261012-5c5887fg"></script>
+<script src="data.js?v=20261012-5c5887fg"></script>
+<script src="app.js?v=20261012-5c5887fg"></script>
+<script src="auth.js?v=20261012-5c5887fg"></script>
 </body>
 </html>
