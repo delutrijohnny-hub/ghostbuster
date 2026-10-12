@@ -296,10 +296,49 @@ async function syncOneCalendar(
 
   await db(`/google_oauth_tokens?user_id=eq.${userId}&calendar_id=eq.${encodeURIComponent(conn.calendar_id)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ sync_token: nextSyncToken, last_sync: new Date().toISOString() }),
+    // Clearing the failure state is part of succeeding. Without it a
+    // connection that broke once and recovered would keep its old error and
+    // go on being reported as faulty forever.
+    body: JSON.stringify({ sync_token: nextSyncToken, last_sync: new Date().toISOString(),
+                           last_error: null, last_error_at: null, consecutive_failures: 0 }),
   });
 
   return { added, updated, rescheduled, skippedDuplicate, scanned, filteredOut, collapsedRecurring };
+}
+
+/* Record why a calendar failed, without recording anything secret.
+
+   The message is truncated and anything that looks like a token or an
+   authorization header is stripped. Google's own error bodies do not
+   normally carry credentials, but this string is written to a row the
+   customer themselves can read, and "normally" is not a basis for storing
+   somebody's refresh token in a text column.
+
+   consecutive_failures increments rather than setting a flag: one failed
+   run is usually a timeout, repeated failure is a broken connection, and
+   only the second is worth telling anyone about. */
+function safeErrorText(e: unknown): string {
+  return String(e)
+    .replace(/(refresh_token|access_token|client_secret|Bearer)\s*["':= ]+[\w.\-]+/gi, '$1 [redacted]')
+    .slice(0, 400);
+}
+
+async function recordSyncFailure(userId: string, conn: { calendar_id: string; consecutive_failures?: number }, e: unknown) {
+  try {
+    const next = (Number(conn.consecutive_failures) || 0) + 1;
+    await db(`/google_oauth_tokens?user_id=eq.${userId}&calendar_id=eq.${encodeURIComponent(conn.calendar_id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        last_error: safeErrorText(e),
+        last_error_at: new Date().toISOString(),
+        consecutive_failures: next,
+      }),
+    });
+  } catch (_ignored) {
+    // Recording the failure must never become the failure. If this write
+    // cannot happen the sync has already gone wrong; swallowing it keeps the
+    // other calendars in this run going.
+  }
 }
 
 async function syncUserCalendars(userId: string) {
@@ -352,6 +391,12 @@ async function syncUserCalendars(userId: string) {
       const result = await syncOneCalendar(userId, conn, byEventId, byEmailTime, calendarFilter, openStage);
       perCalendar.push({ calendar: conn.calendar_id, ...result });
     } catch (e) {
+      /* Write the failure down where somebody can find it.
+         Every broken connection so far was discovered because a person
+         eventually complained -- a revoked grant, an expired refresh token,
+         a Google API error. The sync knew at the time and said nothing
+         anywhere that outlived the response. */
+      await recordSyncFailure(userId, conn, e);
       perCalendar.push({ calendar: conn.calendar_id, error: String(e) });
     }
   }
