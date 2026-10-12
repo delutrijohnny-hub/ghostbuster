@@ -6591,6 +6591,131 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- reply rate per wording, read off the log ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
+  const stateWith = (msgs) => {
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    msgs.forEach((m, i) => {
+      st.clients['c' + i] = {id: 'c' + i, name: 'X', messageLog: [{
+        id: 'm' + i, stage: m.stage, variantId: m.vid, text: m.text,
+        sentAt: ago(i + 1), responded: !!m.replied, reviewed: m.reviewed !== false
+      }]};
+    });
+    return st;
+  };
+
+  test('the same words sent to different people are one wording', () => {
+    /* The whole mechanism. message_log stores rendered sends -- name, time
+       and link already substituted -- so every send of one template is
+       textually different. Without putting those parts back into
+       placeholders there is no such thing as "how did these words do". */
+    const st = stateWith([
+      {stage:'monday', vid:'m1', text:'Hey Dana, quick heads up for Monday at 2:00 PM. See you.'},
+      {stage:'monday', vid:'m1', text:'Hey Marcus, quick heads up for Thursday at 11:30 AM. See you.', replied:true},
+      {stage:'monday', vid:'m1', text:'Hey Priya, quick heads up for Friday at 9:00 AM. See you.'},
+    ]);
+    const rows = GB.wordingBreakdown(st, {minSends: 1});
+    assert.strictEqual(rows.length, 1, 'three sends of one template read as ' + rows.length + ' wordings');
+    assert.strictEqual(rows[0].sends, 3);
+    assert.strictEqual(rows[0].replies, 1);
+  });
+
+  test('two genuinely different messages under one key stay apart', () => {
+    /* The reason this exists. A key is not a message: on the live book one
+       had carried three, and the key-level rate was an average over copy
+       that no longer existed. */
+    const st = stateWith([
+      {stage:'monday', vid:'m2', text:'Hey Dana, John here. Reminder that our call is set for Monday at 2:00 PM.'},
+      {stage:'monday', vid:'m2', text:'Hey Marcus, John here. Reminder that our call is set for Tuesday at 3:00 PM.'},
+      {stage:'monday', vid:'m2', text:'Hey Priya, we are on for Friday at 9:00 AM. Anything you want covered?', replied:true},
+    ]);
+    const rows = GB.wordingBreakdown(st, {minSends: 1});
+    assert.strictEqual(rows.length, 2, 'two different messages collapsed into one');
+    const rates = rows.map(r => r.replies + '/' + r.sends).sort();
+    assert.deepStrictEqual(rates, ['0/2', '1/1']);
+  });
+
+  test('a thin wording reports no rate at all', () => {
+    /* The judgement this screen exists to protect. A key-level "0 replies in
+       25 sends" nearly got working copy rewritten, and on the deduplicated
+       book no two wordings in a stage are far enough apart to call. Showing
+       3% off four sends invites exactly that mistake again. */
+    const st = stateWith([
+      {stage:'welcome', vid:'w1', text:'Hey Dana, locked in for Monday at 2:00 PM.'},
+      {stage:'welcome', vid:'w1', text:'Hey Marcus, locked in for Tuesday at 3:00 PM.'},
+    ]);
+    const rows = GB.wordingBreakdown(st);     // default minimum
+    assert.strictEqual(rows[0].rate, null, 'put a percentage on two sends');
+    assert.strictEqual(rows[0].enough, false);
+    assert.strictEqual(rows[0].sends, 2, 'the count is still reported');
+  });
+
+  test('unreviewed sends are not counted as silence', () => {
+    // The same rule the bandit follows: an unreviewed send is an unanswered
+    // question, not a customer who ignored you.
+    const st = stateWith([
+      {stage:'monday', vid:'m1', text:'Hey Dana, quick heads up for Monday at 2:00 PM.', reviewed:false},
+      {stage:'monday', vid:'m1', text:'Hey Marcus, quick heads up for Tuesday at 3:00 PM.', replied:true},
+    ]);
+    const rows = GB.wordingBreakdown(st, {minSends: 1});
+    assert.strictEqual(rows[0].sends, 1, 'an unreviewed send went into the denominator');
+    assert.strictEqual(rows[0].replies, 1);
+  });
+
+  test('hand-edited sends belong to no template', () => {
+    const st = stateWith([
+      {stage:'monday', vid:'custom', text:'Something I typed myself on Monday at 2:00 PM.'},
+      {stage:'monday', vid:'m1', text:'Hey Marcus, quick heads up for Tuesday at 3:00 PM.'},
+    ]);
+    const rows = GB.wordingBreakdown(st, {minSends: 1});
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].variantId, 'm1');
+  });
+
+  test('the wording in use now is identifiable', () => {
+    /* Without this the screen lists several messages and cannot say which is
+       the one in the box -- which is how retired copy gets rewritten instead
+       of the live text. */
+    const st = GB.buildDefaultState();
+    const v = st.variants.monday[0];
+    const rendered = GB.renderTemplate(v.text,
+      GB.sanitizeClient({id:'c', name:'Dana', phone:'2135550100',
+        timezone:'America/New_York', status:'Booked',
+        callDateTime: new Date(Date.now() + 86400000).toISOString()}), 'Johnny');
+    st.clients = {c1: {id:'c1', name:'Dana', messageLog: [{
+      id:'m1', stage:'monday', variantId: v.id, text: rendered,
+      sentAt: ago(26), responded:false, reviewed:true}]}};
+    const rows = GB.wordingBreakdown(st, {minSends: 1});
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].isCurrent, true,
+      'a send of the current template was not recognised as the current wording');
+  });
+
+  test('it holds up on an empty or broken log', () => {
+    assert.deepStrictEqual(GB.wordingBreakdown(GB.buildDefaultState()), []);
+    assert.doesNotThrow(() => GB.wordingBreakdown({clients: {c: {messageLog: null}}}));
+    assert.doesNotThrow(() => GB.wordingBreakdown({clients: {c: {messageLog: [null, {}]}}}));
+    assert.strictEqual(GB.messageSkeleton(null), '');
+  });
+
+  test('the screen shows the wordings under the row they average', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    assert.ok(/function buildWordingRows\(/.test(app), 'nothing builds the breakdown');
+    const fn = app.slice(app.indexOf('function renderVariantPerformance'));
+    assert.ok(/buildWordingRows\(g\.stage, r\.variantId\)/.test(fn.slice(0, fn.indexOf('\nfunction '))),
+      'the performance table never asks for it');
+    const b = app.slice(app.indexOf('function buildWordingRows'));
+    const body = b.slice(0, b.indexOf('\nfunction '));
+    assert.ok(/rows\.length < 2/.test(body),
+      'a single wording gets its own sub-list, which just repeats the row above');
+    assert.ok(/too few to judge/.test(body),
+      'a thin wording shows a percentage instead of saying it cannot be judged');
+  });
+}
+
 console.log('\n--- numbers belong to a wording, not to a key ---');
 
 {

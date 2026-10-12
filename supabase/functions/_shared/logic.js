@@ -3013,6 +3013,130 @@ function snoozeTouch(state, clientId, stage, now){
 // answer — yes or no — is what puts the send into the bandit's denominator;
 // a message nobody has answered for stays out of the math entirely.
 // Re-answering later just moves the response count, never the send count.
+/* The shape of a sent message, with the per-person parts taken out.
+
+   message_log stores what was actually sent -- rendered, with the name, the
+   time and the link already substituted. To ask "how did THESE words do" you
+   have to put the varying parts back into placeholders, because every send
+   of the same template is textually different.
+
+   Approximate, and worth being honest about where it is approximate:
+
+     - Two genuinely different messages that differ only in a number or a
+       weekday collapse into one skeleton. That understates how many wordings
+       a key carried.
+     - One message split across a sender-name change ("John here" becoming
+       "Johnny here") reads as two. That overstates it.
+
+   Neither is fixable from rendered text alone -- the fix is storing a hash of
+   the template at send time, which only helps messages sent from now on. For
+   looking back over a book that already exists, this is what there is, and it
+   was enough to show that one key had carried three different messages while
+   reporting a single reply rate for all of them.
+
+   The greeting is dropped entirely rather than placeholdered: it is the most
+   variable part of every message and carries the least information about the
+   copy. */
+function messageSkeleton(text){
+  var t = String(text == null ? '' : text);
+  return t
+    .replace(/^[^,]{0,40},\s*/, '')                       // "Hey Dana, "
+    .replace(/https?:\/\/\S+/g, '~link~')
+    .replace(/@[A-Za-z0-9_.-]+/g, '~channel~')
+    .replace(/\b\d{1,2}:\d{2}\s*(AM|PM)?(\s+[A-Z]{2,4})?/gi, '~time~')
+    .replace(/\b(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b/gi, '~day~')
+    .replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{1,2}\b/gi, '~date~')
+    .replace(/\d+/g, '~n~')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+/* Reply rate per wording, read off the message log rather than the counters.
+
+   The counters are per variant_key, and a key is not a message -- on this
+   book every one had carried between two and twenty-three. A rate read off a
+   key is an average over copy that no longer exists, which is how "0 replies
+   in 25 sends" got attached to a text that had never been sent.
+
+   Built from reviewed sends only, for the same reason the bandit counts only
+   those: an unreviewed send is not a silent customer, it is an unanswered
+   question, and counting it as a failure is how the whole thing went wrong
+   before.
+
+   Sorted worst-first within a stage, because the useful action is retiring
+   the message nobody answers, not admiring the one they do. */
+var WORDING_MIN_SENDS = 8;
+
+function wordingBreakdown(state, opts){
+  opts = opts || {};
+  var minSends = typeof opts.minSends === 'number' ? opts.minSends : WORDING_MIN_SENDS;
+  var byKey = {};
+
+  Object.keys(state.clients || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    (c.messageLog || []).forEach(function(m){
+      if(!m || !m.reviewed) return;
+      if(!m.variantId || m.variantId === 'custom') return;
+      var skel = messageSkeleton(m.text);
+      if(!skel) return;
+      var key = m.stage + '\u0000' + m.variantId + '\u0000' + skel;
+      if(!byKey[key]){
+        byKey[key] = {stage: m.stage, variantId: m.variantId, skeleton: skel,
+                      sample: m.text, sends: 0, replies: 0,
+                      firstSent: m.sentAt, lastSent: m.sentAt};
+      }
+      var row = byKey[key];
+      row.sends++;
+      if(m.responded) row.replies++;
+      if(m.sentAt < row.firstSent) row.firstSent = m.sentAt;
+      if(m.sentAt > row.lastSent){ row.lastSent = m.sentAt; row.sample = m.text; }
+    });
+  });
+
+  var out = Object.keys(byKey).map(function(k){
+    var r = byKey[k];
+    /* Is this the text sitting in the box right now? Compared as skeletons,
+       because the variant holds a template with {tokens} and the log holds
+       rendered sends -- rendering the template would need a client to render
+       it for. */
+    var variant = ((state.variants || {})[r.stage] || []).filter(function(v){
+      return v.id === r.variantId;
+    })[0];
+    var currentSkel = variant ? messageSkeleton(renderSkeletonTemplate(variant.text)) : null;
+    r.isCurrent = currentSkel !== null && currentSkel === r.skeleton;
+    r.rate = r.sends >= minSends ? (r.replies / r.sends) : null;
+    r.enough = r.sends >= minSends;
+    return r;
+  });
+
+  out.sort(function(a, b){
+    if(a.stage !== b.stage) return a.stage < b.stage ? -1 : 1;
+    // Worst first, and anything without enough data last.
+    if(a.rate === null && b.rate === null) return b.sends - a.sends;
+    if(a.rate === null) return 1;
+    if(b.rate === null) return -1;
+    return a.rate - b.rate;
+  });
+  return out;
+}
+
+/* A template reduced the same way a sent message is, so the two can be
+   compared. The tokens stand in for exactly the parts messageSkeleton
+   removes. */
+function renderSkeletonTemplate(tpl){
+  return messageSkeleton(String(tpl == null ? '' : tpl)
+    .replace(/\{name\}/g, 'X')
+    .replace(/\{time\}/g, '12:00 PM')
+    .replace(/\{date\}/g, 'Jan 1')
+    .replace(/\{weekday\}/g, 'Monday')
+    .replace(/\{when\}/g, 'on Monday')
+    .replace(/\{link\}/g, 'https://x')
+    .replace(/\{channel\}/g, '@x')
+    .replace(/\{sender\}/g, 'X')
+    .replace(/\{appointment\}/g, 'call'));
+}
+
 /* Which wording a variant's numbers belong to.
 
    variant_key is not a stable identifier for copy, and treating it as one is
@@ -6481,6 +6605,9 @@ var __LOGIC_EXPORTS__ = {
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   pendingQuestion: pendingQuestion,
+  messageSkeleton: messageSkeleton,
+  wordingBreakdown: wordingBreakdown,
+  WORDING_MIN_SENDS: WORDING_MIN_SENDS,
   variantTextHash: variantTextHash,
   reconcileVariantStats: reconcileVariantStats,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,

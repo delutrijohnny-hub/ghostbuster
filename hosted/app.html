@@ -703,6 +703,19 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .ro-bar.ro-warn{background:rgba(214,158,46,.12);border:1px solid rgba(214,158,46,.45);}
 .ro-bar.ro-stop{background:rgba(224,32,31,.10);border:1px solid rgba(224,32,31,.35);}
 .ro-bar strong{font-weight:600;}
+/* The wordings behind one variant row. Indented and quieter than the table
+   above it: this is the evidence for that row, not a second ranking. */
+.vp-wordings{padding:6px 0 10px 14px;border-left:2px solid var(--border);margin:4px 0 2px;}
+.vp-wordings-note{font-size:11.5px;color:var(--muted);margin-bottom:6px;}
+.vp-wording{display:flex;gap:10px;align-items:baseline;font-size:12px;padding:3px 0;}
+.vp-wording.is-current{font-weight:600;}
+.vp-w-rate{flex:0 0 44px;text-align:right;}
+.vp-w-n{flex:0 0 150px;color:var(--muted);font-size:11.5px;}
+.vp-w-text{flex:1 1 auto;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+@media (max-width: 860px){
+  .vp-wording{flex-wrap:wrap;}
+  .vp-w-text{flex:1 1 100%;white-space:normal;}
+}
 .ro-bar .ro-detail{color:var(--muted);}
 .ro-bar .btn{margin-left:auto;}
 body.is-read-only .ro-off{opacity:.45;}
@@ -1505,9 +1518,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261012-2362f48h"></script>
-<script src="data.js?v=20261012-2362f48h"></script>
-<script src="app.js?v=20261012-2362f48h"></script>
-<script src="auth.js?v=20261012-2362f48h"></script>
+<script src="logic.js?v=20261012-cb4909fi"></script>
+<script src="data.js?v=20261012-cb4909fi"></script>
+<script src="app.js?v=20261012-cb4909fi"></script>
+<script src="auth.js?v=20261012-cb4909fi"></script>
 </body>
 </html>

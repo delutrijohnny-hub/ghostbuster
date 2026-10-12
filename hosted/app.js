@@ -2590,6 +2590,51 @@ function downloadText(filename, text){
 }
 
 
+/* The wordings behind a variant's single number.
+
+   A variant key is not a message. On this book every key had carried
+   between two and twenty-three different texts, because migrations rewrote
+   builtin copy in place and kept the key -- so the row above this one is an
+   average over messages that no longer exist.
+
+   This is deliberately NOT a leaderboard. Shown here, the honest finding on
+   real data is that no two wordings within a stage are far enough apart to
+   call, at these volumes. A ranked list would invite acting on noise, which
+   is exactly what happened when a key-level "0 replies in 25 sends" nearly
+   got working copy rewritten. So each wording states its own count, and
+   anything too thin to judge says so instead of showing a percentage.
+
+   Reads from the message log rather than the counters, because the log is
+   what remembers which words were actually sent. */
+function buildWordingRows(stage, variantId){
+  var rows = wordingBreakdown(STATE).filter(function(r){
+    return r.stage === stage && r.variantId === variantId;
+  });
+  if(rows.length < 2) return null;   // one wording is just the row above
+
+  var box = h('div', {class: 'vp-wordings'}, []);
+  box.appendChild(h('div', {class: 'vp-wordings-note'}, [
+    rows.length + ' different messages have been sent under this one name. ' +
+    'Their numbers were being averaged together.'
+  ]));
+  rows.forEach(function(r){
+    var line = h('div', {class: 'vp-wording' + (r.isCurrent ? ' is-current' : '')}, []);
+    line.appendChild(h('span', {class: 'vp-w-rate'}, [
+      r.rate === null ? '—' : Math.round(r.rate * 100) + '%'
+    ]));
+    line.appendChild(h('span', {class: 'vp-w-n'}, [
+      r.rate === null
+        ? r.replies + '/' + r.sends + ' — too few to judge'
+        : r.replies + '/' + r.sends
+    ]));
+    line.appendChild(h('span', {class: 'vp-w-text'}, [
+      (r.isCurrent ? 'in use now · ' : '') + r.sample.slice(0, 90) + (r.sample.length > 90 ? '…' : '')
+    ]));
+    box.appendChild(line);
+  });
+  return box;
+}
+
 function renderVariantPerformance(){
   var box = el('variant-performance');
   if(!box) return;
@@ -2631,6 +2676,23 @@ function renderVariantPerformance(){
           : '<span title="not enough credited appointments to put a rate on">' + r.appointments + ' of ' + r.credited + '</span>') + '</td>' +
         '<td>' + r.closes + '</td>';
       tb.appendChild(tr);
+
+      /* And, underneath, the messages this one row is averaging over.
+
+         A reply rate beside a variant name reads as the rate of a message.
+         It is the rate of a NAME, and on this book a name had carried up to
+         twenty-three different texts. Putting them under the row is the only
+         place the average can be contradicted by the thing it averages. */
+      var wordings = buildWordingRows(g.stage, r.variantId);
+      if(wordings){
+        var wrapRow = document.createElement('tr');
+        wrapRow.className = 'vp-wordings-row';
+        var cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.appendChild(wordings);
+        wrapRow.appendChild(cell);
+        tb.appendChild(wrapRow);
+      }
     });
     table.appendChild(tb);
     stageBox.appendChild(table);
@@ -3570,7 +3632,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-2362f48h';
+var BUILD_STAMP = '20261012-cb4909fi';
 
 /* Which settings section to scroll to once the modal is up.
 
