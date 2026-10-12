@@ -157,6 +157,32 @@ function subscriptionState(sub, memberCount, now){
   return out(st, 'full', 'Subscription ' + st, 'Check the billing portal.', extra);
 }
 
+/* Does this billing state need saying out loud, and how loudly?
+
+   Found by looking: a past-due account inside its grace week showed nothing
+   at all. The state knew "Payment failed -- update the card to avoid
+   dropping to read-only" and no screen ever said it, so the grace window --
+   which exists precisely so somebody can fix the card -- passed in silence
+   and the team hit read-only with no warning. Worse than having no grace
+   period, because it looks like the app broke on a Tuesday.
+
+   Three levels. 'stop' is read-only, and the banner is the explanation.
+   'warn' is something that will become a stop if ignored: a failed payment
+   still inside its grace week, or a trial in its last few days. 'none' is
+   an account with nothing to say, which is most of them, and it gets no
+   banner at all -- a billing notice on a healthy account is noise that
+   teaches people to ignore the bar. */
+var TRIAL_WARN_DAYS = 3;
+
+function billingNotice(state){
+  if(!state) return 'none';
+  if(state.mode === 'read_only') return 'stop';
+  if(state.status === 'past_due' || state.status === 'unpaid') return 'warn';
+  if(state.status === 'trialing' && typeof state.daysLeft === 'number'
+     && state.daysLeft <= TRIAL_WARN_DAYS) return 'warn';
+  return 'none';
+}
+
 /* The actions read-only stops, named in one list.
 
    Enumerated rather than inferred. A guess at what "writes" means -- every
@@ -6386,6 +6412,8 @@ var __LOGIC_EXPORTS__ = {
   READ_ONLY_BLOCKED_ACTIONS: READ_ONLY_BLOCKED_ACTIONS,
   isReadOnlyBlocked: isReadOnlyBlocked,
   TRIAL_DAYS: TRIAL_DAYS,
+  billingNotice: billingNotice,
+  TRIAL_WARN_DAYS: TRIAL_WARN_DAYS,
   billingAllowsWrite: billingAllowsWrite,
   subscriptionState: subscriptionState,
   canManageBilling: canManageBilling,

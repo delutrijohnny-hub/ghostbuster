@@ -3570,7 +3570,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-5c5887fg';
+var BUILD_STAMP = '20261012-2362f48h';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -3947,18 +3947,36 @@ function applyReadOnlyUI(){
   if(!STATE) return;
   var st = billingState();
   var ro = !billingAllowsWrite(st);
+  var level = billingNotice(st);
   document.body.classList.toggle('is-read-only', ro);
 
-  var bar = el('readonly-bar');
+  /* Clear the dimming first, every time, rather than assuming a re-render
+     washed it off.
+
+     Seen in the browser: moving from read-only back to full left seven
+     controls still greyed. Most of the screen is rebuilt by renderAll and
+     loses the class with the old nodes, but the header and menu are static
+     markup in app.html -- those nodes survive, and the class stayed on them.
+     In production that is an account that has just PAID still looking half
+     broken until a hard refresh, which is the worst possible moment for it. */
   if(!ro){
+    var stale = document.querySelectorAll('.ro-off');
+    for(var j = 0; j < stale.length; j++) stale[j].classList.remove('ro-off');
+  }
+
+  var bar = el('readonly-bar');
+  if(level === 'none'){
     if(bar) bar.remove();
     return;
   }
   if(!bar){
-    bar = h('div', {id: 'readonly-bar', class: 'ro-bar'}, []);
+    bar = h('div', {id: 'readonly-bar'}, []);
     var root = el('app-root');
     if(root) root.insertBefore(bar, root.firstChild);
   }
+  // Warn and stop look different on purpose: one is "fix this soon", the
+  // other is "this is why nothing works".
+  bar.className = 'ro-bar ' + (level === 'stop' ? 'ro-stop' : 'ro-warn');
   bar.innerHTML = '';
   /* Two elements rather than one string with a dash in it. On a phone the
      bar wraps, and a literal "— " then starts its own line looking like a
@@ -3967,6 +3985,10 @@ function applyReadOnlyUI(){
   bar.appendChild(h('span', {class: 'ro-detail'}, [st.detail]));
   bar.appendChild(h('button', {class: 'btn btn-sm', 'data-action': 'open-settings'},
     ['Billing']));
+
+  // Dimming belongs to read-only alone. A warning account still works, and
+  // greying its buttons would say otherwise.
+  if(!ro) return;
 
   /* One pass over whatever was just rendered, rather than a check at sixty
      call sites. Driven by the same list the gate consults, so a control

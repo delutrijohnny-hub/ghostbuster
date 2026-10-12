@@ -698,8 +698,10 @@ table.vp-table tr.leader td{background:var(--green-soft);}
    point of letting the click through. */
 .ro-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   margin:0 0 10px;padding:10px 14px;border-radius:var(--radius-sm);
-  background:rgba(224,32,31,.10);border:1px solid rgba(224,32,31,.35);
   font-size:13px;color:var(--ink);}
+/* A warning is something to fix; a stop is why nothing works. */
+.ro-bar.ro-warn{background:rgba(214,158,46,.12);border:1px solid rgba(214,158,46,.45);}
+.ro-bar.ro-stop{background:rgba(224,32,31,.10);border:1px solid rgba(224,32,31,.35);}
 .ro-bar strong{font-weight:600;}
 .ro-bar .ro-detail{color:var(--muted);}
 .ro-bar .btn{margin-left:auto;}
@@ -1503,9 +1505,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261012-5c5887fg"></script>
-<script src="data.js?v=20261012-5c5887fg"></script>
-<script src="app.js?v=20261012-5c5887fg"></script>
-<script src="auth.js?v=20261012-5c5887fg"></script>
+<script src="logic.js?v=20261012-2362f48h"></script>
+<script src="data.js?v=20261012-2362f48h"></script>
+<script src="app.js?v=20261012-2362f48h"></script>
+<script src="auth.js?v=20261012-2362f48h"></script>
 </body>
 </html>

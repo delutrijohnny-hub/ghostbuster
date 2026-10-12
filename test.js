@@ -6290,6 +6290,62 @@ console.log('\n--- billing: what a subscription means for the people in front of
       'an account nobody has billed yet must still be able to work');
   });
 
+  test('a failed payment is announced during the grace week, not after it', () => {
+    /* Found by walking the lifecycle in a browser. past_due inside its
+       grace window showed NOTHING -- no banner, no dimming -- while the
+       state knew "Payment failed, update the card to avoid dropping to
+       read-only". So the week that exists precisely so somebody can fix the
+       card passed in silence and the team hit read-only with no warning.
+       Worse than having no grace period: it looks like the app broke on a
+       Tuesday. */
+    const inGrace = GB.subscriptionState(
+      {status: 'past_due', seats: 3, currentPeriodEnd: days(-2)}, 3);
+    assert.strictEqual(inGrace.mode, 'full', 'this test is about a state that still works');
+    assert.strictEqual(GB.billingNotice(inGrace), 'warn',
+      'a failed payment says nothing until it is too late to act on it');
+
+    const spent = GB.subscriptionState(
+      {status: 'past_due', seats: 3, currentPeriodEnd: days(-9)}, 3);
+    assert.strictEqual(GB.billingNotice(spent), 'stop');
+  });
+
+  test('a trial warns before it ends, and is quiet before that', () => {
+    // A banner on a healthy account is noise, and noise teaches people to
+    // ignore the bar that will matter later.
+    const early = GB.subscriptionState({status:'trialing', seats:0, trialEndsAt: days(10)}, 3);
+    assert.strictEqual(GB.billingNotice(early), 'none');
+    const soon = GB.subscriptionState({status:'trialing', seats:0, trialEndsAt: days(2)}, 3);
+    assert.strictEqual(GB.billingNotice(soon), 'warn');
+    const ended = GB.subscriptionState({status:'trialing', seats:0, trialEndsAt: days(-1)}, 3);
+    assert.strictEqual(GB.billingNotice(ended), 'stop');
+  });
+
+  test('a healthy account is told nothing at all', () => {
+    assert.strictEqual(GB.billingNotice(GB.subscriptionState(
+      {status:'active', seats:3, currentPeriodEnd: days(20)}, 3)), 'none');
+    assert.strictEqual(GB.billingNotice(GB.subscriptionState(null, 3)), 'none');
+    assert.strictEqual(GB.billingNotice(null), 'none');
+  });
+
+  test('paying clears the dimming without a refresh', () => {
+    /* Seen in the browser: going from read-only back to full left seven
+       controls greyed. Most of the screen is rebuilt by renderAll and loses
+       the class with the old nodes, but the header and menu are static
+       markup -- those survive, and the class stayed on them. An account that
+       has just PAID still looking half broken is the worst possible moment
+       for it. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function applyReadOnlyUI'));
+    const body = fn.slice(0, fn.indexOf('\nfunction '));
+    assert.ok(/querySelectorAll\('\.ro-off'\)/.test(body),
+      'nothing ever removes the dimming once applied');
+    assert.ok(/classList\.remove\('ro-off'\)/.test(body),
+      'the stale class is found but not cleared');
+    // And it must happen on the not-read-only path, not only on the way in.
+    assert.ok(body.indexOf("if(!ro){") < body.indexOf("classList.remove('ro-off')"),
+      'the clearing is not guarded on having left read-only');
+  });
+
   test('read-only is visible before anything is clicked', () => {
     /* Found by putting an account into read-only in a browser. The gate
        worked perfectly -- nothing saved, nothing logged, the right toast --
