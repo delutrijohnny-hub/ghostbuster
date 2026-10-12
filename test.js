@@ -4785,6 +4785,239 @@ test('rebooked and followup still override the first touch under a custom sequen
   });
 });
 
+console.log('\n--- the cadence is editable, per industry ---');
+
+{
+  test('every industry gets a cadence, and it matches its lead time', () => {
+    /* Each template's comment said it bundled "terminology, pipeline,
+       cadence" and not one of them set a cadence, so a roofer and a gym both
+       inherited the agency rhythm -- including "the Monday of the appointment
+       week", for an estimate booked Tuesday for Thursday. */
+    const touches = (t) => (t.sequence || [])
+      .filter(s => s.trigger.type !== 'repeat_while_role').map(s => s.stage);
+    for (const t of GB.buildIndustryTemplates()) {
+      if (t.key === 'custom') {
+        assert.strictEqual(t.sequence, null, 'custom must keep the defaults');
+        continue;
+      }
+      assert.ok(t.sequence && t.sequence.length, t.key + ' has no cadence');
+      // Only stages that have message copy -- a touch on a stage with no
+      // variants fires with nothing to send.
+      const stages = Object.keys(GB.buildDefaultState().variants || {});
+      for (const st of touches(t)) {
+        assert.ok(stages.includes(st),
+          t.key + ' sends on "' + st + '", which has no message templates');
+      }
+    }
+    // Short-lead trades lose the two week-shaped touches; long-lead keeps them.
+    assert.deepStrictEqual(touches(GB.industryTemplate('roofing')),
+      ['welcome','midcheckin','dayof','hourbefore']);
+    assert.deepStrictEqual(touches(GB.industryTemplate('agency')),
+      ['welcome','monday','midcheckin','dayof','hourbefore']);
+    assert.ok(!touches(GB.industryTemplate('hvac')).includes('monday'),
+      'an estimate booked two days out has no "Monday of the week"');
+  });
+
+  test('a short-lead cadence actually fires for a two-day booking', () => {
+    /* The point of the shape, tested through computeDue rather than by
+       reading the data: a trades booking made on Tuesday for Thursday must
+       get its pre-reminder. This is what the days_before window exists for. */
+    GB.setSequence(GB.industryTemplate('hvac').sequence);
+    try {
+      const c = freshClient({bookedDate: isoDaysAgo(0), callDateTime: isoDaysFromNow(2)});
+      const due = GB.computeDue(c, new Date());
+      assert.ok(due.includes('welcome'), 'no introduction: ' + due.join(','));
+      const soon = freshClient({bookedDate: isoDaysAgo(0), callDateTime: isoDaysFromNow(1),
+        messageLog: [{stage:'welcome',variantId:'w1',text:'x',sentAt:isoDaysAgo(0),
+                      responded:false,respondedAt:null,reviewed:true}]});
+      assert.ok(GB.computeDue(soon, new Date()).includes('midcheckin'),
+        'the day-before reminder never fires on a short-notice booking');
+    } finally { GB.setSequence(null); }
+  });
+
+  test('every rescue step survives in every industry', () => {
+    // Chasing a no-show and reviving a cold lead is the product, not a
+    // preference, and it is read from the default so it cannot drift.
+    for (const t of GB.buildIndustryTemplates()) {
+      if (!t.sequence) continue;
+      const repeats = t.sequence.filter(s => s.trigger.type === 'repeat_while_role')
+        .map(s => s.stage).sort();
+      assert.deepStrictEqual(repeats, ['noshow','recovery','revival'], t.key);
+    }
+  });
+
+  test('the recommended cadence is named only when it is really theirs', () => {
+    /* The industry choice is not stored, so this is worked out from the
+       pipeline. An exact match or nothing: a near-miss would hand a roofer
+       the agency cadence while the button called it the roofing one. */
+    const roof = GB.industryTemplate('roofing');
+    assert.strictEqual((GB.industryFromPipeline(roof.pipeline) || {}).key, 'roofing');
+    const edited = roof.pipeline.map((st, i) =>
+      i === 0 ? {key:'Fresh Lead', label:'Fresh Lead', role:'open'} : st);
+    assert.strictEqual(GB.industryFromPipeline(edited), null,
+      'an edited pipeline must report no industry rather than the nearest one');
+    assert.strictEqual(GB.industryFromPipeline([]), null);
+    assert.strictEqual(GB.industryFromPipeline(null), null);
+    /* Same shape, same lengths, different names. Caught by mutation: a match
+       on anything looser than the exact key list -- comparing lengths, or
+       counting stages -- returns roofing for this and the button then offers
+       "the Roofing cadence" to somebody running a pipeline that is not it. */
+    const sameLength = roof.pipeline.map((st, i) =>
+      i === 0 ? {key:'Old Inquiry', label:'Old Inquiry', role:'open'} : st);
+    assert.strictEqual(roof.pipeline[0].key.length, 'Old Inquiry'.length,
+      'this test only means something while the two names are the same length');
+    assert.strictEqual(GB.industryFromPipeline(sameLength), null,
+      'the industry was matched on something looser than the stage names');
+    assert.strictEqual(GB.industryFromPipeline([{label:'no key', role:'open'}]), null);
+    // And the fallback is the historical default, not an empty cadence.
+    assert.deepStrictEqual(
+      GB.recommendedSequenceFor({pipeline: edited}).map(s => s.key),
+      GB.buildDefaultSequence().map(s => s.key));
+  });
+
+  test('switching a step keeps a usable number, never an empty trigger', () => {
+    /* retargetStep is the one place a form can produce a trigger the
+       evaluator cannot act on. A days_before with no days behaves as 1, which
+       nobody asked for, and carrying "2 days before" across to "minutes
+       before" as 2 minutes would be worse than either. */
+    const step = {key:'midcheckin', stage:'midcheckin',
+                  trigger:{type:'days_before_appointment', days:2}};
+    const toMin = GB.retargetStep(step, 'minutes_before_appointment');
+    assert.strictEqual(toMin.trigger.type, 'minutes_before_appointment');
+    assert.ok(toMin.trigger.leadMin >= 5, 'no lead time: ' + JSON.stringify(toMin.trigger));
+    assert.ok(typeof toMin.trigger.floorMin === 'number',
+      'without a floor, a reminder can go out after the appointment has started');
+    const toNone = GB.retargetStep(step, 'on_create');
+    assert.deepStrictEqual(toNone.trigger, {type:'on_create'},
+      'a timing that takes no number must not keep the old one');
+    // The stage is a separate choice and must not be rewritten by a retiming.
+    assert.strictEqual(toMin.stage, 'midcheckin');
+  });
+
+  test('every timing the form offers is one the evaluator implements', () => {
+    /* The failure this prevents is silent: a trigger type stepIsDue does not
+       know simply never fires, and the cadence screen goes on showing it as a
+       touch that will happen. */
+    const now = new Date('2026-10-14T15:00:00Z');
+    for (const ch of GB.cadenceTriggerChoices()) {
+      const step = GB.retargetStep({key:'t', stage:'welcome', trigger:{}}, ch.type);
+      GB.setSequence([step]);
+      try {
+        const c = freshClient({bookedDate: isoDaysAgo(10), callDateTime: isoDaysFromNow(1)});
+        assert.doesNotThrow(() => GB.computeDue(c, now), ch.type + ' throws');
+        if (ch.param) {
+          assert.ok(typeof step.trigger[ch.param] === 'number',
+            ch.type + ' was offered with a ' + ch.param + ' the form never sets');
+        }
+      } finally { GB.setSequence(null); }
+    }
+  });
+
+  test('a typed-in number cannot reach the engine unclamped', () => {
+    // A number input accepts anything once somebody types in it, so min/max
+    // on the element is presentation. 0 days before is not a timing.
+    const ch = GB.cadenceTriggerChoice('days_before_appointment');
+    assert.strictEqual(GB.clampCadenceParam(ch, 0), ch.min);
+    assert.strictEqual(GB.clampCadenceParam(ch, 9999), ch.max);
+    assert.strictEqual(GB.clampCadenceParam(ch, ''), ch.dflt);
+    assert.strictEqual(GB.clampCadenceParam(ch, 'abc'), ch.dflt);
+    assert.strictEqual(GB.clampCadenceParam(ch, 2.6), 3);
+    assert.strictEqual(GB.clampCadenceParam(ch, -4), ch.min);
+  });
+
+  test('repeat_while_role is not offered as a timing to choose', () => {
+    /* It carries a role list, an anchor and a window, and no safe form. Its
+       interval is editable on its own; its shape is not. */
+    assert.ok(!GB.cadenceTriggerChoices().some(c => c.type === 'repeat_while_role'));
+    assert.strictEqual(GB.cadenceTriggerChoice('repeat_while_role'), null);
+  });
+
+  test('the settings screen renders the editor without throwing', () => {
+    /* The markup is built in one expression per section, so a mistake inside
+       it takes the whole settings screen down rather than one row -- and
+       settings is where somebody goes to fix things. */
+    const ctx = makeHostedCtx();
+    vm.runInContext("STATE = buildDefaultState(); STATE.myCalendars = ['a@b.com'];", ctx);
+    assert.doesNotThrow(() => vm.runInContext('openSettingsModal()', ctx),
+      'the default cadence does not render');
+    // A roofing pipeline, so the industry-named reset button path runs too.
+    vm.runInContext(`
+      SETTINGS_DRAFT = {pipeline: industryTemplate('roofing').pipeline,
+                        terminology: buildDefaultTerminology(),
+                        sequence: industryTemplate('roofing').sequence};
+    `, ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderSettingsModal()', ctx),
+      'an industry cadence does not render');
+    // And the states a person can actually reach: no touches left at all.
+    vm.runInContext("SETTINGS_DRAFT.sequence = SETTINGS_DRAFT.sequence.filter(function(s){ return s.trigger.type === 'repeat_while_role'; });", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderSettingsModal()', ctx),
+      'an emptied cadence does not render');
+    vm.runInContext("SETTINGS_DRAFT.sequence = [];", ctx);
+    assert.doesNotThrow(() => vm.runInContext('renderSettingsModal()', ctx),
+      'a completely empty cadence does not render');
+  });
+
+  test('an emptied cadence says so rather than looking configured', () => {
+    // Removing every pre-appointment touch is allowed -- somebody may want
+    // only the rescue steps -- but it must not look like a working setup.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const sec = app.slice(app.indexOf("'<div class=\"set-section\"><h3>Follow-up cadence</h3>'"),
+                          app.indexOf("'<div class=\"set-section\"><h3>How appointments get in</h3>'"));
+    assert.ok(/No touches before the appointment/.test(sec),
+      'an empty cadence gives no warning');
+    assert.ok(/data-action="add-step"/.test(sec), 'there is no way to add a touch');
+    assert.ok(/data-action="move-step"/.test(sec), 'there is no way to reorder');
+    assert.ok(/data-action="set-step-trigger"/.test(sec), 'there is no way to retime a touch');
+    assert.ok(/cadenceTriggerChoices\(\)/.test(sec),
+      'the timings are hardcoded in the form instead of read from the engine');
+  });
+
+  test('picking a template loads its cadence, not just its stages', () => {
+    /* Caught by mutation: deleting this line left every test green while
+       every industry silently went back to inheriting the agency rhythm --
+       which is the exact bug the industry cadences exist to fix, and it was
+       invisible because the sequence lives in a separate field nothing else
+       asserted on.
+
+       Read from the handler because a click cannot be driven through the test
+       document, which is a noop proxy. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const h = app.slice(app.indexOf("case 'use-template'"), app.indexOf("case 'reset-settings'"));
+    assert.ok(/SETTINGS_DRAFT\.pipeline =/.test(h), 'the template no longer sets the pipeline');
+    assert.ok(/SETTINGS_DRAFT\.sequence = tpl\.sequence\.map\(cloneStep\)/.test(h),
+      'the template does not load its cadence, so every industry inherits the default one');
+    assert.ok(/if\(tpl\.sequence\)/.test(h),
+      "'Something else' has no cadence, and must keep the defaults rather than blank them");
+    // Still a draft: nothing may be committed before Save.
+    assert.ok(/Review it, then Save/.test(h),
+      'the template no longer tells them it is reviewable');
+    assert.ok(!/saveState|saveSettingsDraft/.test(h),
+      'applying a template writes to the account before anyone pressed Save');
+  });
+
+  test('reset gives back their cadence, not the agency one', () => {
+    /* Caught by mutation: hardcoding buildDefaultSequence() here broke no
+       test. It is the quietest way to tell a roofer their industry was never
+       really supported -- pick Roofing, press reset, get five agency touches
+       back, with the button still claiming it was theirs. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const h = app.slice(app.indexOf("case 'restore-sequence'"), app.indexOf("case 'add-step'"));
+    assert.ok(/recommendedSequenceFor\(SETTINGS_DRAFT\)/.test(h),
+      'reset ignores which industry the pipeline belongs to');
+    assert.ok(!/buildDefaultSequence\(\)/.test(h),
+      'reset hardcodes the default cadence instead of asking for the recommended one');
+
+    // And the label must not claim an industry when none was identified.
+    const sec = app.slice(app.indexOf("'<div class=\"set-section\"><h3>Follow-up cadence</h3>'"),
+                          app.indexOf("'<div class=\"set-section\"><h3>How appointments get in</h3>'"));
+    assert.ok(/industryFromPipeline\(SETTINGS_DRAFT\.pipeline\)/.test(sec),
+      'the reset button does not check whose cadence it is about to offer');
+    assert.ok(/Reset to the default cadence/.test(sec),
+      'there is no wording for the case where the industry is unknown, so it '
+        + 'would call the fallback "recommended"');
+  });
+}
+
 console.log('\n--- one touch per person per day ---');
 
 test('several touches due produce one card, not three', () => {

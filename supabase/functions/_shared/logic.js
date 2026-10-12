@@ -69,6 +69,54 @@ function buildDefaultPipeline(){
    Stage roles do the work: every template's pipeline maps onto open / won /
    missed / stalled / lost, which is why the same cadence engine drives all of
    them without knowing a single stage name. */
+/* Two cadence shapes, told apart by how far ahead the work gets booked.
+
+   Every template claimed to bundle "terminology, pipeline, cadence" and not
+   one of them set a cadence, so a roofer and a gym both inherited the
+   agency's rhythm -- including "the Monday of the appointment week", which is
+   meaningless for an estimate booked on Tuesday for Thursday. The run-up
+   touches are the part of a template that was missing.
+
+   Deliberately two shapes rather than nine bespoke ones. The honest
+   difference between these businesses is lead time, and that I can defend: a
+   discovery call booked a fortnight out has a week to fill, an estimate
+   booked two days out does not. Inventing a distinct rhythm per industry
+   would be nine guesses wearing the authority of a default, and every one of
+   them lands on somebody's real customers. An admin who knows better can edit
+   any of it afterwards, which is the whole point of the cadence being data.
+
+   Both shapes reuse the existing stage keys, because stages are what message
+   copy is filed under -- a touch on a stage with no variants fires with
+   nothing to send. And both end with the same three role-repeating steps,
+   read from the default so they cannot drift: rescuing a no-show and reviving
+   a cold lead is the product, and it is not industry-specific. */
+function cadenceRepeatSteps(){
+  return buildDefaultSequence().filter(function(st){
+    return st.trigger && st.trigger.type === 'repeat_while_role';
+  });
+}
+
+// Booked a week or more out: there is room for a start-of-week nudge and a
+// check-in halfway to the date. This is the historical default.
+function longLeadSequence(){
+  return buildDefaultSequence();
+}
+
+/* Booked days out, often same week. The two week-shaped touches collapse into
+   one "day before", which is the only pre-reminder that fits a short lead --
+   and because days_before_appointment is a window, a booking made inside it
+   is still caught rather than skipped. */
+function shortLeadSequence(){
+  return [
+    {key:'welcome',    stage:'welcome',    trigger:{type:'on_create'}},
+    {key:'midcheckin', stage:'midcheckin', trigger:{type:'days_before_appointment', days:1}},
+    {key:'dayof',      stage:'dayof',      trigger:{type:'day_of_appointment'}},
+    {key:'hourbefore', stage:'hourbefore', trigger:{type:'minutes_before_appointment',
+                                                   leadMin: HOURBEFORE_LEAD_MIN,
+                                                   floorMin: HOURBEFORE_FLOOR_MIN}}
+  ].concat(cadenceRepeatSteps());
+}
+
 function buildIndustryTemplates(){
   function pipe(stages){
     return stages.map(function(st){ return {key: st[0], label: st[0], role: st[1]}; });
@@ -76,6 +124,7 @@ function buildIndustryTemplates(){
   return [
     {
       key:'agency', label:'Marketing / creative agency',
+      sequence: longLeadSequence(),
       blurb:'Discovery calls booked from outreach or inbound.',
       terminology:{contact:'Client', contactPlural:'Clients', appointment:'Call', appointmentPlural:'Calls', graveyard:'Graveyard'},
       pipeline: pipe([['Booked','open'],['Confirmed','open'],['Reminded','open'],
@@ -83,6 +132,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'real_estate', label:'Real estate team',
+      sequence: shortLeadSequence(),
       blurb:'Showings and listing appointments.',
       terminology:{contact:'Lead', contactPlural:'Leads', appointment:'Showing', appointmentPlural:'Showings', graveyard:'Cold leads'},
       pipeline: pipe([['New Lead','open'],['Contacted','open'],['Showing Scheduled','open'],
@@ -90,6 +140,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'hvac', label:'HVAC / plumbing / electrical',
+      sequence: shortLeadSequence(),
       blurb:'Estimates and service calls.',
       terminology:{contact:'Customer', contactPlural:'Customers', appointment:'Estimate', appointmentPlural:'Estimates', graveyard:'Cold storage'},
       pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Estimate Scheduled','open'],
@@ -97,6 +148,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'roofing', label:'Roofing / exterior',
+      sequence: shortLeadSequence(),
       blurb:'Inspections and quotes, often weather-driven.',
       terminology:{contact:'Homeowner', contactPlural:'Homeowners', appointment:'Inspection', appointmentPlural:'Inspections', graveyard:'Cold storage'},
       pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Inspection Scheduled','open'],
@@ -104,6 +156,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'moving', label:'Moving / logistics',
+      sequence: shortLeadSequence(),
       blurb:'Walkthroughs and move quotes with hard dates.',
       terminology:{contact:'Customer', contactPlural:'Customers', appointment:'Walkthrough', appointmentPlural:'Walkthroughs', graveyard:'Cold storage'},
       pipeline: pipe([['New Inquiry','open'],['Contacted','open'],['Walkthrough Booked','open'],
@@ -111,6 +164,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'recruiting', label:'Recruiting / staffing',
+      sequence: longLeadSequence(),
       blurb:'Candidate screens and interviews.',
       terminology:{contact:'Candidate', contactPlural:'Candidates', appointment:'Interview', appointmentPlural:'Interviews', graveyard:'Archive'},
       pipeline: pipe([['Sourced','open'],['Contacted','open'],['Screen Scheduled','open'],
@@ -118,6 +172,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'saas', label:'SaaS / software sales',
+      sequence: longLeadSequence(),
       blurb:'Demos and trials.',
       terminology:{contact:'Prospect', contactPlural:'Prospects', appointment:'Demo', appointmentPlural:'Demos', graveyard:'Closed lost'},
       pipeline: pipe([['New Lead','open'],['Contacted','open'],['Demo Scheduled','open'],
@@ -125,6 +180,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'fitness', label:'Gym / fitness studio',
+      sequence: shortLeadSequence(),
       blurb:'Intro sessions and tours.',
       terminology:{contact:'Member', contactPlural:'Members', appointment:'Session', appointmentPlural:'Sessions', graveyard:'Lapsed'},
       pipeline: pipe([['New Lead','open'],['Contacted','open'],['Intro Booked','open'],
@@ -132,6 +188,7 @@ function buildIndustryTemplates(){
     },
     {
       key:'b2b', label:'General B2B sales',
+      sequence: longLeadSequence(),
       blurb:'Discovery calls and proposals.',
       terminology:{contact:'Opportunity', contactPlural:'Opportunities', appointment:'Meeting', appointmentPlural:'Meetings', graveyard:'Closed lost'},
       pipeline: pipe([['New Lead','open'],['Contacted','open'],['Meeting Scheduled','open'],
@@ -141,9 +198,46 @@ function buildIndustryTemplates(){
       key:'custom', label:'Something else',
       blurb:'Start from the basics and rename everything yourself.',
       terminology: null,   // null means "keep the defaults and let them edit"
-      pipeline: null
+      pipeline: null,
+      sequence: null
     }
   ];
+}
+
+/* Which template a pipeline came from, by matching its stage keys.
+
+   The industry choice is not stored anywhere -- a template writes its values
+   into the same columns an admin edits, which is deliberate and the reason
+   picking one then renaming a stage is an ordinary edit. The cost is that
+   nothing afterwards knows which template was picked, so "reset the cadence"
+   has to work it out.
+
+   Exact match on the full ordered key list, so a pipeline somebody has edited
+   reports no industry rather than the nearest one. A stage missing its key
+   needs no separate guard: it joins to a string no template equals. That is the useful
+   direction to fail in: a wrong guess here would hand a roofer the agency
+   cadence while calling it their own. Callers are expected to say "default"
+   rather than "recommended" when this returns null. */
+function industryFromPipeline(pipeline){
+  var keys = (pipeline || []).map(function(st){ return st && st.key; });
+  if(!keys.length) return null;
+  var joined = keys.join('\u0000');
+  var all = buildIndustryTemplates();
+  for(var i = 0; i < all.length; i++){
+    if(!all[i].pipeline) continue;
+    var tk = all[i].pipeline.map(function(st){ return st.key; }).join('\u0000');
+    if(tk === joined) return all[i];
+  }
+  return null;
+}
+
+/* The cadence to offer as "recommended" for these settings.
+
+   Falls back to the historical default when the industry cannot be
+   identified, which is also what the 'custom' template gets. */
+function recommendedSequenceFor(settings){
+  var tpl = industryFromPipeline(settings && settings.pipeline);
+  return (tpl && tpl.sequence) ? tpl.sequence : buildDefaultSequence();
 }
 
 function industryTemplate(key){
@@ -1921,6 +2015,71 @@ function buildDefaultSequence(){
                                                    afterDays: REVIVAL_EVERY_DAYS,
                                                    everyDays: REVIVAL_EVERY_DAYS}}
   ];
+}
+
+/* The trigger choices a settings form may offer, and the one number each
+   needs.
+
+   The labels are written to sit BESIDE that number, not to stand alone:
+   "before the appointment" with a 2 and a "days" chip next to it, never
+   "from N days before the appointment" with a literal N in the dropdown and
+   the real number somewhere else on the row. Data rather than markup so the form cannot drift from the evaluator:
+   every type here is handled by stepIsDue, and a type stepIsDue does not know
+   would silently never fire.
+
+   repeat_while_role is deliberately absent. It carries a role list, an
+   anchor and a window, and the three steps using it -- rescuing a no-show,
+   chasing a stalled deal, reviving a cold one -- are the product rather than
+   a preference. Its interval is editable on its own; its shape is not. */
+function cadenceTriggerChoices(){
+  return [
+    {type:'on_create',                      label:'as soon as they come in',                param:null},
+    {type:'days_after_create',              label:'after they come in',                     param:'days',  unit:'days', min:1, max:120, dflt:3},
+    {type:'weekday_of_appointment_week',    label:'earlier in the week of the appointment', param:null},
+    {type:'midpoint_booked_to_appointment', label:'halfway to the appointment',             param:null},
+    {type:'days_before_appointment',        label:'before the appointment',                 param:'days',  unit:'days', min:1, max:60,  dflt:1},
+    {type:'day_of_appointment',             label:'on the day of the appointment',          param:null},
+    {type:'minutes_before_appointment',     label:'shortly before the appointment',         param:'leadMin', unit:'minutes', min:5, max:1440, dflt: HOURBEFORE_LEAD_MIN}
+  ];
+}
+
+function cadenceTriggerChoice(type){
+  var all = cadenceTriggerChoices();
+  for(var i = 0; i < all.length; i++){ if(all[i].type === type) return all[i]; }
+  return null;
+}
+
+/* Switch a step to a different trigger, keeping the number where it still
+   means something.
+
+   Changing "from 2 days before" to "3 days after they come in" must not
+   carry the 2 across as a silent default, and must not leave the new trigger
+   without its number either -- a days_before_appointment with no days
+   behaves as 1 and nobody asked for 1. Falls back to the choice's own
+   default, clamped, so every switch lands on a value the evaluator can use. */
+function retargetStep(step, type){
+  var choice = cadenceTriggerChoice(type);
+  if(!step || !choice) return step;
+  var trigger = {type: type};
+  if(choice.param){
+    var carried = step.trigger && step.trigger[choice.param];
+    trigger[choice.param] = clampCadenceParam(choice,
+      typeof carried === 'number' ? carried : choice.dflt);
+    if(type === 'minutes_before_appointment'){
+      // The floor is what stops a reminder going out after the appointment
+      // has started; it is not a user-facing number.
+      trigger.floorMin = HOURBEFORE_FLOOR_MIN;
+    }
+  }
+  return {key: step.key, stage: step.stage, trigger: trigger};
+}
+
+function clampCadenceParam(choice, value){
+  var n = Math.round(Number(value));
+  if(!isFinite(n)) n = choice.dflt;
+  if(n < choice.min) n = choice.min;
+  if(n > choice.max) n = choice.max;
+  return n;
 }
 
 // Plain-English rendering of a trigger, so a settings form can show a cadence
@@ -5893,6 +6052,15 @@ var __LOGIC_EXPORTS__ = {
   hasSentStage: hasSentStage, hasSentStageThisAppointment: hasSentStageThisAppointment,
   appointmentSetAt: appointmentSetAt, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
   REVIVAL_EVERY_DAYS: REVIVAL_EVERY_DAYS, REVIVAL_DAILY_CAP: REVIVAL_DAILY_CAP, REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
+  cadenceRepeatSteps: cadenceRepeatSteps,
+  longLeadSequence: longLeadSequence,
+  shortLeadSequence: shortLeadSequence,
+  cadenceTriggerChoices: cadenceTriggerChoices,
+  cadenceTriggerChoice: cadenceTriggerChoice,
+  retargetStep: retargetStep,
+  clampCadenceParam: clampCadenceParam,
+  industryFromPipeline: industryFromPipeline,
+  recommendedSequenceFor: recommendedSequenceFor,
   buildDefaultSequence: buildDefaultSequence, setSequence: setSequence, getSequence: getSequence, stepIsDue: stepIsDue,
   describeTrigger: describeTrigger,
   extractChannelHandle: extractChannelHandle, eligibleVariants: eligibleVariants, pickVariant: pickVariant,

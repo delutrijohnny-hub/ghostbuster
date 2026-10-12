@@ -3624,18 +3624,108 @@ function renderSettingsModal(){
     (removed.length ? '<div class="set-warn">⚠ ' + removed.map(function(k){ return counts[k] + ' contact(s) on “' + escapeHtml(k) + '”'; }).join(', ') +
       ' — removing a stage leaves them on it. Unrecognised stages behave as “open”, so they keep getting followed up rather than disappearing.</div>' : '') +
     '</div>' +
+    /* The cadence, editable rather than merely listed.
+
+       It showed each step with a ✕ and a "restore the default" button, so the
+       only two things anybody could do were delete a touch and put it back.
+       You could not add one, change when one fires, or reorder them -- which
+       means "five touches on this rhythm" was effectively the only cadence
+       the product had, and every business that wanted four touches on a
+       different rhythm was being told to run someone else's playbook.
+
+       The engine has been data-driven and persisted per account for a while;
+       what was missing was a way to reach it. The trigger vocabulary is a
+       closed set from logic.js, so the form cannot offer a trigger the
+       evaluator does not implement -- one that would silently never fire. */
     '<div class="set-section"><h3>Follow-up cadence</h3>' +
-    '<div class="hint">When Ghost Recall chases. Removing a step stops that touch firing; the message templates for it stay put, so nothing is lost if you add it back.</div>' +
-    SETTINGS_DRAFT.sequence.map(function(st, i){
-      return '<div class="stage-row">' +
-        '<span class="grip">' + (i+1) + '</span>' +
-        '<span style="flex:1;min-width:0;font-size:12.5px;"><strong>' + escapeHtml(st.stage) + '</strong> — ' +
-        escapeHtml(describeTrigger(st.trigger)) + '</span>' +
-        '<button data-action="remove-step" data-idx="' + i + '" title="Remove this touch">✕</button>' +
-      '</div>';
-    }).join('') +
-    (SETTINGS_DRAFT.sequence.length < buildDefaultSequence().length
-      ? '<button class="btn btn-sm" data-action="restore-sequence">Restore the default cadence</button>' : '') +
+    '<div class="hint">How many times Ghost Recall chases, and when. ' +
+      'Removing a touch stops it firing; its message templates stay put, so ' +
+      'nothing is lost if you add it back. Order sets the numbering you see on ' +
+      'a card (“touch 2 of 4”) \u2014 when each one fires is set by its timing.</div>' +
+    (function(){
+      var seq = SETTINGS_DRAFT.sequence || [];
+      var runup = [], repeat = [];
+      seq.forEach(function(st, i){
+        ((st.trigger || {}).type === 'repeat_while_role' ? repeat : runup).push({st: st, i: i});
+      });
+      var stages = Object.keys(STATE.variants || {});
+
+      var rows = runup.map(function(row, n){
+        var st = row.st, i = row.i;
+        var choice = cadenceTriggerChoice((st.trigger || {}).type);
+        return '<div class="stage-row cad-row">' +
+          '<span class="grip" title="Touch ' + (n+1) + '">' + (n+1) + '</span>' +
+          '<select data-action="set-step-stage" data-idx="' + i + '" title="Which message this touch sends">' +
+            /* touchLabel, not the raw key. This form is where a plumber
+               decides how often to chase an estimate, and "midcheckin" is
+               our word, not theirs. */
+            stages.map(function(sk){
+              return '<option value="' + escapeHtml(sk) + '"' +
+                (sk === st.stage ? ' selected' : '') + '>' +
+                escapeHtml(touchLabel(sk)) + '</option>';
+            }).join('') +
+          '</select>' +
+          '<select data-action="set-step-trigger" data-idx="' + i + '" title="When it fires">' +
+            cadenceTriggerChoices().map(function(ch){
+              return '<option value="' + ch.type + '"' +
+                (choice && ch.type === choice.type ? ' selected' : '') + '>' +
+                escapeHtml(ch.label) + '</option>';
+            }).join('') +
+          '</select>' +
+          (choice && choice.param
+            ? '<input class="cad-num" type="number" data-action="set-step-param" data-idx="' + i + '"' +
+              ' min="' + choice.min + '" max="' + choice.max + '"' +
+              ' value="' + escapeHtml(String((st.trigger || {})[choice.param] || choice.dflt)) + '">' +
+              '<span class="cad-unit">' + escapeHtml(choice.unit) + '</span>'
+            : '<span class="cad-num-gap"></span>') +
+          '<button data-action="move-step" data-idx="' + i + '" data-dir="-1"' +
+            (n === 0 ? ' disabled' : '') + ' title="Move earlier">\u2191</button>' +
+          '<button data-action="move-step" data-idx="' + i + '" data-dir="1"' +
+            (n === runup.length - 1 ? ' disabled' : '') + ' title="Move later">\u2193</button>' +
+          '<button data-action="remove-step" data-idx="' + i + '" title="Remove this touch">\u2715</button>' +
+        '</div>';
+      }).join('');
+
+      /* The role-driven steps, with their interval editable and their shape
+         not. "Chase a stalled deal every 2 days" is a preference; which roles
+         count as stalled, and that cold leads get revived at all, is the
+         product -- and the roles/anchor/window fields have no safe form. */
+      var repeatRows = repeat.length
+        ? '<div class="cad-sub">Rescue and revival \u2014 these keep running on their own</div>' +
+          repeat.map(function(row){
+            var st = row.st, t = st.trigger || {};
+            return '<div class="stage-row cad-row">' +
+              '<span class="grip">\u21bb</span>' +
+              '<span class="cad-fixed"><strong>' + escapeHtml(touchLabel(st.stage)) + '</strong> \u2014 while ' +
+                escapeHtml((t.roles || []).join(' or ')) + '</span>' +
+              '<span class="cad-every">every</span>' +
+              '<input class="cad-num" type="number" data-action="set-step-every" data-idx="' + row.i + '"' +
+                ' min="1" max="365" value="' + escapeHtml(String(t.everyDays || 1)) + '">' +
+              '<span class="cad-unit">days</span>' +
+              '<button data-action="remove-step" data-idx="' + row.i + '" title="Stop this entirely">\u2715</button>' +
+            '</div>';
+          }).join('')
+        : '';
+
+      var warn = !runup.length
+        ? '<div class="set-warn">\u26a0 No touches before the appointment. Nothing will go out ' +
+          'until someone misses one or goes quiet.</div>'
+        : '';
+
+      return rows + warn +
+        '<button class="btn btn-sm" data-action="add-step">+ Add touch</button> ' +
+        /* Named after the industry when we can tell, and called "default"
+           when we cannot. Saying "recommended" over a fallback would be the
+           button quietly telling a roofer the agency rhythm is theirs. */
+        '<button class="btn btn-sm" data-action="restore-sequence">' +
+          (function(){
+            var tpl = industryFromPipeline(SETTINGS_DRAFT.pipeline);
+            return tpl && tpl.sequence
+              ? 'Reset to the ' + escapeHtml(tpl.label) + ' cadence'
+              : 'Reset to the default cadence';
+          })() + '</button>' +
+        repeatRows;
+    })() +
     '</div>' +
     /* One place that answers "how do appointments get in here?".
 
@@ -3767,6 +3857,17 @@ function renderSettingsModal(){
     '</div>',
     true
   );
+}
+
+/* A step copied deeply enough that editing the draft cannot reach the
+   template it came from.
+
+   buildIndustryTemplates() rebuilds its list on every call, so the objects
+   are fresh -- but the trigger is a nested object, and a draft that shared
+   one with anything else would write through it. Cheap insurance on a path
+   where the symptom would be a setting that changes a different setting. */
+function cloneStep(st){
+  return {key: st.key, stage: st.stage, trigger: Object.assign({}, st.trigger)};
 }
 
 function saveSettingsDraft(){
@@ -4419,9 +4520,53 @@ document.addEventListener('click', function(ev){
       renderSettingsModal();
       break;
     case 'restore-sequence':
-      SETTINGS_DRAFT.sequence = buildDefaultSequence();
+      /* The recommended cadence for the pipeline in front of them, not the
+         agency one. Picking "Roofing" and then resetting used to hand back a
+         five-touch agency rhythm, which is how a reset button teaches you
+         that your industry was never really supported. */
+      SETTINGS_DRAFT.sequence = recommendedSequenceFor(SETTINGS_DRAFT).map(cloneStep);
       renderSettingsModal();
       break;
+    case 'add-step': {
+      /* Appended after the last run-up touch rather than at the end, so a new
+         touch does not land below the rescue steps where its number would be
+         wrong and it would read as part of them. */
+      var seqA = SETTINGS_DRAFT.sequence;
+      var insertAt = 0;
+      seqA.forEach(function(st, ix){
+        if((st.trigger || {}).type !== 'repeat_while_role') insertAt = ix + 1;
+      });
+      // A stage that already has copy, preferring one not already in use --
+      // a second touch on the same stage would send the same message twice.
+      var used = {};
+      seqA.forEach(function(st){ used[st.stage] = true; });
+      var avail = Object.keys(STATE.variants || {});
+      var free = avail.filter(function(k){ return !used[k]; });
+      var stage = free.length ? free[0] : (avail[0] || 'welcome');
+      seqA.splice(insertAt, 0, retargetStep(
+        {key: stage, stage: stage, trigger: {}}, 'days_before_appointment'));
+      renderSettingsModal();
+      break;
+    }
+    case 'move-step': {
+      var from = parseInt(target.getAttribute('data-idx'), 10);
+      var dir = parseInt(target.getAttribute('data-dir'), 10);
+      var seqM = SETTINGS_DRAFT.sequence;
+      /* Swapped with the next RUN-UP step, not the next array element. The
+         rescue steps are rendered in their own group below, so a plain
+         index swap would appear to do nothing while quietly reordering
+         something off-screen. */
+      var order = [];
+      seqM.forEach(function(st, ix){
+        if((st.trigger || {}).type !== 'repeat_while_role') order.push(ix);
+      });
+      var at = order.indexOf(from);
+      var to = order[at + dir];
+      if(at === -1 || to === undefined) break;
+      var tmp = seqM[from]; seqM[from] = seqM[to]; seqM[to] = tmp;
+      renderSettingsModal();
+      break;
+    }
     case 'use-template': {
       var tk = target.getAttribute('data-key');
       var tpl = industryTemplate(tk);
@@ -4432,6 +4577,15 @@ document.addEventListener('click', function(ev){
       if(tpl.terminology){
         SETTINGS_DRAFT.terminology = Object.assign(buildDefaultTerminology(), tpl.terminology);
       }
+      /* The cadence is part of the template too.
+
+         It was described as one from the start and never actually set, so
+         every industry inherited the agency's rhythm -- a roofer got "the
+         Monday of the appointment week" for an estimate booked on Tuesday
+         for Thursday. Loaded into the draft like everything else here, so it
+         is reviewable and discardable before Save rather than applied behind
+         somebody's back. */
+      if(tpl.sequence) SETTINGS_DRAFT.sequence = tpl.sequence.map(cloneStep);
       /* Remap on save, not now. The draft is reviewable and discardable —
          nothing has been committed yet — so rewriting statuses here would
          change real data for a choice the person can still back out of. */
@@ -4777,6 +4931,54 @@ document.addEventListener('change', function(ev){
   var t = ev.target;
   if(t.getAttribute && t.getAttribute('data-action') === 'team-assign'){
     assignFromPicker(t);
+    return;
+  }
+  if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-stage'){
+    var ssI = parseInt(t.getAttribute('data-idx'), 10);
+    if(SETTINGS_DRAFT.sequence[ssI]){
+      SETTINGS_DRAFT.sequence[ssI].stage = t.value;
+      // The key is only an identifier, but a step whose key says 'dayof'
+      // while its stage says 'monday' is a trap for the next reader.
+      SETTINGS_DRAFT.sequence[ssI].key = t.value;
+      renderSettingsModal();
+    }
+    return;
+  }
+  if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-trigger'){
+    var stI = parseInt(t.getAttribute('data-idx'), 10);
+    if(SETTINGS_DRAFT.sequence[stI]){
+      SETTINGS_DRAFT.sequence[stI] = retargetStep(SETTINGS_DRAFT.sequence[stI], t.value);
+      // Re-rendered because the number field appears, disappears or changes
+      // unit with the trigger.
+      renderSettingsModal();
+    }
+    return;
+  }
+  if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-param'){
+    var spI = parseInt(t.getAttribute('data-idx'), 10);
+    var spStep = SETTINGS_DRAFT.sequence[spI];
+    if(spStep){
+      var spChoice = cadenceTriggerChoice((spStep.trigger || {}).type);
+      if(spChoice && spChoice.param){
+        /* Clamped in the model, not just by the input's min/max. A number
+           field accepts anything when typed into, and a 0 or a blank here
+           would reach the evaluator as a trigger with no timing. */
+        spStep.trigger[spChoice.param] = clampCadenceParam(spChoice, t.value);
+        renderSettingsModal();
+      }
+    }
+    return;
+  }
+  if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-every'){
+    var seI = parseInt(t.getAttribute('data-idx'), 10);
+    var seStep = SETTINGS_DRAFT.sequence[seI];
+    if(seStep && seStep.trigger){
+      var every = Math.round(Number(t.value));
+      if(!isFinite(every) || every < 1) every = 1;
+      if(every > 365) every = 365;
+      seStep.trigger.everyDays = every;
+      renderSettingsModal();
+    }
     return;
   }
   if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-stage-role'){

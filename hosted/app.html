@@ -675,6 +675,19 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .stage-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;}
 .stage-row input{flex:1;min-width:0;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;}
 .stage-row select{padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;background:var(--card);}
+/* The cadence editor. A touch row carries a stage, a timing, sometimes a
+   number, and the controls to move or drop it -- six things on one line, so
+   the two selects share the slack and the number stays a fixed width rather
+   than stretching to fill it. cad-num-gap holds that width open for the
+   timings that take no number, so rows do not jump as the dropdown changes. */
+.cad-row select{flex:1 1 0;min-width:0;}
+.cad-row .cad-num{flex:0 0 58px;width:58px;text-align:right;}
+.cad-row .cad-unit{flex:0 0 auto;font-size:11.5px;color:var(--muted);}
+.cad-row .cad-num-gap{flex:0 0 58px;}
+.cad-row button[disabled]{opacity:.35;cursor:default;}
+.cad-row .cad-fixed{flex:1 1 0;min-width:0;font-size:12.5px;}
+.cad-row .cad-every{flex:0 0 auto;font-size:11.5px;color:var(--muted);}
+.cad-sub{margin:12px 0 6px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
 .stage-row .grip{color:var(--ink-faint);font-size:12px;width:16px;text-align:center;}
 .stage-row button{flex:0 0 auto;padding:5px 9px;font-size:12px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--ink-soft);cursor:pointer;}
 .stage-row button:hover{border-color:var(--red);color:var(--red);}
