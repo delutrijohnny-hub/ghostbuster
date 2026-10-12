@@ -1935,7 +1935,10 @@ function describeTrigger(trigger){
     case 'minutes_before_appointment':
       return 'about ' + (t.leadMin || 60) + ' minutes before the appointment';
     case 'days_before_appointment':
-      return (t.days || 1) + ' day' + ((t.days || 1) === 1 ? '' : 's') + ' before the appointment';
+      // "from N days before" rather than "N days before", because it is a
+      // window: someone booked inside it is caught rather than skipped.
+      return 'from ' + (t.days || 1) + ' day' + ((t.days || 1) === 1 ? '' : 's') +
+        ' before the appointment';
     case 'days_after_create':
       return (t.days || 0) + ' day' + ((t.days || 0) === 1 ? '' : 's') + ' after they come in';
     case 'repeat_while_role':
@@ -2059,8 +2062,28 @@ function stepIsDue(step, client, now, ctx){
     }
 
     case 'days_before_appointment': {
+      /* A window from N days out up to the appointment, not the single day
+         that is exactly N days before.
+
+         Every other run-up trigger here is a window --
+         weekday_of_appointment_week runs from the Monday until the call,
+         midpoint from the midpoint until the day before, minutes_before from
+         the lead time down to the floor. This one tested todayKey for exact
+         equality, so it was the only trigger that could be missed rather than
+         merely waited for.
+
+         That is not a corner case for the industries this exists to serve. An
+         HVAC or roofing estimate is routinely booked two days out; a contact
+         who arrives inside the window would never fire a "three days before"
+         touch at all, and nothing anywhere would say why. Nobody configuring
+         "3 days before" in a settings form means "only if they happened to be
+         booked on precisely the right day".
+
+         Still bounded below by the appointment itself: RUNUP_TRIGGERS above
+         already stops every run-up touch once the call has passed. */
       if(!ctx.callKey) return false;
-      return ctx.todayKey === keyPlusDays(ctx.callKey, -(t.days || 1));
+      var opensKey = keyPlusDays(ctx.callKey, -(t.days || 1));
+      return ctx.todayKey >= opensKey && ctx.todayKey < ctx.callKey;
     }
 
     case 'days_after_create': {

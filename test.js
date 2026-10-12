@@ -4650,12 +4650,81 @@ test('a business can drop a touch it does not want', () => {
   });
 });
 
-test('days_before_appointment fires on exactly that day', () => {
+test('days_before_appointment opens a window rather than naming one day', () => {
+  /* This test was called "fires on exactly that day" and asserted two cases
+     -- fires at 2 days out, silent at 4 -- which are both true whether the
+     trigger is an exact day or a window opening at 2. It never tested the
+     case that tells them apart, so the exact-day reading was never actually
+     pinned by anything.
+
+     It mattered because every other run-up trigger IS a window:
+     weekday_of_appointment_week runs from the Monday until the call,
+     midpoint from the midpoint until the day before. An exact-day match was
+     the only trigger that could be missed rather than waited for -- so a
+     contact booked INSIDE the window never fired the touch, and nothing said
+     why. An HVAC or roofing estimate booked two days out is the normal case,
+     not a corner one. */
   withSequence([{key:'t2', stage:'midcheckin', trigger:{type:'days_before_appointment', days:2}}], () => {
-    const two = freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(2)});
-    const four = freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(4)});
-    assert.ok(GB.computeDue(two, new Date()).includes('midcheckin'), 'should fire 2 days out');
-    assert.ok(!GB.computeDue(four, new Date()).includes('midcheckin'), 'should not fire 4 days out');
+    const at = (days) => freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysFromNow(days)});
+    const due = (days) => GB.computeDue(at(days), new Date()).includes('midcheckin');
+    assert.strictEqual(due(4), false, 'too early -- the window has not opened');
+    assert.strictEqual(due(2), true, 'the window opens 2 days out');
+    assert.strictEqual(due(1), true,
+      'a contact already inside the window must still be caught, not skipped forever');
+  });
+});
+
+test('a touch set further out than the booking still fires', () => {
+  /* The failure this prevents, stated on its own because it is the whole
+     point: somebody books an estimate for Thursday and calls on Tuesday. A
+     "from 5 days before" touch must catch them on Tuesday, not decide the
+     window closed before they existed. */
+  withSequence([{key:'t3', stage:'midcheckin', trigger:{type:'days_before_appointment', days:5}}], () => {
+    const shortNotice = freshClient({bookedDate: isoDaysAgo(0), callDateTime: isoDaysFromNow(2)});
+    assert.ok(GB.computeDue(shortNotice, new Date()).includes('midcheckin'),
+      'a short-notice booking fell through the window entirely');
+  });
+});
+
+test('it does not also fire on the morning of the appointment', () => {
+  /* Found by mutation: deleting the upper bound of the window broke no test,
+     and the bound is not redundant. RUNUP_TRIGGERS compares instants -- is
+     the appointment in the past -- while this compares date keys in the
+     CLIENT's timezone. They differ for exactly one case: the day of the
+     appointment, before it happens. Without the bound, a "from 3 days
+     before" touch fires that morning too, on top of the day-of touch, and
+     the contact gets two texts in one morning.
+
+     `now` and the appointment are both pinned rather than taken from the
+     clock, so the two are provably the same day in the client's zone
+     whatever time the suite runs -- the same trap that made a team test fail
+     only between 23:00 and midnight. */
+  withSequence([{key:'t5', stage:'midcheckin', trigger:{type:'days_before_appointment', days:3}}], () => {
+    const now = new Date('2026-10-14T15:00:00Z');          // 10:00 in Chicago
+    const sameDay = freshClient({
+      timezone: 'America/Chicago',
+      bookedDate: '2026-10-04T15:00:00Z',
+      callDateTime: '2026-10-14T22:00:00Z'                  // 17:00 the same day
+    });
+    assert.ok(!GB.computeDue(sameDay, now).includes('midcheckin'),
+      'the run-up touch fires on the appointment day as well as the day-of touch');
+    // And the day before, it is due -- so the bound is not just switching it off.
+    const dayBefore = freshClient({
+      timezone: 'America/Chicago',
+      bookedDate: '2026-10-04T15:00:00Z',
+      callDateTime: '2026-10-15T22:00:00Z'
+    });
+    assert.ok(GB.computeDue(dayBefore, now).includes('midcheckin'));
+  });
+});
+
+test('and it still stops once the appointment has passed', () => {
+  // The window is bounded by the appointment, not open-ended -- otherwise a
+  // contact nobody logged an outcome for keeps a "before your appointment"
+  // text queued for a date that has gone.
+  withSequence([{key:'t4', stage:'midcheckin', trigger:{type:'days_before_appointment', days:3}}], () => {
+    const past = freshClient({bookedDate: isoDaysAgo(9), callDateTime: isoDaysAgo(1)});
+    assert.ok(!GB.computeDue(past, new Date()).includes('midcheckin'));
   });
 });
 
