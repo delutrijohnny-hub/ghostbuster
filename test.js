@@ -6120,6 +6120,110 @@ console.log('\n--- a text opened in Messages is recorded ---');
   });
 }
 
+console.log('\n--- billing: what a subscription means for the people in front of it ---');
+
+{
+  const days = (n) => new Date(Date.now() + n * 86400000).toISOString();
+
+  test('an account nobody has billed yet is not a non-payer', () => {
+    /* The rule that decides whether this feature is safe to ship. Every
+       existing team has no subscription row, including Johnny's own, so
+       reading "no row" as "no access" would lock out every current user the
+       day billing goes live. Not knowing is not the same as knowing they
+       have not paid. */
+    const s = GB.subscriptionState(null, 8);
+    assert.strictEqual(s.access, true);
+    assert.strictEqual(s.blocking, false);
+    assert.strictEqual(s.status, 'none');
+    assert.strictEqual(GB.subscriptionState({}, 8).access, true,
+      'a row with no status is also not evidence of non-payment');
+  });
+
+  test('a failed payment does not empty somebody’s Monday morning', () => {
+    /* The salesperson did not forget the card; the manager did, or the bank
+       did. Cutting them off the instant Stripe says past_due punishes the
+       wrong person for something they cannot fix. */
+    const s = GB.subscriptionState(
+      {status: 'past_due', seats: 5, currentPeriodEnd: days(-2)}, 5);
+    assert.strictEqual(s.access, true, 'cut off two days after a failed payment');
+    assert.ok(/Payment failed/.test(s.headline));
+    assert.ok(/Update the card/.test(s.detail));
+  });
+
+  test('but the grace window does end', () => {
+    // Otherwise "past due" means "free forever".
+    const s = GB.subscriptionState(
+      {status: 'past_due', seats: 5, currentPeriodEnd: days(-(GB.BILLING_GRACE_DAYS + 1))}, 5);
+    assert.strictEqual(s.access, false);
+    assert.strictEqual(s.blocking, true);
+    assert.ok(/paused/.test(s.detail));
+  });
+
+  test('a cancelled subscription stops, and says how to come back', () => {
+    const s = GB.subscriptionState({status: 'canceled', seats: 5}, 5);
+    assert.strictEqual(s.access, false);
+    assert.ok(/Resubscribe/.test(s.detail), s.detail);
+  });
+
+  test('a status we have never heard of leaves people working', () => {
+    /* Stripe adds states. Treating an unrecognised one as a reason to lock
+       the door means a future Stripe release takes a customer's team off the
+       air with no code change here at all. */
+    const s = GB.subscriptionState({status: 'some_future_state', seats: 3}, 3);
+    assert.strictEqual(s.access, true);
+    assert.strictEqual(s.blocking, false);
+    assert.ok(/some_future_state/.test(s.headline), s.headline);
+  });
+
+  test('it counts seats used against seats paid for', () => {
+    const over = GB.subscriptionState({status: 'active', seats: 3}, 5);
+    assert.strictEqual(over.seatsUsed, 5);
+    assert.strictEqual(over.seatsPaid, 3);
+    assert.strictEqual(over.overSeats, 2);
+    // Being over does NOT cut access -- that is a conversation, not a lockout.
+    assert.strictEqual(over.access, true);
+    const under = GB.subscriptionState({status: 'active', seats: 10}, 4);
+    assert.strictEqual(under.overSeats, 0, 'paying for spare seats is not an error');
+  });
+
+  test('a trial reports what is left of it', () => {
+    const s = GB.subscriptionState({status: 'trialing', seats: 5, currentPeriodEnd: days(3)}, 5);
+    assert.strictEqual(s.daysLeft, 3);
+    assert.ok(/3 days left/.test(s.detail), s.detail);
+    const one = GB.subscriptionState({status: 'trialing', seats: 5, currentPeriodEnd: days(0.5)}, 5);
+    assert.ok(/1 day left/.test(one.detail), one.detail);
+    // A trial still running is access, obviously, but pin it: this is the
+    // state every new customer is in.
+    assert.strictEqual(s.access, true);
+  });
+
+  test('a cancelling-but-still-paid subscription says so', () => {
+    const s = GB.subscriptionState(
+      {status: 'active', seats: 5, cancelAtPeriodEnd: true, currentPeriodEnd: days(12)}, 5);
+    assert.strictEqual(s.access, true, 'they paid for this period');
+    assert.ok(/Cancels at the end/.test(s.detail));
+  });
+
+  test('only owners and admins can change the plan', () => {
+    // A salesperson should see that the team is past due -- it explains what
+    // they are looking at -- and must not be able to cancel the company's plan.
+    assert.strictEqual(GB.canManageBilling('owner'), true);
+    assert.strictEqual(GB.canManageBilling('admin'), true);
+    assert.strictEqual(GB.canManageBilling('member'), false);
+    assert.strictEqual(GB.canManageBilling(null), false);
+    assert.strictEqual(GB.canManageBilling('Owner'), false, 'role matching is exact');
+  });
+
+  test('it never throws on a half-written row', () => {
+    // These rows are written by a webhook off a third party's payload.
+    assert.doesNotThrow(() => GB.subscriptionState({status: 'active'}, null));
+    assert.doesNotThrow(() => GB.subscriptionState({status: 'active', seats: 'x'}, 'y'));
+    assert.doesNotThrow(() => GB.subscriptionState({status: 'past_due', currentPeriodEnd: 'nonsense'}, 2));
+    const bad = GB.subscriptionState({status: 'past_due', currentPeriodEnd: 'nonsense'}, 2);
+    assert.strictEqual(bad.access, true, 'an unparseable date must not lock anyone out');
+  });
+}
+
 console.log('\n--- industry templates ---');
 
 test('every template is a valid, workable configuration', () => {

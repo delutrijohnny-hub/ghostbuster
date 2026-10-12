@@ -56,6 +56,101 @@ function buildDefaultPipeline(){
 // set once at load, alongside the existing module-level caches. Anything that
 // hasn't called setPipeline() gets the defaults, so logic.js stays usable
 // standalone — which the tests and the Edge Functions both rely on.
+/* ---- billing ----
+   What a subscription means for the people in front of it.
+
+   Pure, and separated from Stripe on purpose: Stripe's job is to say what
+   the account's status is, and this file's job is to decide what Ghost
+   Recall does about it. Keeping those apart means the second half is
+   testable without a network, a key or a sandbox.
+
+   Stripe's own status words are stored and read verbatim rather than mapped
+   to ours, because mapping means guessing at states Stripe adds later. */
+var BILLING_GRACE_DAYS = 7;
+
+/* The rule that matters most here is the one about not knowing.
+
+   An account with no subscription row is not a non-payer: it is an account
+   nothing has been recorded about yet. Every existing team is in that state
+   right now, including Johnny's own. Treating "no row" as "no access" would
+   lock out every current user the moment this ships, which is a worse
+   failure than letting an unpaid team keep working for another day.
+
+   So access is withheld only on a status Stripe has positively told us is
+   bad, and even then not instantly -- a card that expires on a Friday should
+   not empty somebody's Monday morning. Past due keeps working through a
+   grace window, and only a genuinely dead subscription stops anything. */
+function subscriptionState(sub, memberCount, now){
+  now = now || new Date();
+  var seatsUsed = Math.max(0, Number(memberCount) || 0);
+
+  if(!sub || !sub.status){
+    return {status: 'none', access: true, blocking: false,
+            seatsUsed: seatsUsed, seatsPaid: 0, overSeats: 0, daysLeft: null,
+            headline: 'No subscription on file',
+            detail: 'Nothing is being charged for this team yet.'};
+  }
+
+  var st = String(sub.status);
+  var seatsPaid = Math.max(0, Number(sub.seats) || 0);
+  var overSeats = Math.max(0, seatsUsed - seatsPaid);
+  var periodEnd = sub.currentPeriodEnd ? Date.parse(sub.currentPeriodEnd) : NaN;
+  var daysLeft = isNaN(periodEnd) ? null
+    : Math.ceil((periodEnd - now.getTime()) / 86400000);
+
+  var out = {status: st, seatsUsed: seatsUsed, seatsPaid: seatsPaid,
+             overSeats: overSeats, daysLeft: daysLeft,
+             access: true, blocking: false, headline: '', detail: ''};
+
+  if(st === 'trialing'){
+    out.headline = 'Free trial';
+    out.detail = daysLeft === null ? 'Trial in progress.'
+      : daysLeft <= 0 ? 'Trial has ended.'
+      : daysLeft + (daysLeft === 1 ? ' day left.' : ' days left.');
+  } else if(st === 'active'){
+    out.headline = seatsPaid + (seatsPaid === 1 ? ' seat' : ' seats');
+    out.detail = sub.cancelAtPeriodEnd
+      ? 'Cancels at the end of this period.'
+      : 'Renews automatically.';
+  } else if(st === 'past_due' || st === 'unpaid'){
+    /* Still working, deliberately. The payment failed; the people using it
+       did nothing wrong and usually do not know yet. */
+    var over = (daysLeft !== null && daysLeft < -BILLING_GRACE_DAYS);
+    out.access = !over;
+    out.blocking = over;
+    out.headline = 'Payment failed';
+    out.detail = over
+      ? 'Access is paused until the card is updated.'
+      : 'Update the card to avoid losing access.';
+  } else if(st === 'canceled' || st === 'incomplete_expired'){
+    out.access = false;
+    out.blocking = true;
+    out.headline = 'Subscription ended';
+    out.detail = 'Resubscribe to carry on.';
+  } else if(st === 'paused'){
+    out.access = false;
+    out.blocking = true;
+    out.headline = 'Subscription paused';
+    out.detail = 'Resume it to carry on.';
+  } else {
+    /* incomplete, and anything Stripe invents later. Unknown is not a
+       licence to lock people out -- it is a reason to say so and leave them
+       working until a status we understand says otherwise. */
+    out.headline = 'Subscription ' + st;
+    out.detail = 'Check the billing portal.';
+  }
+  return out;
+}
+
+/* Who may change the subscription.
+
+   The same two roles that can invite and reassign. A salesperson should see
+   that the team is past due -- it explains what they are looking at -- and
+   should not be able to cancel the company's plan. */
+function canManageBilling(orgRole){
+  return orgRole === 'owner' || orgRole === 'admin';
+}
+
 /* ---- industry templates ----
    What a new company picks once, so Ghost Recall arrives configured instead of
    arriving empty. Each template is just the settings that already exist —
@@ -6202,6 +6297,9 @@ var __LOGIC_EXPORTS__ = {
   buildDefaultPipeline: buildDefaultPipeline, setPipeline: setPipeline, getPipeline: getPipeline,
   pipelineHasStages: pipelineHasStages, DEAD_ELIGIBLE_ROLES: DEAD_ELIGIBLE_ROLES,
   defaultOpenStage: defaultOpenStage,
+  subscriptionState: subscriptionState,
+  canManageBilling: canManageBilling,
+  BILLING_GRACE_DAYS: BILLING_GRACE_DAYS,
   buildIndustryTemplates: buildIndustryTemplates, industryTemplate: industryTemplate,
   buildDefaultTerminology: buildDefaultTerminology, setTerminology: setTerminology,
   isOutsideLocalHours: isOutsideLocalHours,
