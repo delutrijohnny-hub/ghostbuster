@@ -6256,6 +6256,122 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- numbers belong to a wording, not to a key ---');
+
+{
+  const seeded = () => {
+    const st = GB.buildDefaultState();
+    const v = st.variants.welcome[0];
+    st.variantStats.welcome[v.id] = {sends: 40, responses: 12,
+      textHash: GB.variantTextHash(v.text), priorSends: 0, priorResponses: 0};
+    return {st, v};
+  };
+
+  test('rewriting the copy retires its numbers instead of inheriting them', () => {
+    /* The bug this exists for. variant_key is not a stable identifier for
+       copy: on the live book every key had carried 2 to 23 distinct
+       messages, because migrations rewrote builtin text in place and kept
+       the key. One read "0 replies in 25 sends" for a text that had never
+       been measured -- the 25 belonged to two wordings it had replaced, and
+       I nearly had that text rewritten on the strength of them. */
+    const {st, v} = seeded();
+    v.text = 'Hey {name}, completely different wording now.';
+    const r = GB.reconcileVariantStats(st);
+    const row = st.variantStats.welcome[v.id];
+    assert.strictEqual(r.retired, 1);
+    assert.strictEqual(row.sends, 0, 'the new wording inherited the old numbers');
+    assert.strictEqual(row.responses, 0);
+    assert.strictEqual(row.priorSends, 40, 'the history was deleted rather than retired');
+    assert.strictEqual(row.priorResponses, 12);
+    assert.strictEqual(row.textHash, GB.variantTextHash(v.text));
+  });
+
+  test('numbers with no stated wording are retired, not adopted', () => {
+    /* The judgement call, and the expensive one. A row with no hash predates
+       tracking, so there is NO evidence it describes the current text -- and
+       on the one book that could be checked, it demonstrably did not. Live
+       account loses 94 replies of signal and pickVariant falls back to
+       exploring, which is the correct state for numbers nobody can attribute.
+       Adopting them would be choosing comfortable over true. */
+    const {st, v} = seeded();
+    delete st.variantStats.welcome[v.id].textHash;
+    GB.reconcileVariantStats(st);
+    const row = st.variantStats.welcome[v.id];
+    assert.strictEqual(row.sends, 0);
+    assert.strictEqual(row.priorSends, 40, 'nothing should be destroyed, only set aside');
+    assert.ok(row.textHash, 'and from now on the row says what it is counting');
+  });
+
+  test('unchanged copy is left completely alone', () => {
+    // Reconcile runs on every load. If it touched matching rows, the
+    // learning would reset itself continuously and never accumulate.
+    const {st, v} = seeded();
+    const before = JSON.stringify(st.variantStats.welcome[v.id]);
+    const r = GB.reconcileVariantStats(st);
+    assert.strictEqual(JSON.stringify(st.variantStats.welcome[v.id]), before);
+    assert.strictEqual(r.retired, 0);
+    // And twice in a row is still a no-op.
+    GB.reconcileVariantStats(st);
+    assert.strictEqual(JSON.stringify(st.variantStats.welcome[v.id]), before);
+  });
+
+  test('retiring twice accumulates rather than overwrites', () => {
+    // Copy that has been rewritten twice has two sets of retired numbers,
+    // and the second rewrite must not discard the first.
+    const {st, v} = seeded();
+    v.text = 'second wording';
+    GB.reconcileVariantStats(st);
+    st.variantStats.welcome[v.id].sends = 7;
+    st.variantStats.welcome[v.id].responses = 2;
+    v.text = 'third wording';
+    GB.reconcileVariantStats(st);
+    const row = st.variantStats.welcome[v.id];
+    assert.strictEqual(row.priorSends, 47, 'the first retirement was overwritten');
+    assert.strictEqual(row.priorResponses, 14);
+    assert.strictEqual(row.sends, 0);
+  });
+
+  test('whitespace is not a new message', () => {
+    // Reflowing a template must not throw its record away.
+    const a = 'Hey {name},   we are on\n for {weekday}.';
+    const b = 'Hey {name}, we are on for {weekday}.';
+    assert.strictEqual(GB.variantTextHash(a), GB.variantTextHash(b));
+    assert.notStrictEqual(GB.variantTextHash(b), GB.variantTextHash(b + ' One more line.'));
+    assert.strictEqual(GB.variantTextHash(null), GB.variantTextHash(''));
+  });
+
+  test('reviewing stamps the wording it is counting under', () => {
+    /* Without this a freshly counted row has no hash, and the next load
+       retires the answer somebody just gave -- the learning would discard
+       every review on the following page refresh. */
+    const st = GB.buildDefaultState();
+    const v = st.variants.welcome[0];
+    st.variantStats.welcome[v.id] = {sends: 0, responses: 0};   // no hash
+    st.clients['c1'] = GB.sanitizeClient({id:'c1', name:'Dana', phone:'2135550100',
+      timezone:'America/New_York', status:'Booked',
+      messageLog: [{id:'m1', stage:'welcome', variantId:v.id, text:'x',
+        sentAt: new Date(Date.now()-26*3600000).toISOString(),
+        responded:false, respondedAt:null, reviewed:false}]});
+    GB.reviewMessage(st, 'c1', 0, true);
+    const row = st.variantStats.welcome[v.id];
+    assert.strictEqual(row.sends, 1);
+    assert.strictEqual(row.textHash, GB.variantTextHash(v.text));
+    // And a reload must not now throw that away.
+    GB.reconcileVariantStats(st);
+    assert.strictEqual(st.variantStats.welcome[v.id].sends, 1,
+      'the review was retired by the very next load');
+  });
+
+  test('the stored row carries the provenance, or a reload loses it', () => {
+    const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+    assert.ok(/text_hash: s\.textHash/.test(data), 'the hash is never written back');
+    assert.ok(/prior_sends: Number\(s\.priorSends\)/.test(data), 'retired totals are not persisted');
+    assert.ok(/textHash: row\.text_hash/.test(data), 'the hash is never read back');
+    assert.ok(/reconcileVariantStats\(state\)/.test(data),
+      'nothing retires stale numbers on load, so the rule only exists in theory');
+  });
+}
+
 console.log('\n--- a new send does not bury an unanswered question ---');
 
 {
@@ -6530,9 +6646,14 @@ console.log('\n--- what the shared learning actually records ---');
     const ctx = ctxWithSpy();
     vm.runInContext("doReviewMessage('c1', 0, true);", ctx);
     const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
-    const own = vm.runInContext('JSON.stringify(STATE.variantStats.welcome[' + JSON.stringify(vid) + '])', ctx);
-    assert.deepStrictEqual(JSON.parse(own), {sends: 1, responses: 1},
-      'per-account says ' + own + ' while the pooled table was sent sends 1 / responses 1');
+    const own = JSON.parse(vm.runInContext(
+      'JSON.stringify(STATE.variantStats.welcome[' + JSON.stringify(vid) + '])', ctx));
+    assert.strictEqual(own.sends, 1, JSON.stringify(own));
+    assert.strictEqual(own.responses, 1, JSON.stringify(own));
+    // The row also carries the wording it counted under now; that is checked
+    // in its own test rather than pinned by an exact-shape comparison here,
+    // which would break every time the row gains a field.
+    assert.ok(own.textHash, 'the count was recorded without saying which wording earned it');
   });
 
   test('a hand-edited message contributes to neither', () => {

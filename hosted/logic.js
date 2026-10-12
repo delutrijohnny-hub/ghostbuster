@@ -2806,6 +2806,74 @@ function snoozeTouch(state, clientId, stage, now){
 // answer — yes or no — is what puts the send into the bandit's denominator;
 // a message nobody has answered for stays out of the math entirely.
 // Re-answering later just moves the response count, never the send count.
+/* Which wording a variant's numbers belong to.
+
+   variant_key is not a stable identifier for copy, and treating it as one is
+   what made the reply rates meaningless. On the live book every key had
+   carried between 2 and 23 distinct messages: migrations rewrote builtin
+   text in place and kept the key, so the counters averaged over messages
+   that no longer exist. One key read "0 replies in 25 sends" for a text that
+   had never been measured -- the 25 belonged to two wordings it had already
+   replaced, and I nearly had that text rewritten on the strength of them.
+
+   Whitespace-normalised so reflowing a template is not a new message, and
+   djb2 because this only has to detect change, not resist anybody. */
+function variantTextHash(text){
+  var str = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  var h = 5381;
+  for(var i = 0; i < str.length; i++){ h = ((h << 5) + h + str.charCodeAt(i)) >>> 0; }
+  return h.toString(36);
+}
+
+/* Keep every stats row honest about the text it describes.
+
+   Three cases, and the first is the one that needs justifying:
+
+     - No hash recorded. These numbers predate wording tracking, so there is
+       no evidence they describe the current text, and on the one book that
+       could be checked they demonstrably did not. They are RETIRED into
+       prior_* and the live counters start at zero. Nothing is deleted: a
+       screen can still say "36 sends under earlier wording". Keeping them
+       live would mean the bandit goes on ranking today's copy by numbers
+       some other copy earned, which is the bug.
+
+     - Hash differs. The copy changed since these were earned. Same
+       treatment, and from here on it happens automatically rather than
+       silently -- which is the whole point.
+
+     - Hash matches. Nothing to do.
+
+   Costly on purpose: this account loses 94 replies' worth of live signal,
+   and pickVariant falls back to exploring. That is the correct state for a
+   book where nothing known is attributable. It rebuilds from the next
+   review onward, and this time the numbers mean what they say. */
+function reconcileVariantStats(state){
+  if(!state || !state.variants || !state.variantStats) return {retired: 0, adopted: 0};
+  var retired = 0, adopted = 0;
+  Object.keys(state.variants).forEach(function(stage){
+    var rows = state.variantStats[stage];
+    if(!rows) return;
+    (state.variants[stage] || []).forEach(function(v){
+      var st = rows[v.id];
+      if(!st) return;
+      var want = variantTextHash(v.text);
+      if(st.textHash === want) return;
+      var live = (Number(st.sends) || 0);
+      if(live > 0 || (Number(st.responses) || 0) > 0){
+        st.priorSends = (Number(st.priorSends) || 0) + live;
+        st.priorResponses = (Number(st.priorResponses) || 0) + (Number(st.responses) || 0);
+        retired++;
+      } else {
+        adopted++;
+      }
+      st.sends = 0;
+      st.responses = 0;
+      st.textHash = want;
+    });
+  });
+  return {retired: retired, adopted: adopted};
+}
+
 function reviewMessage(state, clientId, msgIndex, didReply){
   var client = state.clients[clientId];
   if(!client || !client.messageLog[msgIndex]) return;
@@ -2820,6 +2888,12 @@ function reviewMessage(state, clientId, msgIndex, didReply){
     if(!state.variantStats[m.stage]) state.variantStats[m.stage] = {};
     if(!state.variantStats[m.stage][m.variantId]) state.variantStats[m.stage][m.variantId] = {sends:0, responses:0};
     stats = state.variantStats[m.stage][m.variantId];
+    /* Stamp the wording these numbers are being earned under, so a later
+       edit can tell that they stopped describing it. A row that is counted
+       without a hash is a row reconcileVariantStats will retire next load,
+       which would quietly throw the answer away. */
+    var vCur = (state.variants[m.stage] || []).filter(function(v){ return v.id === m.variantId; })[0];
+    if(vCur && !stats.textHash) stats.textHash = variantTextHash(vCur.text);
   }
 
   if(!m.reviewed){
@@ -6191,6 +6265,8 @@ var __LOGIC_EXPORTS__ = {
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   pendingQuestion: pendingQuestion,
+  variantTextHash: variantTextHash,
+  reconcileVariantStats: reconcileVariantStats,
   reviewMessage: reviewMessage, getAwaitingReview: getAwaitingReview,
   recommendNextAction: recommendNextAction, consecutiveUnanswered: consecutiveUnanswered,
   UNANSWERED_SWITCH_AT: UNANSWERED_SWITCH_AT,

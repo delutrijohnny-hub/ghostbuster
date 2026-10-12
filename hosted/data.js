@@ -771,7 +771,11 @@ async function loadState(){
 
   (statsRes.data || []).forEach(function(row){
     if(!state.variantStats[row.stage]) state.variantStats[row.stage] = {};
-    state.variantStats[row.stage][row.variant_key] = {sends: row.sends, responses: row.responses};
+    state.variantStats[row.stage][row.variant_key] = {
+      sends: row.sends, responses: row.responses,
+      textHash: row.text_hash || null,
+      priorSends: Number(row.prior_sends) || 0,
+      priorResponses: Number(row.prior_responses) || 0};
   });
 
   // Built-in (shared) templates can learn from everyone's sends rather than
@@ -789,7 +793,18 @@ async function loadState(){
     (pooledRes.data || []).forEach(function(row){
       if(!state.variantStats[row.stage]) state.variantStats[row.stage] = {};
       var isBuiltin = (state.variants[row.stage] || []).some(function(v){ return v.id === row.variant_key && v.builtin; });
-      if(isBuiltin) state.variantStats[row.stage][row.variant_key] = {sends: row.sends, responses: row.responses};
+      if(isBuiltin){
+        /* Pooled numbers replace the local ones, but the wording provenance
+           is local: keep it, or every load would look like a fresh row with
+           no hash and reconcileVariantStats would retire the pooled figures
+           on sight. */
+        var localRow = state.variantStats[row.stage][row.variant_key] || {};
+        state.variantStats[row.stage][row.variant_key] = {
+          sends: row.sends, responses: row.responses,
+          textHash: localRow.textHash || null,
+          priorSends: Number(localRow.priorSends) || 0,
+          priorResponses: Number(localRow.priorResponses) || 0};
+      }
     });
   }
 
@@ -798,9 +813,23 @@ async function loadState(){
   Object.keys(state.variants).forEach(function(stage){
     if(!state.variantStats[stage]) state.variantStats[stage] = {};
     state.variants[stage].forEach(function(v){
-      if(!state.variantStats[stage][v.id]) state.variantStats[stage][v.id] = {sends: 0, responses: 0};
+      if(!state.variantStats[stage][v.id]){
+        // A fresh row already describes the current wording, so stamp it
+        // rather than leaving a hashless row for reconcile to retire.
+        state.variantStats[stage][v.id] = {sends: 0, responses: 0,
+          textHash: variantTextHash(v.text), priorSends: 0, priorResponses: 0};
+      }
     });
   });
+
+  /* Retire any numbers that no longer describe the text they sit beside.
+
+     Runs after variants, own stats and pooled stats are all in place, so it
+     sees the rows the bandit will actually score. A key that has been
+     rewritten -- by an edit or by a migration changing builtin copy in place
+     -- keeps its history in prior_* and starts counting again from zero,
+     rather than ranking today's message on another message's record. */
+  reconcileVariantStats(state);
 
   if(!settingsRes.data){
     // A new account is seeded with an explicit calendar filter. The column
@@ -940,7 +969,15 @@ function rowEmailDoc(d, uid){
           sort_order: d.sortOrder, archived: !!d.archived};
 }
 function rowStat(s, stage, vk, uid){
-  return {user_id: uid, stage: stage, variant_key: vk, sends: s.sends, responses: s.responses};
+  /* text_hash travels with the numbers, or the wording they were earned by
+     is lost on the next load and reconcileVariantStats retires a row that
+     was perfectly current. prior_* carries the retired totals so nothing is
+     deleted -- they are shown as context and never scored. */
+  return {user_id: uid, stage: stage, variant_key: vk,
+          sends: s.sends, responses: s.responses,
+          text_hash: s.textHash || null,
+          prior_sends: Number(s.priorSends) || 0,
+          prior_responses: Number(s.priorResponses) || 0};
 }
 
 // Row objects are built with a fixed key order above, so stringify is a stable
