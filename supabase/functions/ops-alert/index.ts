@@ -78,6 +78,37 @@ function describe(rows: Row[]): string {
   ].join('\n');
 }
 
+/* Write down what this run did, whatever it did.
+
+   The reason this exists: the Resend key was invalid, so a live run returned
+   502 with "API key is invalid" and nothing anywhere kept that. The cron
+   fires and discards the response, so the alerter would have looked armed
+   and stayed silent through a real outage.
+
+   You cannot alert about a broken alerter down the channel that is broken.
+   What you can do is leave a record, so "is the watchdog alive?" has an
+   answer that does not depend on somebody having watched at the time.
+
+   Failing to record must never fail the run -- if this throws, the alert
+   itself has still been attempted, and that matters more. */
+async function recordRun(row: { broken: number; armed: boolean; sent: boolean; error?: string }) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/ops_alert_runs`, {
+      method: 'POST',
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        broken: row.broken, armed: row.armed, sent: row.sent,
+        error: row.error ? String(row.error).slice(0, 400) : null,
+      }),
+    });
+  } catch (_ignored) { /* see above */ }
+}
+
 Deno.serve(async (req) => {
   try {
     /* Authorised on the service-role key, like the calendar sync's cron, and
@@ -100,26 +131,42 @@ Deno.serve(async (req) => {
     // checked without putting one in the operator's inbox.
     const dryRun = payload.dryRun === true;
 
+    /* Whether this thing could actually deliver, reported on every run.
+
+       Names and booleans only -- never the values. The healthy path returns
+       before any send, so without this there is no way to find out that the
+       alerting is misconfigured except by waiting for a real outage and
+       watching it stay silent. The whole point of an alert is that you are
+       not checking, so it has to be able to answer "are you armed?". */
+    const configured = {
+      RESEND_API_KEY: !!RESEND_API_KEY,
+      OPS_ALERT_EMAIL: !!OPS_ALERT_EMAIL,
+      OPS_ALERT_FROM: !!OPS_ALERT_FROM,
+    };
+    const armed = configured.RESEND_API_KEY && configured.OPS_ALERT_EMAIL && configured.OPS_ALERT_FROM;
+
     const rows = (await rpc('ops_sync_health')) as Row[];
     if (!Array.isArray(rows) || rows.length === 0) {
-      // The healthy path, and the common one. Say nothing.
-      return json({ ok: true, broken: 0, sent: false, note: 'Everything is syncing.' });
+      // The healthy path, and the common one. Say nothing to the operator's
+      // inbox; say plenty to whoever asked.
+      await recordRun({ broken: 0, armed, sent: false });
+      return json({ ok: true, broken: 0, sent: false, armed, configured,
+                    note: 'Everything is syncing.' });
     }
 
     const text = describe(rows);
-    if (dryRun) return json({ ok: true, broken: rows.length, sent: false, dryRun: true, text });
+    if (dryRun) return json({ ok: true, broken: rows.length, sent: false, dryRun: true, armed, configured, text });
 
-    if (!RESEND_API_KEY || !OPS_ALERT_EMAIL || !OPS_ALERT_FROM) {
+    if (!armed) {
       /* Reported rather than thrown. An alerting system that fails silently
          because it was half-configured is worse than none: it produces the
          feeling of being watched over without the fact of it. */
+      await recordRun({ broken: rows.length, armed, sent: false,
+                        error: 'not configured: missing ' +
+                          Object.keys(configured).filter((k) => !configured[k as keyof typeof configured]).join(', ') });
       return json({
         ok: false, broken: rows.length, sent: false, code: 'not_configured',
-        missing: [
-          !RESEND_API_KEY ? 'RESEND_API_KEY' : null,
-          !OPS_ALERT_EMAIL ? 'OPS_ALERT_EMAIL' : null,
-          !OPS_ALERT_FROM ? 'OPS_ALERT_FROM' : null,
-        ].filter(Boolean),
+        missing: Object.keys(configured).filter((k) => !configured[k as keyof typeof configured]),
         text,
       }, 503);
     }
@@ -136,12 +183,17 @@ Deno.serve(async (req) => {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return json({ ok: false, broken: rows.length, sent: false,
-                    error: body?.message || `provider returned ${res.status}` }, 502);
+      const why = body?.message || `provider returned ${res.status}`;
+      await recordRun({ broken: rows.length, armed, sent: false, error: why });
+      return json({ ok: false, broken: rows.length, sent: false, error: why }, 502);
     }
+    await recordRun({ broken: rows.length, armed, sent: true });
     return json({ ok: true, broken: rows.length, sent: true, id: body?.id });
   } catch (e) {
     console.error('ops-alert failed', e);
+    // Even a crash leaves a trace, or a run that died early is
+    // indistinguishable from one that never happened.
+    await recordRun({ broken: -1, armed: false, sent: false, error: String(e) });
     return json({ error: String(e) }, 500);
   }
 });
