@@ -3539,7 +3539,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-d415065b';
+var BUILD_STAMP = '20261012-7a83bd2c';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4181,7 +4181,7 @@ document.addEventListener('click', function(ev){
       var oKey = target.getAttribute('data-outcome');
       // Outcomes needing nothing further resolve immediately — one tap, done.
       if(oKey === 'no_reply' || oKey === 'wrong_contact'){
-        recordInteractionOutcome(STATE, cid, oKey, {});
+        doInteractionOutcome(cid, oKey, {});
         UI.outcomeOpen = null;
         renderAll();
       } else {
@@ -4193,7 +4193,7 @@ document.addEventListener('click', function(ev){
     case 'interaction-confirm': {
       var ck = target.getAttribute('data-outcome');
       var whenEl = el('oc-when'), noteEl = el('oc-note'), untilEl = el('oc-until');
-      recordInteractionOutcome(STATE, cid, ck, {
+      doInteractionOutcome(cid, ck, {
         callDateTime: whenEl && whenEl.value ? new Date(whenEl.value).toISOString() : null,
         note: noteEl && noteEl.value ? noteEl.value : null,
         until: untilEl && untilEl.value ? untilEl.value : null
@@ -5261,6 +5261,46 @@ function pooledIncrementIfBuiltin(stage, variantId, field, delta){
   if(!variant || !variant.builtin) return;
   window.GB_SUPABASE.rpc('increment_builtin_stat', {p_stage: stage, p_variant_key: variantId, p_field: field, p_delta: delta || 1})
     .then(function(res){ if(res.error) console.error('pooled stat increment failed', res.error); });
+}
+
+/* The outcome buttons, with the shared numbers kept in step.
+
+   This is the route that actually gets used. recordInteractionOutcome
+   resolves the reply question as a side effect of the salesperson saying
+   what happened -- which is the right design -- but it lives in logic.js and
+   logic.js has no way to reach Supabase, so the pooled table never heard
+   about any of it.
+
+   Worth recording how close I came to missing this. I found the pooled table
+   empty, traced it to the "replied"/"no reply" buttons calling reviewMessage
+   directly, fixed those, deployed, and reported it solved. Those two buttons
+   are dead code: a commit on 22 September replaced that whole review queue
+   with these outcome buttons and left the handlers behind. I had patched the
+   path nobody walks. What gave it away was the review rate by week -- 94% in
+   August, then exactly 0% from 28 September, which no gradual habit decays
+   into.
+
+   So this wraps the live path the same way, reading the message state before
+   recordInteractionOutcome mutates it. */
+function doInteractionOutcome(cid, outcomeKey, extra){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  // Which message this outcome is about, and what it looked like beforehand.
+  var inter = lastInteraction(client, new Date());
+  var msg = inter.idx !== -1 ? client.messageLog[inter.idx] : null;
+  var wasReviewed = msg ? !!msg.reviewed : false;
+  var wasReplied = msg ? !!msg.responded : false;
+
+  recordInteractionOutcome(STATE, cid, outcomeKey, extra);
+
+  if(!msg || !msg.reviewed) return;      // nothing was resolved
+  var didReply = !!msg.responded;
+  if(!wasReviewed){
+    pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'sends');
+    if(didReply) pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses');
+  } else if(didReply !== wasReplied){
+    pooledIncrementIfBuiltin(msg.stage, msg.variantId, 'responses', didReply ? 1 : -1);
+  }
 }
 
 /* Every route that reviews a message, and the only place pooled numbers move.

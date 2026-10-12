@@ -6323,6 +6323,66 @@ console.log('\n--- what the shared learning actually records ---');
     assert.deepStrictEqual(calls(ctx), ['welcome/' + vid + ' sends 1']);
   });
 
+  test('the outcome buttons -- the live path -- feed the shared numbers', () => {
+    /* The one that matters, and the one I nearly shipped without.
+
+       I found the pooled table empty, traced it to "replied"/"no reply"
+       calling reviewMessage directly, fixed those and called it done. Those
+       two are dead code: a commit on 22 September replaced the review queue
+       with outcome buttons and left the handlers behind. The fix was on a
+       path nobody walks.
+
+       recordInteractionOutcome resolves the reply question as a side effect
+       of the salesperson saying what happened, which is the right design --
+       but it lives in logic.js, which cannot reach Supabase, so nothing it
+       resolved ever reached the pooled table. */
+    const ctx = ctxWithSpy();
+    vm.runInContext("doInteractionOutcome('c1', 'no_reply', {});", ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    assert.deepStrictEqual(calls(ctx), ['welcome/' + vid + ' sends 1'],
+      '"No reply" is the commonest outcome there is and it recorded nothing');
+  });
+
+  test('an outcome that implies a reply records one', () => {
+    const ctx = ctxWithSpy();
+    vm.runInContext("doInteractionOutcome('c1', 'booked', {callDateTime: new Date(Date.now()+86400000).toISOString()});", ctx);
+    const vid = vm.runInContext('STATE.variants.welcome[0].id', ctx);
+    assert.deepStrictEqual(calls(ctx),
+      ['welcome/' + vid + ' sends 1', 'welcome/' + vid + ' responses 1'],
+      'booking off the back of a text is the strongest reply there is');
+  });
+
+  test('an outcome that resolves nothing records nothing', () => {
+    /* recordInteractionOutcome returns early on an outcome key it does not
+       recognise, so the message is left unreviewed. Without the guard the
+       wrapper would still count a send -- a denominator entry for a reply
+       question nobody answered, which is the exact dilution this whole fix
+       is about. */
+    const ctx = ctxWithSpy();
+    vm.runInContext("doInteractionOutcome('c1', 'not_a_real_outcome', {});", ctx);
+    assert.deepStrictEqual(calls(ctx), []);
+    assert.strictEqual(vm.runInContext("STATE.clients['c1'].messageLog[0].reviewed", ctx), false,
+      'this test only means something while the outcome really is unrecognised');
+    // And a contact with nothing sent yet.
+    vm.runInContext("STATE.clients['c2'] = sanitizeClient({id:'c2', name:'Eve', phone:'2135550111', timezone:'America/New_York', status:'Booked'});", ctx);
+    vm.runInContext("doInteractionOutcome('c2', 'no_reply', {});", ctx);
+    assert.deepStrictEqual(calls(ctx), []);
+  });
+
+  test('both live call sites go through the wrapper', () => {
+    /* One-tap outcomes and the ones that open a detail field are two
+       separate call sites, and patching one is the same mistake again. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const handlers = app.slice(app.indexOf("case 'interaction-outcome': {"),
+                               app.indexOf("case 'interaction-cancel':"));
+    assert.ok(/doInteractionOutcome\(cid, oKey, \{\}\)/.test(handlers),
+      'the one-tap outcomes bypass the pooled accounting');
+    assert.ok(/doInteractionOutcome\(cid, ck, \{/.test(handlers),
+      'the confirmed outcomes bypass the pooled accounting');
+    assert.ok(!/recordInteractionOutcome\(STATE,/.test(handlers),
+      'a handler still calls recordInteractionOutcome directly');
+  });
+
   test('the buttons people actually press go through it', () => {
     /* The first fault. "replied" and "no reply" called reviewMessage
        directly and touched the pooled table not at all, so across 370
