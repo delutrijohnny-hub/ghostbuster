@@ -910,7 +910,25 @@ function buildDefaultVariants(){
     ],
     dayof: [
       {id:'d1-v2', builtin:true, text:"Hey {name}, hopping on at {time}. Here's the link: {link}"},
-      {id:'d2-v2', builtin:true, text:"Hi {name}, ready for our call at {time}. Jump in here: {link}"},
+      /* The one day-of message that assumes nothing about how you meet.
+
+         It said "ready for our call ... Jump in here: {link}", and all four
+         options here still assume a video call with a room to join. A roofer
+         confirming an 8am estimate has no link, so {link} renders its
+         "paste one before sending" placeholder and the message is unusable
+         -- on the touch that matters most, the morning of the job.
+
+         This one now takes the account's own noun and drops the link
+         entirely, so there is at least one day-of text that works for a
+         visit, a showing or a phone call. The other three are left alone:
+         they are right for the businesses that do meet on video, and
+         rewriting all four would replace one assumption with another.
+
+         New key, not an edit. Pooled learning is keyed (stage, variant_key)
+         across every account, so reusing d2-v2 would have this copy ranked
+         by numbers earned by copy that no longer exists -- the exact mistake
+         the -v2 suffixes above were introduced to undo. */
+      {id:'d2-v3', builtin:true, text:"Hi {name}, ready for your {appointment} at {time}."},
       {id:'d3-v2', builtin:true, text:"Hey {name}, talk at {time}. Room link is here: {link}"},
       {id:'d4-v2', builtin:true, text:"Hi {name}, see you at {time}. Join here: {link}"}
     ],
@@ -2515,6 +2533,20 @@ function renderTemplate(template, client, senderName){
         ? 'on ' + weekdayName(callDate, tz)
         : 'on ' + fmtDate(callDate, tz);
     })(),
+    /* The account's own word for the thing being booked: "call", "estimate",
+       "showing", "interview".
+
+       Terminology has been configurable for a while and no message template
+       could reach it, so copy had to pick a word and every other industry
+       read someone else's. One starter text said "ready for our call", which
+       for a roofing estimate is simply the wrong noun in a message going to
+       a homeowner.
+
+       Lowercase because it always lands mid-sentence. Falls back to whatever
+       term() returns, which is the key itself if an account somehow has no
+       terminology at all -- "appointment" is a serviceable English word, so
+       the failure mode is plain rather than broken. */
+    appointment: termLower('appointment'),
     link: client.meetLink || '(no link on file — paste one before sending)',
     /* What was actually said on the call, and what you know about them.
 

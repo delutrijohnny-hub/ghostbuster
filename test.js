@@ -6127,6 +6127,98 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- the copy does not assume one industry ---');
+
+{
+  const withTerms = (key, fn) => {
+    const t = key ? GB.industryTemplate(key) : null;
+    GB.setTerminology(t ? t.terminology : null);
+    try { return fn(); } finally { GB.setTerminology(null); }
+  };
+  const client = () => GB.sanitizeClient({id:'c', name:'Dana Reed', phone:'2135550100',
+    timezone:'America/New_York', status:'Booked', callDateTime:'2026-10-20T15:00:00Z'});
+
+  test('{appointment} is the account’s own word, not ours', () => {
+    /* Terminology has been configurable for a long time and no message
+       template could reach it, so the starter copy had to pick a noun and
+       every other industry read somebody else's. */
+    const out = (k) => withTerms(k, () =>
+      GB.renderTemplate('ready for your {appointment}', client(), 'Johnny'));
+    assert.strictEqual(out('roofing'),     'ready for your inspection');
+    assert.strictEqual(out('real_estate'), 'ready for your showing');
+    assert.strictEqual(out('recruiting'),  'ready for your interview');
+    assert.strictEqual(out('fitness'),     'ready for your session');
+    assert.strictEqual(out('agency'),      'ready for your call');
+  });
+
+  test('and it is lowercase, because it always lands mid-sentence', () => {
+    // The terminology table stores "Inspection" for headings; dropped into a
+    // sentence that reads "ready for your Inspection".
+    assert.strictEqual(GB.industryTemplate('roofing').terminology.appointment, 'Inspection');
+    assert.strictEqual(
+      withTerms('roofing', () => GB.renderTemplate('{appointment}', client(), 'J')),
+      'inspection');
+  });
+
+  test('it degrades to a plain English word, never to an empty gap', () => {
+    /* An unset or broken terminology must not render "ready for your  at
+       8am". term() returns the key itself as a last resort, and
+       "appointment" happens to be a serviceable word. */
+    GB.setTerminology(null);
+    const out = GB.renderTemplate('ready for your {appointment}', client(), 'J');
+    assert.ok(/ready for your \w+/.test(out), out);
+    assert.ok(!/\{appointment\}/.test(out), 'the token leaked into the message: ' + out);
+  });
+
+  test('one day-of message works for a business with nothing to join', () => {
+    /* The real failure, and the reason this one was worth changing. All four
+       day-of texts assumed a video call with a room link. A roofer
+       confirming an 8am estimate has no link, so {link} renders its "paste
+       one before sending" placeholder -- on the touch that matters most, the
+       morning of the job. */
+    const dayof = GB.buildDefaultState().variants.dayof;
+    const linkless = dayof.filter(v => !/\{link\}/.test(v.text));
+    assert.ok(linkless.length >= 1,
+      'every day-of message needs a meeting link, so none of them work for a visit');
+    const text = withTerms('roofing', () =>
+      GB.renderTemplate(linkless[0].text, client(), 'Johnny'));
+    assert.ok(/inspection/.test(text), text);
+    assert.ok(!/no link on file/.test(text),
+      'the link placeholder reached a message for a business that has no link');
+    assert.ok(!/\{\w+\}/.test(text), 'an unrendered token survived: ' + text);
+  });
+
+  test('reworded starter copy carries a new key, never the old one', () => {
+    /* The pooled learning table is keyed (stage, variant_key) across every
+       account, so reusing a key for new words has the bandit rank this copy
+       on numbers earned by copy that no longer exists. That already happened
+       once -- it is what the -v2 suffixes exist to undo -- so the rule is
+       mechanical here rather than remembered. */
+    const v = GB.buildDefaultState().variants;
+    const seen = {};
+    Object.keys(v).forEach(stage => v[stage].forEach(x => {
+      const k = stage + '/' + x.id;
+      assert.ok(!seen[k], 'two variants share the key ' + k);
+      seen[k] = x.text;
+    }));
+    const dayof = v.dayof;
+    assert.ok(!dayof.some(x => x.id === 'd2-v2'),
+      'the reworded day-of text kept its old key, so it inherits a stranger’s numbers');
+    const fixed = dayof.filter(x => x.id === 'd2-v3')[0];
+    assert.ok(fixed, 'the reworded day-of variant is missing');
+    assert.ok(/\{appointment\}/.test(fixed.text), fixed.text);
+    assert.ok(!/our call/.test(fixed.text),
+      'it still says "our call", which is the wrong noun for most of these businesses');
+  });
+
+  test('the other three day-of messages are left alone', () => {
+    // They are right for businesses that do meet on video, and rewriting all
+    // four would swap one assumption for another.
+    const ids = GB.buildDefaultState().variants.dayof.map(x => x.id).sort();
+    assert.deepStrictEqual(ids, ['d1-v2','d2-v3','d3-v2','d4-v2']);
+  });
+}
+
 console.log('\n--- variant performance ---');
 
 function perfClient(id, over){
