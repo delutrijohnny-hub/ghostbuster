@@ -3534,6 +3534,13 @@ function applyOnboarding(){
    matters. The send-email Edge Function is untouched and still works if a
    provider route is ever wanted again. */
 
+/* The build this browser is actually running.
+
+   Kept in step with the ?v= on the script tags in app.html. Shown at the
+   bottom of Business settings so a stale cache can be identified by asking
+   rather than inferred from "I still cannot see it". */
+var BUILD_STAMP = '20261012-0443391';
+
 /* Which settings section to scroll to once the modal is up.
 
    Null for the ordinary "Business settings" route, which should open at the
@@ -3861,7 +3868,8 @@ function renderSettingsModal(){
     '<div class="field-row" style="text-align:right;">' +
       '<button class="btn btn-sm btn-ghost" data-action="reset-settings">Reset to defaults</button> ' +
       '<button class="btn btn-sm btn-green" data-action="save-settings">Save settings</button>' +
-    '</div>',
+    '</div>' +
+    '<div class="build-stamp">Build ' + escapeHtml(BUILD_STAMP) + '</div>',
     true
   );
 

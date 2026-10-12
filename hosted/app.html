@@ -690,6 +690,7 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .cad-sub{margin:12px 0 6px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
 /* Two seconds of highlight on the section you asked for, so arriving three
    sections into a long modal does not look like arriving at the top of it. */
+.build-stamp{margin-top:10px;text-align:right;font-size:10.5px;color:var(--muted);opacity:.7;}
 .set-section.set-landed{animation:setLanded 2s ease-out;}
 @keyframes setLanded{
   0%,60%{box-shadow:0 0 0 2px var(--accent);border-radius:var(--radius-sm);}
@@ -1427,9 +1428,22 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="logic.js"></script>
-<script src="data.js"></script>
-<script src="app.js"></script>
-<script src="auth.js"></script>
+<!-- Versioned so a deploy actually reaches people.
+
+     These were bare filenames. app.html revalidates on every load
+     (max-age=0), but the three scripts are keyed by URL alone, so a browser
+     that already held app.js kept serving it after a deploy. That is not
+     theoretical: the cadence editor shipped, went live, and the person it
+     was built for could not see it twice -- the files were correct on the
+     CDN and stale in the browser, which looks identical to a feature that
+     was never built.
+
+     Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
+     at the bottom of Business settings, so "what does yours say?" answers in
+     one question what this cost two rounds of guessing. -->
+<script src="logic.js?v=20261012-0443391"></script>
+<script src="data.js?v=20261012-0443391"></script>
+<script src="app.js?v=20261012-0443391"></script>
+<script src="auth.js?v=20261012-0443391"></script>
 </body>
 </html>

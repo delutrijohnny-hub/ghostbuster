@@ -5383,8 +5383,35 @@ test('the app lives at /app and the landing page owns the root', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
   const landing = fs.readFileSync(path.join(__dirname, 'hosted', 'index.html'), 'utf8');
   assert.ok(app.includes('id="app-root"'), 'app.html should be the CRM shell');
-  assert.ok(app.includes('src="logic.js"') && app.includes('src="app.js"'),
-    'app.html must still load its scripts from the same directory');
+  /* Relative, same-directory, and allowed a ?v= cache-buster.
+
+     The literal 'src="logic.js"' was what this checked; adding the version
+     query broke the match without touching what it was protecting, which is
+     that /app does not reach for an absolute path or a CDN. */
+  ['logic.js', 'data.js', 'app.js', 'auth.js'].forEach(f => {
+    assert.ok(new RegExp('src="' + f.replace('.', '\\.') + '(\\?v=[\\w.-]+)?"').test(app),
+      'app.html must load ' + f + ' from the same directory');
+  });
+
+  /* And the version must be on all of them or none.
+
+     Half-versioned is the worst case: the deploy looks cache-busted and one
+     stale file still loads, which is harder to diagnose than no busting at
+     all. */
+  const versioned = ['logic.js','data.js','app.js','auth.js']
+    .filter(f => new RegExp('src="' + f.replace('.', '\\.') + '\\?v=').test(app));
+  assert.ok(versioned.length === 0 || versioned.length === 4,
+    'only some scripts are cache-busted: ' + versioned.join(', '));
+
+  // And the stamp the page reports must be the one it loaded with, or
+  // "what build are you on?" gets a confident wrong answer.
+  const appJs = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  const inHtml = (app.match(/src="app\.js\?v=([\w.-]+)"/) || [])[1];
+  const inJs = (appJs.match(/var BUILD_STAMP = '([\w.-]+)'/) || [])[1];
+  if (inHtml || inJs) {
+    assert.strictEqual(inJs, inHtml,
+      'BUILD_STAMP disagrees with the ?v= on the script tag, so the build shown is not the build running');
+  }
   assert.ok(!landing.includes('id="app-root"'), 'index.html should be the landing page, not the app');
   assert.ok(landing.includes('href="/app"'), 'the landing page must link to the app');
 });
