@@ -6623,6 +6623,47 @@ console.log('\n--- reply rate per wording, read off the log ---');
     assert.strictEqual(rows[0].replies, 1);
   });
 
+  test('a greeting ending in ! is still a greeting', () => {
+    /* Found by running this over the real log rather than a fixture. The
+       strip matched only a comma -- "Hey Dana, " -- and the live book is
+       full of "Hi Chris! John here...". Those kept the first name, so every
+       recipient read as a different message: one welcome template came out
+       as EIGHTEEN wordings, which would have told somebody their copy had
+       churned eighteen times when it had changed about three. A report that
+       overstates churn is worse than no report, because the whole point of
+       it is to say how many messages a name is hiding. */
+    const sameTemplate = [
+      'Hi Chris! John here with MarketMakerMGMT — excited to have you locked in for Aug 4 at 10:00 AM.',
+      'Hi Cory! John here with MarketMakerMGMT — excited to have you locked in for Aug 11 at 1:30 PM.',
+      'Hi lisa! John here with MarketMakerMGMT — excited to have you locked in for Aug 13 at 3:00 PM.',
+    ].map(GB.messageSkeleton);
+    assert.strictEqual(new Set(sameTemplate).size, 1,
+      'one template read as ' + new Set(sameTemplate).size + ' messages');
+
+    // Comma greetings keep working, and a message with no greeting is not
+    // chopped into by the new rule.
+    assert.strictEqual(new Set([
+      'Hey Barbie, John here! Really looking forward to our call on Jul 29 at 3:00 PM.',
+      'Hey Geri, John here! Really looking forward to our call on Aug 13 at 2:00 PM.',
+    ].map(GB.messageSkeleton)).size, 1);
+    assert.strictEqual(new Set([
+      'Reminder that our call is set for Thursday at 12:00 PM this week.',
+      'Reminder that our call is set for Friday at 3:00 PM this week.',
+    ].map(GB.messageSkeleton)).size, 1);
+
+    /* And it must not eat an opening that merely starts with those letters.
+       "Hiring update" begins with "hi"; stripping to the first terminator
+       would throw away the sentence. */
+    /* The word boundary, isolated. Without it "Hi" matches inside "Hiya"
+       and the opening is eaten. Chosen to have no comma in it, because the
+       separate comma rule below would strip the opening regardless and the
+       test would then pass for the wrong reason -- which the first version
+       of it did. */
+    const kept = GB.messageSkeleton('Hiya! fee is zero and stays zero.');
+    assert.ok(/Hiya/.test(kept),
+      'the greeting rule matched "Hi" inside a longer word and ate the opening: ' + kept);
+  });
+
   test('two genuinely different messages under one key stay apart', () => {
     /* The reason this exists. A key is not a message: on the live book one
        had carried three, and the key-level rate was an average over copy

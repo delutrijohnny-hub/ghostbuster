@@ -3040,7 +3040,20 @@ function snoozeTouch(state, clientId, stage, now){
 function messageSkeleton(text){
   var t = String(text == null ? '' : text);
   return t
-    .replace(/^[^,]{0,40},\s*/, '')                       // "Hey Dana, "
+    /* The greeting, however it ends.
+
+       This matched only a comma -- "Hey Dana, " -- and the live book is full
+       of "Hi Chris! John here..." and "Hey Todd! Johnny here...". Those kept
+       the first name, so every recipient looked like a different message:
+       one welcome template came out as eighteen wordings, which would have
+       told somebody their copy had churned eighteen times when it had
+       changed about three. Found only by running it over the real log.
+
+       Anchored on an actual greeting word so it cannot eat the opening of a
+       message that does not have one, and bounded to a short name-sized run
+       before the terminator. */
+    .replace(/^(hi|hey|hello|good morning|good afternoon)\b[^,!?.\n]{0,30}[,!?.\u2014-]+\s*/i, '')
+    .replace(/^[^,]{0,40},\s*/, '')                       // "Dana, " with no greeting word
     .replace(/https?:\/\/\S+/g, '~link~')
     .replace(/@[A-Za-z0-9_.-]+/g, '~channel~')
     .replace(/\b\d{1,2}:\d{2}\s*(AM|PM)?(\s+[A-Z]{2,4})?/gi, '~time~')
