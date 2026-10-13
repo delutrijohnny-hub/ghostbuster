@@ -6701,6 +6701,23 @@ console.log('\n--- reply rate per wording, read off the log ---');
     assert.strictEqual(GB.messageSkeleton(null), '');
   });
 
+  test('the leader line does not name a winner that is really a label', () => {
+    /* Seen on screen, directly above the breakdown that contradicted it: the
+       line read "m1-v2 leads on appointments (100% of 27)" while the rows
+       beneath showed that name covering three messages at 11%, 33% and 44%.
+       Declaring a winner from an average over copy that no longer exists is
+       the exact mistake this panel exists to expose, repeated one line down. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderVariantPerformance'));
+    const body = fn.slice(0, fn.indexOf('\nfunction '));
+    assert.ok(/leadWordings/.test(body),
+      'the leader line never asks how many messages that name covers');
+    assert.ok(/leadWordings > 1/.test(body),
+      'it qualifies unconditionally, which would nag on a variant with one wording');
+    assert.ok(/not a winner/.test(body),
+      'the caveat does not say what is wrong with reading it as a winner');
+  });
+
   test('the screen shows the wordings under the row they average', () => {
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     assert.ok(/function buildWordingRows\(/.test(app), 'nothing builds the breakdown');

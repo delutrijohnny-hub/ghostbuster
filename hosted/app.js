@@ -2697,10 +2697,31 @@ function renderVariantPerformance(){
     table.appendChild(tb);
     stageBox.appendChild(table);
     if(g.leader){
-      stageBox.appendChild(h('div',{class:'vp-lead'},[
+      /* The leader line names a winner, and the winner is a NAME.
+
+         Seen on screen directly above the breakdown it contradicts: the line
+         said "m1-v2 leads on appointments" while the rows under it showed
+         that name covering three messages at 11%, 33% and 44%. Declaring a
+         winner from an average over copy that no longer exists is the whole
+         mistake this panel was added to expose, repeated one line down.
+
+         Not removed -- within a single wording it is a fair statement and
+         the useful one. Qualified, so it cannot be read as being about a
+         message when it is about a label. */
+      var leadWordings = wordingBreakdown(STATE).filter(function(r){
+        return r.stage === g.stage && r.variantId === g.leader.variantId;
+      }).length;
+      var lead = h('div',{class:'vp-lead'},[
         '→ ' + g.leader.variantId + ' leads on appointments (' + pct(g.leader.showRate) +
         ' of ' + g.leader.credited + ')'
-      ]));
+      ]);
+      if(leadWordings > 1){
+        lead.appendChild(h('span',{class:'vp-lead-caveat'},[
+          ' — but that name covers ' + leadWordings +
+          ' different messages, so this is an average, not a winner.'
+        ]));
+      }
+      stageBox.appendChild(lead);
     }
     wrap.appendChild(stageBox);
   });
@@ -3632,7 +3653,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261012-cb4909fi';
+var BUILD_STAMP = '20261013-8fc64e1j';
 
 /* Which settings section to scroll to once the modal is up.
 
