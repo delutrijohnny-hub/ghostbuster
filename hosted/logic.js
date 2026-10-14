@@ -3486,6 +3486,86 @@ function deliveryState(m){
   return {state: 'unknown', label: '', confirmed: false};
 }
 
+/* Where messaging actually stands for this person, in plain terms.
+
+   Three routes exist and only one of them is in use at any moment, which is
+   not obvious from any screen: a card simply shows a button. Somebody who has
+   started a carrier registration, connected a Mac, or neither, sees the same
+   interface and has to remember which is true.
+
+   Purely descriptive. Nothing here changes how a message is sent -- that is
+   smsSendMode, and this deliberately does not touch it. A status page that
+   also alters behaviour is how a "coming soon" panel disrupts the work it was
+   added to explain.
+
+   AGENT_STALE_MINUTES: the Mac agent checks in every two minutes. An hour of
+   silence means it is wedged -- a permission revoked, the Mac asleep, the job
+   unloaded. It spent an afternoon blocked by Full Disk Access while
+   launchctl reported it healthy, and nothing on any screen said so. */
+var AGENT_STALE_MINUTES = 60;
+
+function messagingSetup(state, now){
+  now = now || new Date();
+  var num = (state && state.smsNumber) || null;
+  var agent = (state && state.deviceAgent) || null;
+
+  var agentStatus = 'off', agentDetail = 'Not connected.';
+  if(agent && agent.lastSeenAt){
+    var mins = (now.getTime() - Date.parse(agent.lastSeenAt)) / 60000;
+    if(isNaN(mins)){
+      agentStatus = 'stalled'; agentDetail = 'Connected, but it has never checked in.';
+    } else if(mins > AGENT_STALE_MINUTES){
+      agentStatus = 'stalled';
+      agentDetail = 'Connected but silent for ' +
+        (mins < 1440 ? Math.round(mins / 60) + ' hours' : Math.round(mins / 1440) + ' days') +
+        '. Your threads are not up to date.';
+    } else {
+      agentStatus = 'on';
+      agentDetail = 'Syncing. Last checked in ' +
+        (mins < 2 ? 'just now' : Math.round(mins) + ' minutes ago') + '.';
+    }
+  } else if(agent){
+    agentStatus = 'stalled';
+    agentDetail = 'Connected, but it has never checked in. Check Full Disk Access.';
+  }
+
+  var numStatus = 'soon', numDetail =
+    'Not set up yet. Needs carrier registration before a number can send.';
+  if(num && num.sandbox){
+    numStatus = 'test';
+    numDetail = 'A test number is connected. Messages are recorded but reach nobody.';
+  } else if(num){
+    numStatus = 'on';
+    numDetail = 'Sending from ' + num.phoneNumber +
+      (num.mine === false ? ' (your team\u2019s shared line).' : '.');
+  }
+
+  /* What actually happens when they press send today. One sentence, because
+     it is the only question this page exists to answer. */
+  var sending = (num && !num.sandbox) ? 'number' : (num ? 'sandbox' : 'handoff');
+
+  return {
+    sending: sending,
+    modes: [
+      {
+        key: 'handoff', title: 'Your Messages app',
+        status: (sending === 'handoff') ? 'on' : 'standby',
+        detail: (sending === 'handoff')
+          ? 'In use. Texts open in Messages and go from your own number. Replies arrive on your phone, so Ghost Recall cannot see them unless this Mac is connected below.'
+          : 'Available as a fallback for contacts the number cannot reach.'
+      },
+      {
+        key: 'number', title: 'A number of your own, inside Ghost Recall',
+        status: numStatus, detail: numDetail
+      },
+      {
+        key: 'mac', title: 'This Mac\u2019s existing conversations',
+        status: agentStatus, detail: agentDetail
+      }
+    ]
+  };
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -7176,6 +7256,8 @@ var __LOGIC_EXPORTS__ = {
   recentReplies: recentReplies,
   conversationList: conversationList,
   deliveryState: deliveryState,
+  messagingSetup: messagingSetup,
+  AGENT_STALE_MINUTES: AGENT_STALE_MINUTES,
   DELIVERY_STATES: DELIVERY_STATES,
   RECENT_REPLY_DAYS: RECENT_REPLY_DAYS,
   voiceExamples: voiceExamples,

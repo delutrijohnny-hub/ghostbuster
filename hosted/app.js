@@ -4228,6 +4228,16 @@ function renderSettingsModal(){
 
        The token is shown once and never again -- only its hash is stored, so
        this list leaking is not a leak of anybody's access. */
+    /* A status panel, not a control panel.
+
+       It says which of the three routes is in use and what the others would
+       need, and it changes nothing: how a message is sent is decided by
+       smsSendMode, which this does not touch. A "coming soon" section that
+       quietly alters behaviour is the opposite of what it is for. */
+    '<div class="set-section"><h3>Messaging</h3>' +
+    '<div class="hint">How texts leave Ghost Recall today, and what is not switched on yet. ' +
+    'Nothing here changes your current workflow.</div>' +
+    '<div id="messaging-setup"></div></div>' +
     '<div class="set-section"><h3>Connect this Mac</h3>' +
     '<div class="hint">Pulls your existing text threads with clients into the Texts tab. ' +
     'Only conversations with people who are already contacts are read \u2014 everything else ' +
@@ -4246,6 +4256,7 @@ function renderSettingsModal(){
     '<div class="build-stamp">Build ' + escapeHtml(BUILD_STAMP) + '</div>',
     true
   );
+  renderMessagingSetup();
   renderDeviceTokens();
 
   /* Land on the section that was asked for.
@@ -6043,6 +6054,27 @@ function markSentOnChannel(cid, stage, text, channel){
    hash. That is deliberate: a list of machines somebody has connected is
    useful to see, and a list of working credentials is not something this
    screen should be able to hand out twice. */
+var SETUP_BADGES = {
+  on:      ['In use',          'setup-on'],
+  standby: ['Standby',         'setup-standby'],
+  soon:    ['Coming soon',     'setup-soon'],
+  test:    ['Test only',       'setup-test'],
+  stalled: ['Needs attention', 'setup-bad'],
+  off:     ['Not connected',   'setup-off']
+};
+
+function renderMessagingSetup(){
+  var box = el('messaging-setup'); if(!box) return;
+  var setup = messagingSetup(STATE, new Date());
+  box.innerHTML = setup.modes.map(function(m){
+    var badge = SETUP_BADGES[m.status] || SETUP_BADGES.off;
+    return '<div class="setup-row"><div class="setup-head">' +
+      '<span class="setup-title">' + escapeHtml(m.title) + '</span>' +
+      '<span class="setup-badge ' + badge[1] + '">' + escapeHtml(badge[0]) + '</span>' +
+      '</div><div class="setup-detail">' + escapeHtml(m.detail) + '</div></div>';
+  }).join('');
+}
+
 function renderDeviceTokens(){
   var box = el('device-tokens'); if(!box) return;
   /* Guarded, because this is a small corner of a big screen.

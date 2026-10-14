@@ -1202,6 +1202,23 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
    layout is honest about what is being tested, different colour so nobody
    reaches for it by muscle memory and believes a customer was texted. */
 .btn-sandbox{background:#6b5bd2;color:#fff;border-color:#6b5bd2;}
+/* Setup status. Each route states plainly whether it is carrying messages,
+   waiting on something, or wrong -- so "coming soon" reads as a fact rather
+   than a promise, and a broken route is not quietly the same colour as a
+   working one. */
+.setup-row{border-top:1px solid var(--border);padding:9px 0;}
+.setup-row:first-child{border-top:0;}
+.setup-head{display:flex;align-items:center;gap:8px;justify-content:space-between;}
+.setup-title{font-size:13px;font-weight:600;}
+.setup-detail{color:var(--ink-faint);font-size:12px;margin-top:3px;}
+.setup-badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:2px 7px;border-radius:999px;white-space:nowrap;}
+.setup-on{background:rgba(63,178,127,.16);color:var(--good,#3fb27f);}
+.setup-standby{background:rgba(255,255,255,.07);color:var(--ink-faint);}
+.setup-soon{background:rgba(107,91,210,.18);color:#9d8ff0;}
+.setup-test{background:rgba(107,91,210,.18);color:#9d8ff0;}
+.setup-bad{background:rgba(226,86,111,.16);color:var(--accent,#e2566f);}
+.setup-off{background:rgba(255,255,255,.07);color:var(--ink-faint);}
 .unplaced{border:1px solid var(--accent,#e2566f);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:12.5px;}
 .unplaced h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
 .unplaced .u-row{padding:6px 0;border-top:1px solid var(--border);}

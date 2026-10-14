@@ -974,6 +974,20 @@ async function loadState(){
     });
   });
 
+  /* The Mac agent's heartbeat, so the setup panel can say whether threads are
+     actually current. Without it a wedged agent looks identical to a quiet
+     one -- which it did for an afternoon, blocked by Full Disk Access while
+     launchctl happily reported the job healthy. Degrades to null. */
+  var agentRes = await sb.from('device_tokens')
+    .select('id, label, last_seen_at, revoked_at')
+    .is('revoked_at', null)
+    .order('created_at', {ascending: false})
+    .limit(1);
+  var agentRow = (agentRes && agentRes.data && agentRes.data[0]) || null;
+  state.deviceAgent = agentRow
+    ? {label: agentRow.label || '', lastSeenAt: agentRow.last_seen_at || null}
+    : null;
+
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.

@@ -6591,6 +6591,88 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- what the setup panel says is true ---');
+
+{
+  const now = new Date();
+  const ago = (m) => new Date(now.getTime() - m*60000).toISOString();
+  const mode = (st, key) => GB.messagingSetup(st, now).modes.find(m => m.key === key);
+
+  test('with nothing set up, it says texts go through Messages', () => {
+    const s = GB.messagingSetup({}, now);
+    assert.strictEqual(s.sending, 'handoff');
+    assert.strictEqual(mode({}, 'handoff').status, 'on');
+    assert.strictEqual(mode({}, 'number').status, 'soon');
+    assert.strictEqual(mode({}, 'mac').status, 'off');
+  });
+
+  test('a silent agent is flagged, not quietly left looking fine', () => {
+    /* The failure this exists for. The agent sat blocked by Full Disk Access
+       for an afternoon while launchctl reported the job healthy, and nothing
+       on any screen said the threads had stopped updating. A stale heartbeat
+       has to read as a problem. */
+    const st = {deviceAgent: {lastSeenAt: ago(300)}};
+    const m = mode(st, 'mac');
+    assert.strictEqual(m.status, 'stalled');
+    assert.ok(/not up to date/i.test(m.detail), m.detail);
+  });
+
+  test('a recently checked-in agent reads as working', () => {
+    const m = mode({deviceAgent: {lastSeenAt: ago(1)}}, 'mac');
+    assert.strictEqual(m.status, 'on');
+    assert.ok(/syncing/i.test(m.detail), m.detail);
+  });
+
+  test('the stale threshold is the boundary, not a vibe', () => {
+    assert.strictEqual(mode({deviceAgent:{lastSeenAt: ago(GB.AGENT_STALE_MINUTES - 5)}}, 'mac').status, 'on');
+    assert.strictEqual(mode({deviceAgent:{lastSeenAt: ago(GB.AGENT_STALE_MINUTES + 5)}}, 'mac').status, 'stalled');
+  });
+
+  test('an agent that has never checked in is a problem, not a success', () => {
+    // A token created and never used means the agent cannot read Messages.
+    const m = mode({deviceAgent: {}}, 'mac');
+    assert.strictEqual(m.status, 'stalled');
+    assert.ok(/Full Disk Access/i.test(m.detail), m.detail);
+  });
+
+  test('a live number takes over and Messages drops to standby', () => {
+    const st = {smsNumber: {phoneNumber: '+15550001111', mine: true}};
+    assert.strictEqual(GB.messagingSetup(st, now).sending, 'number');
+    assert.strictEqual(mode(st, 'number').status, 'on');
+    assert.strictEqual(mode(st, 'handoff').status, 'standby');
+  });
+
+  test('a sandbox number is never described as sending', () => {
+    /* It must not read like a working number. Somebody seeing "In use" on a
+       test line will believe customers are being texted. */
+    const st = {smsNumber: {phoneNumber: '+15550001111', sandbox: true}};
+    assert.strictEqual(GB.messagingSetup(st, now).sending, 'sandbox');
+    assert.strictEqual(mode(st, 'number').status, 'test');
+    assert.ok(/reach nobody/i.test(mode(st, 'number').detail));
+  });
+
+  test('a shared team line says so rather than claiming to be theirs', () => {
+    const st = {smsNumber: {phoneNumber: '+15550009999', mine: false}};
+    assert.ok(/shared line/i.test(mode(st, 'number').detail), mode(st, 'number').detail);
+  });
+
+  test('it describes and never decides', () => {
+    /* The guarantee that makes this safe to ship while the rest is unfinished:
+       the panel reports, smsSendMode decides. If this ever started influencing
+       the send path, a "coming soon" section would be changing live behaviour. */
+    const st = {smsNumber: null, deviceAgent: {lastSeenAt: ago(1)}};
+    const before = GB.smsSendMode(st, {id:'c1', phone:'2135550100'}).mode;
+    GB.messagingSetup(st, now);
+    assert.strictEqual(GB.smsSendMode(st, {id:'c1', phone:'2135550100'}).mode, before);
+    assert.strictEqual(before, 'handoff');
+  });
+
+  test('an empty or missing state does not throw', () => {
+    assert.strictEqual(GB.messagingSetup(null, now).modes.length, 3);
+    assert.strictEqual(GB.messagingSetup({}, now).modes.length, 3);
+  });
+}
+
 console.log('\n--- what may be claimed about a message ---');
 
 {
