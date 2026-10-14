@@ -2919,7 +2919,9 @@ function markSent(state, clientId, stage, text){
   // the sender customized it by hand (or it's AI-generated from notes) — log
   // it as 'custom' rather than crediting/debiting the underlying template's
   // bandit stats with a send that isn't really that template's copy.
-  var wasCustomized = text !== renderTemplate(variant.text, client, state.senderName);
+  // stripOptOutNotice: the carrier opt-out suffix is added by the sender,
+  // not typed by a person, so it must not mark the send as customized.
+  var wasCustomized = stripOptOutNotice(text) !== renderTemplate(variant.text, client, state.senderName);
   var loggedVariantId = wasCustomized ? 'custom' : variant.id;
   client.messageLog.push({
     id: uuid(),
@@ -3104,6 +3106,55 @@ function smsSendMode(state, client){
     return {mode: 'handoff', reason: 'no registered texting number yet'};
   }
   return {mode: 'provider', reason: null};
+}
+
+/* Opt-out language, on the first text to a contact only.
+
+   Carriers require it, and a 10DLC campaign filed without it is a routine
+   rejection -- which costs weeks, because the queue is measured in weeks.
+
+   On the FIRST message of a conversation rather than all of them, which is
+   what the carriers actually ask for. Appending it to every touch would push
+   9 of the 29 starter templates past 160 characters into a second segment,
+   doubling the cost of most of the book, and would put a compliance footer on
+   messages written to sound like a person typing on a phone.
+
+   Added here rather than edited into the templates so the copy stays exactly
+   as written and A/B comparable: a constant suffix on every first message
+   changes no comparison between two variants, but 29 hand-edits would. */
+var SMS_OPT_OUT_NOTICE = ' Reply STOP to opt out.';
+
+function needsOptOutNotice(client){
+  if(!client) return false;
+  /* First text only. A contact who has already received one has already been
+     told, and repeating it on every touch is the thing this avoids. Email
+     sends do not count -- the opt-out being described is the SMS one. */
+  return !(client.messageLog || []).some(function(m){
+    return (m.channel || 'sms') === 'sms';
+  });
+}
+
+function withOptOutNotice(text, client){
+  if(!needsOptOutNotice(client)) return text;
+  var t = String(text == null ? '' : text);
+  // Already said it -- a hand-written message or a template that mentions
+  // STOP itself must not get a second copy.
+  if(/\breply stop\b/i.test(t)) return t;
+  return t + SMS_OPT_OUT_NOTICE;
+}
+
+/* The suffix must be invisible to the customization check.
+
+   markSent logs a send as 'custom' when the text does not match what the
+   template renders to, so that one person's rewrite cannot move the numbers
+   for copy nobody sent. The opt-out notice is appended by this code, not
+   typed by a person -- so without this, EVERY first message would log as
+   'custom' and the welcome templates, the ones that open every conversation,
+   would never accumulate a single attributable send. */
+function stripOptOutNotice(text){
+  var t = String(text == null ? '' : text);
+  return t.slice(-SMS_OPT_OUT_NOTICE.length) === SMS_OPT_OUT_NOTICE
+    ? t.slice(0, -SMS_OPT_OUT_NOTICE.length) : t;
 }
 
 function smsKeyword(body){
@@ -6792,6 +6843,10 @@ var __LOGIC_EXPORTS__ = {
   matchInboundReply: matchInboundReply,
   smsKeyword: smsKeyword,
   smsSendMode: smsSendMode,
+  needsOptOutNotice: needsOptOutNotice,
+  withOptOutNotice: withOptOutNotice,
+  stripOptOutNotice: stripOptOutNotice,
+  SMS_OPT_OUT_NOTICE: SMS_OPT_OUT_NOTICE,
   messageSkeleton: messageSkeleton,
   wordingBreakdown: wordingBreakdown,
   WORDING_MIN_SENDS: WORDING_MIN_SENDS,

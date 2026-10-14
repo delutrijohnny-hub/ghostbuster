@@ -6591,6 +6591,73 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- carrier opt-out language ---');
+
+{
+  const c = (log) => ({id:'c1', name:'Bob', phone:'2135550100', messageLog: log || []});
+
+  test('the first text carries opt-out language and later ones do not', () => {
+    /* Carriers require it and a campaign filed without it is a routine
+       rejection -- weeks lost, because the queue is measured in weeks. First
+       message only: appending it to all 29 starter templates would push 9 of
+       them past 160 characters into a second segment. */
+    assert.strictEqual(GB.withOptOutNotice('Hey Bob.', c([])), 'Hey Bob. Reply STOP to opt out.');
+    assert.strictEqual(GB.withOptOutNotice('Hey Bob.', c([{channel:'sms'}])), 'Hey Bob.');
+  });
+
+  test('an email does not count as having told them', () => {
+    // The opt-out being described is the SMS one, so an email send cannot
+    // discharge it.
+    assert.strictEqual(GB.withOptOutNotice('Hey Bob.', c([{channel:'email'}])),
+      'Hey Bob. Reply STOP to opt out.');
+  });
+
+  test('a message that already says it does not get a second copy', () => {
+    const once = GB.withOptOutNotice('Hey Bob. Reply STOP to opt out.', c([]));
+    assert.strictEqual(once, 'Hey Bob. Reply STOP to opt out.');
+    assert.strictEqual((once.match(/reply stop/gi) || []).length, 1);
+  });
+
+  test('the notice does not log the send as a one-off', () => {
+    /* The suffix is added by the sender, not typed by a person. Without
+       stripOptOutNotice in markSent, EVERY first message would log as
+       'custom' -- so the welcome templates, the ones that open every single
+       conversation, would never accumulate one attributable send and the
+       learning would be blind exactly where it matters most. */
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    st.clients = {};
+    st.clients.c1 = GB.sanitizeClient({
+      id:'c1', name:'Bob', phone:'2135550100', timezone:'America/New_York',
+      status:'Booked', callDateTime: new Date(Date.now() + 2*86400000).toISOString(),
+      messageLog: []
+    });
+    const variant = GB.pickVariant(st, 'welcome', st.clients.c1);
+    const rendered = GB.renderTemplate(variant.text, st.clients.c1, 'Johnny');
+    GB.markSent(st, 'c1', 'welcome', GB.withOptOutNotice(rendered, st.clients.c1));
+    const row = st.clients.c1.messageLog[0];
+    assert.notStrictEqual(row.variantId, 'custom',
+      'the opt-out notice made a template send log as a one-off');
+    assert.ok(/Reply STOP to opt out\.$/.test(row.text), 'the notice was not kept in the record');
+  });
+
+  test('a genuinely hand-edited first message still logs as a one-off', () => {
+    // The strip must not swallow real edits -- that would credit a template
+    // with wording nobody sent, which is the mistake it exists to prevent.
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    st.clients = {};
+    st.clients.c1 = GB.sanitizeClient({
+      id:'c1', name:'Bob', phone:'2135550100', timezone:'America/New_York',
+      status:'Booked', callDateTime: new Date(Date.now() + 2*86400000).toISOString(),
+      messageLog: []
+    });
+    GB.markSent(st, 'c1', 'welcome',
+      GB.withOptOutNotice('Totally different wording I typed myself.', st.clients.c1));
+    assert.strictEqual(st.clients.c1.messageLog[0].variantId, 'custom');
+  });
+}
+
 console.log('\n--- which sending route a contact gets ---');
 
 {

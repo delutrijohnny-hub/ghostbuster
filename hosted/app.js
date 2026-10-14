@@ -3682,7 +3682,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-9451e5c4';
+var BUILD_STAMP = '20261014-05e16ef9';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5803,7 +5803,11 @@ function doSendText(cid, stage, target){
       return;
     }
     lastSnapshot = snapshot();
-    markSent(STATE, cid, stage, text);
+    // The text the server actually sent, which carries the carrier opt-out
+    // notice on a first message. Logging our own copy instead would leave the
+    // record disagreeing with the message, and the next save would overwrite
+    // the server's row with it.
+    markSent(STATE, cid, stage, data.sentText || text);
     var logged = client.messageLog[client.messageLog.length - 1];
     if(logged){
       logged.channel = 'sms';
@@ -6048,7 +6052,7 @@ function focusSendProvider(target){
       return;
     }
     lastSnapshot = snapshot();
-    markSent(STATE, cur.cid, cur.stage, text);
+    markSent(STATE, cur.cid, cur.stage, data.sentText || text);
     var logged = c.messageLog[c.messageLog.length - 1];
     if(logged){
       logged.channel = 'sms';

@@ -144,12 +144,27 @@ Deno.serve(async (req) => {
     return json({ error: 'That phone number is not a full number.', code: 'bad_number' }, 400);
   }
 
+  /* Carrier opt-out language on the first text to this contact.
+
+     Appended HERE, on the server, rather than trusted to whatever called in.
+     Every route has to carry it -- the card, focus mode, and anything added
+     later -- and a compliance requirement that depends on each caller
+     remembering is one that eventually ships without it. A campaign whose
+     messages lack opt-out language gets filtered by the carriers, which fails
+     silently: the texts report as sent and simply never arrive. */
+  const priorRes = await db(
+    `message_log?client_id=eq.${encodeURIComponent(clientId)}&channel=eq.sms&select=id&limit=1`);
+  const prior = await priorRes.json().catch(() => []);
+  const body = GB.withOptOutNotice(text, {
+    messageLog: (Array.isArray(prior) ? prior : []).map(() => ({channel: 'sms'})),
+  });
+
   const sent = await sendViaTwilio({
     from: num.phone_number,
     // E.164. phoneKey gives the last ten digits, which for a US number is
     // the whole thing after the country code.
     to: `+1${toDigits}`,
-    body: text,
+    body: body,
     statusCallback: `${SUPABASE_URL}/functions/v1/sms-webhook`,
   });
   if (!sent.ok) return json({ error: sent.error, code: 'provider_error' }, 502);
@@ -180,7 +195,11 @@ Deno.serve(async (req) => {
       client_id: clientId,
       stage: stage || 'custom',
       variant_key: variantId || 'custom',
-      text,
+      // The text as it actually went out, opt-out notice included. The
+      // bandit is unaffected: stripOptOutNotice removes it before the
+      // customization comparison, so a first message still logs against
+      // its template rather than as a one-off.
+      text: body,
       sent_at: new Date().toISOString(),
       responded: false,
       reviewed: false,
@@ -194,5 +213,10 @@ Deno.serve(async (req) => {
   return json({
     ok: true, providerId: sent.id, logged: logRes.ok,
     messageId: loggedRow?.id || null, from: num.phone_number,
+    /* What actually went out, so the browser logs the same string rather
+       than recomputing the opt-out rule and risking a different answer. Its
+       own upsert would otherwise overwrite this row's text with a version
+       missing the notice, leaving the record disagreeing with the message. */
+    sentText: body,
   });
 });
