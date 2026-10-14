@@ -90,6 +90,32 @@ Answer **yes** to "do messages include links" (the hour-before message
 includes the meeting link). Answer **no** to affiliate marketing, lead
 generation, age-gated content and loan content.
 
+## 3b. How many numbers — read this before provisioning
+
+**One number per salesperson, not one for the company.**
+
+The reason to own the number is that the client recognises the sender. A
+contact who has dealt with Ethan for a month should not get a reminder from a
+line that is not his. Ghost Recall picks the caller's own number and only
+falls back to a shared team line when that rep has none; it will never send
+from a colleague's number, because the reply would land in the wrong person's
+inbox.
+
+So: one campaign, several numbers attached to it. The brand and campaign
+filing is the same either way — you are not filing per number — but when you
+provision, buy one per rep rather than one for the team.
+
+Reps do NOT need a Mac, or any particular device. Sending happens on Ghost
+Recall's server, so a rep opens the app in their phone browser and texts from
+their own number on an iPhone, an Android or a PC. There is nothing to
+install.
+
+What this cannot do is send from a rep's existing personal mobile number.
+Apple provides no way for software to send iMessage except on a Mac signed
+into that Apple ID, and hosting a mobile number for SMS elsewhere splits
+iMessage from SMS in ways that break conversations. A dedicated number per
+rep is the device-independent answer.
+
 ## 4. Number, secrets, webhooks
 
 Only after the campaign is **approved**.
@@ -106,16 +132,30 @@ Only after the campaign is **approved**.
 
    Do not paste these into chat. Ghost Recall never needs to see them.
 
-4. Register the number in Ghost Recall. **This row is the switch** — until it
-   exists with `status = 'registered'`, every contact falls back to the
-   Open-in-Messages handoff and nothing changes for anyone:
+4. Register each number in Ghost Recall. **These rows are the switch** —
+   until a rep has one with `status = 'registered'`, they fall back to the
+   Open-in-Messages handoff and nothing changes for them:
 
    ```sql
-   insert into public.org_phone_numbers (phone_number, org_id, provider, status, label)
-   values ('+1XXXXXXXXXX', 'ee73ce65-bc6c-4f4f-97d2-42dce27f67c9', 'twilio', 'registered', 'main');
+   -- One row per salesperson. user_id is their auth.users id; find them with:
+   --   select u.id, u.email from auth.users u
+   --     join public.memberships m on m.user_id = u.id
+   --    where m.org_id = 'ee73ce65-bc6c-4f4f-97d2-42dce27f67c9';
+   insert into public.org_phone_numbers
+     (phone_number, org_id, user_id, provider, status, label)
+   values
+     ('+1XXXXXXXXXX', 'ee73ce65-bc6c-4f4f-97d2-42dce27f67c9', '<johnny-uuid>', 'twilio', 'registered', 'Johnny'),
+     ('+1YYYYYYYYYY', 'ee73ce65-bc6c-4f4f-97d2-42dce27f67c9', '<ethan-uuid>',  'twilio', 'registered', 'Ethan');
    ```
 
-   (That org id is Market Maker Management. One number per org.)
+   A row with `user_id` null is an org-wide fallback for reps who have no
+   number yet. There can be at most one of those, and at most one row per
+   person — both enforced by unique indexes, so a mistake here fails loudly
+   rather than silently putting two reps on one line.
+
+   Point every number's inbound and status webhooks at the same sms-webhook
+   URL. The receiving number tells Ghost Recall which rep, and which org, a
+   message belongs to.
 
 ## 5. Before you file: the booking page
 
