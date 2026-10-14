@@ -440,3 +440,9 @@ verify_jwt = false
 # behalf. Unlike the webhooks it has a JWT to verify.
 [functions.send-sms]
 verify_jwt = true
+
+# The Mac Messages agent authenticates with its own device token, not a
+# Supabase JWT, so the platform gate would reject it before the function runs
+# -- the same way it silently rejected every Resend webhook for weeks.
+[functions.imessage-sync]
+verify_jwt = false

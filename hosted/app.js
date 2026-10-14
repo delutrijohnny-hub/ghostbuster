@@ -3884,7 +3884,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-6fd555ee';
+var BUILD_STAMP = '20261014-2d831f59';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4207,6 +4207,22 @@ function renderSettingsModal(){
         (STATE.emailFromAddress ? '.' : ', taken from your connected calendar. Set an address above to override it.') + '</div>'
       : '<div class="set-warn" style="margin-top:6px;">No business account known yet, so the Email button would open whichever Gmail you last used. Connect a calendar or set an address above.</div>') +
     '</div>' +
+    /* Connecting a Mac.
+
+       Apple gives no way to read iMessage except from a Mac signed into that
+       Apple ID, so the only software that can see those conversations runs on
+       the person's own machine. This is where it gets a credential.
+
+       The token is shown once and never again -- only its hash is stored, so
+       this list leaking is not a leak of anybody's access. */
+    '<div class="set-section"><h3>Connect this Mac</h3>' +
+    '<div class="hint">Pulls your existing text threads with clients into the Texts tab. ' +
+    'Only conversations with people who are already contacts are read \u2014 everything else ' +
+    'stays on your Mac. Needs a Mac running the agent; nothing to install on your phone.</div>' +
+    '<div id="device-tokens"></div>' +
+    '<div style="margin-top:8px;">' +
+      '<button class="btn btn-sm" data-action="new-device-token">Create a token for this Mac</button>' +
+    '</div></div>' +
     '<div class="set-section"><h3>What you call things</h3>' +
     '<div class="hint">Changes the words in the interface. Nothing behavioural.</div>' +
     '<div class="term-grid">' + termFields + '</div></div>' +
@@ -4217,6 +4233,7 @@ function renderSettingsModal(){
     '<div class="build-stamp">Build ' + escapeHtml(BUILD_STAMP) + '</div>',
     true
   );
+  renderDeviceTokens();
 
   /* Land on the section that was asked for.
 
@@ -5163,6 +5180,12 @@ document.addEventListener('click', function(ev){
     case 'send-reply':
       doSendReply(cid, target);
       break;
+    case 'new-device-token':
+      createDeviceToken(target);
+      break;
+    case 'revoke-device-token':
+      revokeDeviceToken(target.getAttribute('data-id'));
+      break;
     case 'open-sms':
       /* Recorded before the handoff to Messages, not 700ms after it.
 
@@ -5995,6 +6018,90 @@ function markSentOnChannel(cid, stage, text, channel){
    nothing. It is logged against 'custom' for the same reason a hand-edited
    send is -- it is nobody's template, so it must not move any template's
    numbers. */
+/* Device tokens: the credential the Mac agent uses.
+
+   Shown once at creation and never recoverable -- the server keeps only a
+   hash. That is deliberate: a list of machines somebody has connected is
+   useful to see, and a list of working credentials is not something this
+   screen should be able to hand out twice. */
+function renderDeviceTokens(){
+  var box = el('device-tokens'); if(!box) return;
+  /* Guarded, because this is a small corner of a big screen.
+
+     Business settings carries the pipeline, the cadence editor, terminology
+     and the save button. A list of connected Macs failing -- an older client
+     library, a table that is not there yet -- must not take all of that down
+     with it. A test caught exactly that: the whole settings modal threw. */
+  var q;
+  try {
+    q = window.GB_SUPABASE.from('device_tokens')
+      .select('id,label,created_at,last_seen_at,revoked_at')
+      .order('created_at', {ascending:false});
+  } catch(e) {
+    box.innerHTML = '<div class="hint">Could not check connected Macs.</div>';
+    return;
+  }
+  q.then(function(res){
+      var rows = (res && res.data) || [];
+      var live = rows.filter(function(r){ return !r.revoked_at; });
+      if(!live.length){
+        box.innerHTML = '<div class="hint">No Mac connected yet.</div>';
+        return;
+      }
+      box.innerHTML = live.map(function(r){
+        return '<div class="u-row"><div class="u-meta">' +
+          escapeHtml(r.label || 'this Mac') + ' \u00b7 added ' +
+          new Date(r.created_at).toLocaleDateString() + ' \u00b7 ' +
+          (r.last_seen_at
+            ? 'last synced ' + new Date(r.last_seen_at).toLocaleString()
+            : 'never synced yet') +
+          ' <button class="linkish" data-action="revoke-device-token" data-id="' +
+          escapeHtml(r.id) + '">disconnect</button></div></div>';
+      }).join('');
+  }, function(){
+    box.innerHTML = '<div class="hint">Could not check connected Macs.</div>';
+  });
+}
+
+function createDeviceToken(btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Creating\u2026'; }
+  window.GB_SUPABASE.rpc('create_device_token', {p_label: 'Mac \u00b7 ' + new Date().toLocaleDateString()})
+    .then(function(res){
+      if(btn){ btn.disabled = false; btn.textContent = 'Create a token for this Mac'; }
+      if(res.error || !res.data){
+        showToast('Could not create a token: ' + ((res.error && res.error.message) || 'unknown error'));
+        return;
+      }
+      /* Shown once, in a box they can copy from, with the command that uses
+         it -- because a secret handed over with no instructions is a secret
+         that gets pasted somewhere it should not be. */
+      var tok = res.data;
+      openModalHtml(
+        '<div class="modal-head"><h2>Connect this Mac</h2>' +
+        '<button class="btn-ghost btn" data-action="close-modal">\u2715</button></div>' +
+        '<div class="hint">Copy this now. It is shown once and cannot be retrieved again \u2014 ' +
+        'if you lose it, disconnect this Mac and create another.</div>' +
+        '<textarea readonly rows="2" style="width:100%;margin:10px 0;font-family:ui-monospace,monospace;font-size:12px;">' +
+        escapeHtml(tok) + '</textarea>' +
+        '<div class="hint">In Terminal, from the ghostbuster folder:</div>' +
+        '<textarea readonly rows="3" style="width:100%;margin:6px 0;font-family:ui-monospace,monospace;font-size:12px;">' +
+        'GR_TOKEN=' + escapeHtml(tok) + ' python3 tools/imessage-agent.py --dry-run</textarea>' +
+        '<div class="hint">That reports what it would sync without sending anything. ' +
+        'Drop <strong>--dry-run</strong> to do it, and add <strong>--watch</strong> to keep it running. ' +
+        'Terminal needs Full Disk Access (System Settings \u2192 Privacy &amp; Security) or macOS blocks ' +
+        'reading Messages.</div>', true);
+    });
+}
+
+function revokeDeviceToken(id){
+  if(!id) return;
+  window.GB_SUPABASE.rpc('revoke_device_token', {p_id: id}).then(function(res){
+    if(res.error){ showToast('Could not disconnect that Mac.'); return; }
+    showToast('Disconnected. That Mac can no longer sync.');
+    renderDeviceTokens();
+  });
+}
+
 function doSendReply(cid, target){
   var client = STATE.clients[cid];
   if(!client) return;
