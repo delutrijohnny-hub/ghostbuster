@@ -6591,6 +6591,92 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- what may be claimed about a message ---');
+
+{
+  test('a draft handed to Messages is never reported as sent', () => {
+    /* The distinction this whole state model exists for. Ghost Recall hands
+       the Messages app a prefilled draft and loses sight of it -- the person
+       may send it, edit it, or close the app. 753 rows on the live book are
+       in that position against 472 a provider or the Mac agent confirmed, and
+       both read as "sent" before this. "I sent that" is the sentence a
+       salesperson acts on, so it has to be earned. */
+    const d = GB.deliveryState({channel:'sms'});
+    assert.strictEqual(d.state, 'unverified');
+    assert.strictEqual(d.confirmed, false);
+    assert.ok(/not confirmed/i.test(d.label), d.label);
+    assert.ok(!/^sent$/i.test(d.label), 'an unconfirmed handoff claimed to be sent');
+  });
+
+  test('only a provider or the agent can confirm a send', () => {
+    for (const [status, confirmed] of [['sent',true], ['delivered',true],
+                                       ['bounced',true], ['complained',true],
+                                       ['failed',true], ['queued',false]]) {
+      const d = GB.deliveryState({channel:'sms', deliveryStatus:status});
+      assert.strictEqual(d.state, status);
+      assert.strictEqual(d.confirmed, confirmed,
+        status + ' reported confirmed=' + d.confirmed);
+    }
+  });
+
+  test('queued is ours, not theirs', () => {
+    // We accepted it; nobody has carried it anywhere. Showing that as
+    // confirmed would be us reporting our own intention back to ourselves.
+    assert.strictEqual(GB.deliveryState({channel:'sms', deliveryStatus:'queued'}).confirmed, false);
+  });
+
+  test('a failure says it failed rather than going quiet', () => {
+    assert.ok(/not delivered/i.test(GB.deliveryState({channel:'sms', deliveryStatus:'bounced'}).label));
+    assert.ok(/failed/i.test(GB.deliveryState({channel:'sms', deliveryStatus:'failed'}).label));
+  });
+
+  test('an inbound message is received, not sent', () => {
+    const d = GB.deliveryState({dir:'in', text:'hi'});
+    assert.strictEqual(d.state, 'received');
+    assert.strictEqual(d.confirmed, true);
+  });
+
+  test('an old email row with nothing recorded claims nothing', () => {
+    /* The unverified reading is specific to the sms: handoff. On email there
+       was no handoff, so an empty status means the delivery webhook never ran
+       -- and inventing a state for it would be the same mistake in reverse. */
+    const d = GB.deliveryState({channel:'email'});
+    assert.strictEqual(d.state, 'unknown');
+    assert.strictEqual(d.label, '');
+  });
+
+  test('every state has a phrase, and no phrase overstates', () => {
+    Object.keys(GB.DELIVERY_STATES).forEach(k => {
+      const label = GB.DELIVERY_STATES[k];
+      assert.ok(label && label.length, k + ' has no phrase');
+    });
+    // The two that mean "we do not know" must not read as achievements.
+    assert.ok(/not confirmed/i.test(GB.DELIVERY_STATES.unverified));
+    assert.ok(/queued/i.test(GB.DELIVERY_STATES.queued));
+  });
+
+  test('a missing message does not throw', () => {
+    assert.strictEqual(GB.deliveryState(null).state, 'unknown');
+    assert.strictEqual(GB.deliveryState(undefined).label, '');
+  });
+
+  test('the handoff path records unverified rather than leaving it blank', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const start = app.indexOf("case 'open-sms':");
+    const block = app.slice(start, app.indexOf("case 'copy-remaining'", start));
+    assert.ok(/deliveryStatus = 'unverified'/.test(block),
+      'opening Messages leaves the delivery state blank, so the thread cannot '
+        + 'tell a handed-over draft from a confirmed send');
+  });
+
+  test('the browser writes delivery state back, or it is lost on reload', () => {
+    const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+    const fn = data.slice(data.indexOf('function rowMessage'), data.indexOf('function rowTodo'));
+    assert.ok(/delivery_status: m\.deliveryStatus/.test(fn),
+      'rowMessage drops deliveryStatus, so unverified never survives a save');
+  });
+}
+
 console.log('\n--- the text inbox ---');
 
 {
@@ -11724,7 +11810,15 @@ test('the live import path keeps it too', () => {
 
 test('the contact shows it, and shows nothing when there is none', () => {
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function openClientModal'), app.indexOf('function openClientModal') + 3000);
+  /* The whole function, not a fixed character window.
+
+     This sliced 3000 characters and broke the moment anything was added above
+     the title markup -- which says nothing about the property being tested.
+     A window that has to be widened every time the function grows is a test
+     that fails for the wrong reason. */
+  const fnStart = app.indexOf('function openClientModal');
+  const fnEnd = app.indexOf('\nfunction ', fnStart + 10);
+  const fn = app.slice(fnStart, fnEnd === -1 ? app.length : fnEnd);
   assert.ok(/c\.eventTitle\s*\?/.test(fn),
     'the title is printed unconditionally, so every pre-existing contact gets '
       + 'an empty line suggesting its event had no title');

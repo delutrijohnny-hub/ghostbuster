@@ -101,6 +101,16 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
+def say(msg):
+    """Print with a timestamp.
+
+    Untimestamped output in a log file is indistinguishable from stale output,
+    and that is not hypothetical: a frozen log was read as a live failure and
+    acted on twice.
+    """
+    print('%s  %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg), flush=True)
+
+
 def up_to_date_line(watched):
     """What a quiet sync should say.
 
@@ -170,6 +180,16 @@ def install_service():
     it at login.
     """
     script = os.path.abspath(__file__)
+    # The REAL interpreter, not /usr/bin/python3.
+    #
+    # macOS grants Full Disk Access to the binary that actually executes, and
+    # /usr/bin/python3 is a shim ending at python3.9 inside Command Line Tools.
+    # Point launchd at the shim and the permission granted never matches the
+    # process that runs: the service starts, looks healthy in launchctl, and is
+    # refused by the Messages database every cycle. That is exactly what
+    # happened. Resolving it here means the path added to Full Disk Access and
+    # the path launchd runs are the same string.
+    interpreter = os.path.realpath(sys.executable)
     plist = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -178,7 +198,15 @@ def install_service():
   <key>Label</key><string>%(label)s</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>%(python)s</string>
+    <!-- -u: unbuffered.
+
+         launchd sends stdout to a file, so Python switches from line
+         buffering to block buffering and nothing reaches the log until
+         several kilobytes accumulate. The log then sits frozen for hours
+         while the agent is running normally -- which had me reading
+         five-hour-old errors and reporting them as current. -->
+    <string>-u</string>
     <string>%(script)s</string>
     <string>--watch</string>
   </array>
@@ -188,7 +216,8 @@ def install_service():
   <key>StandardErrorPath</key><string>%(log)s</string>
 </dict>
 </plist>
-""" % {'label': SERVICE_LABEL, 'script': script, 'log': SERVICE_LOG}
+""" % {'label': SERVICE_LABEL, 'script': script, 'log': SERVICE_LOG,
+       'python': interpreter}
 
     os.makedirs(os.path.dirname(SERVICE_PLIST), exist_ok=True)
     with open(SERVICE_PLIST, 'w') as f:
@@ -199,6 +228,12 @@ def install_service():
         raise SystemExit('launchctl could not load the service. The file is at\n  %s'
                          % SERVICE_PLIST)
     print('Running in the background, and will start again at login.')
+    print('\nIMPORTANT: give Full Disk Access to this exact binary, or macOS')
+    print('blocks it from reading Messages and the service syncs nothing:')
+    print('  %s' % interpreter)
+    print('System Settings -> Privacy & Security -> Full Disk Access -> +')
+    print('then Cmd+Shift+G and paste that path. Afterwards:')
+    print('  launchctl kickstart -k gui/$(id -u)/%s' % SERVICE_LABEL)
     print('  log:     %s' % SERVICE_LOG)
     print('  stop it: python3 tools/imessage-agent.py --uninstall-service')
     print('\nClose any terminal tabs still running --watch; this replaces them.')
@@ -398,12 +433,12 @@ def sync_once(token, verbose=True, reset=False, max_messages=0):
 
     if verbose:
         if totals['sent']:
-            print('Synced %d messages: %d replies, %d texts you sent, '
-                  '%d matched to sends already logged, %d skipped, %d REJECTED.'
+            say('Synced %d messages: %d replies, %d texts you sent, '
+                '%d matched to sends already logged, %d skipped, %d REJECTED.'
                   % (totals['sent'], totals['inbound'], totals['outbound'],
                      totals['linked'], totals['skipped'], totals['failed']))
         else:
-            print(up_to_date_line(len(numbers)))
+            say(up_to_date_line(len(numbers)))
     return totals['sent']
 
 
@@ -468,7 +503,7 @@ def main():
             # opposite: it is the steady state once the first sync has caught
             # up. Saying so plainly is the difference between trusting this
             # and running it five more times to check.
-            print(up_to_date_line(len(numbers)))
+            say(up_to_date_line(len(numbers)))
         return
 
     if args.watch:
@@ -478,9 +513,9 @@ def main():
                 sync_once(token, reset=args.reset, max_messages=args.max_messages)
                 args.reset = False
             except SystemExit as e:
-                print('sync failed: %s' % e)
+                say('sync failed: %s' % e)
             except Exception as e:                    # keep the watcher alive
-                print('sync failed: %r' % e)
+                say('sync failed: %r' % e)
             time.sleep(max(30, args.interval))
     else:
         sync_once(token, reset=args.reset, max_messages=args.max_messages)

@@ -3561,8 +3561,17 @@ function openClientModal(clientId){
     /* Delivery state only when the provider told us something. On the sms:
        handoff there is no receipt at all, and printing "sent" there would
        claim knowledge we do not have. */
-    var delivery = it.deliveryStatus
-      ? ' · ' + escapeHtml(it.deliveryStatus === 'bounced' ? 'not delivered' : it.deliveryStatus)
+    /* Say only what an event supports.
+
+       This printed the raw status, and nothing at all when there was none, so
+       a draft handed to the Messages app looked identical to a text a carrier
+       confirmed delivering. deliveryState draws that line: what a provider or
+       the Mac agent confirmed reads plainly, what we merely handed over says
+       so. */
+    var ds = deliveryState(it);
+    var delivery = ds.label
+      ? ' · <span class="' + (ds.confirmed ? 'dlv-ok' : 'dlv-unsure') + '">' +
+        escapeHtml(ds.label) + '</span>'
       : '';
     return '<div class="msg-log-item msg-out"><div class="meta">' + escapeHtml(it.stage) + ' · ' +
       escapeHtml(it.variantId || '') + ' · ' + new Date(it.at).toLocaleString() + ' · ' +
@@ -3884,7 +3893,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-cf723023';
+var BUILD_STAMP = '20261014-67d227ec';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5215,6 +5224,12 @@ document.addEventListener('click', function(ev){
         lastSnapshot = snapshot();
         var smsName = STATE.clients[cid].name, smsSnap = lastSnapshot;
         doMarkSent(cid, stage, true);
+        /* Recorded as unverified, not sent. Messages has the draft; whether it
+           was sent, edited or abandoned is not something this can see. The Mac
+           agent upgrades it to delivered if it finds the real message later,
+           which is the only honest route to a confirmed state. */
+        var handed = STATE.clients[cid].messageLog[STATE.clients[cid].messageLog.length - 1];
+        if(handed && !handed.deliveryStatus){ handed.deliveryStatus = 'unverified'; saveState(STATE); }
         // Shown with the deferred repaint, so it is waiting when they come
         // back from Messages. Optimistic marking needs a visible way out:
         // the one case this gets wrong is deciding not to press Send.

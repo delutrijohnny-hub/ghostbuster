@@ -1060,7 +1060,12 @@ function rowMessage(m, clientId){
     id: m.id, client_id: clientId, stage: m.stage, variant_key: m.variantId || '',
     text: m.text, sent_at: m.sentAt, responded: !!m.responded,
     responded_at: m.respondedAt, reviewed: !!m.reviewed,
-    channel: m.channel || 'sms'
+    channel: m.channel || 'sms',
+    /* Written back now, because the browser is the only thing that knows a
+       draft was handed to Messages. Provider-set values still come from the
+       webhooks; this cannot overwrite one with null, because the local row
+       carries whatever was loaded. */
+    delivery_status: m.deliveryStatus || null
   };
 }
 function rowTodo(t, uid){

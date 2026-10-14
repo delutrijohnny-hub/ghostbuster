@@ -3443,6 +3443,49 @@ function conversationList(state, now){
   return rows;
 }
 
+/* What is actually known about a message, and what may be said about it.
+
+   The distinction this exists to protect: a draft opened in the Messages app
+   is not a sent message. Ghost Recall hands over a prefilled draft and loses
+   sight of it -- the person may send it, edit it, or close the app. Showing
+   that as "sent" is a claim nothing supports, and "I sent that" is precisely
+   the sentence a salesperson acts on. 753 rows on the live book are in that
+   position against 472 a provider or the Mac agent later confirmed.
+
+   Returns a state and a phrase for it. Every phrase has to be defensible from
+   an event that actually happened; where nothing happened, it says so. */
+var DELIVERY_STATES = {
+  queued:     'queued to send',
+  sent:       'sent',
+  delivered:  'delivered',
+  bounced:    'not delivered',
+  complained: 'marked as junk',
+  failed:     'failed to send',
+  unverified: 'opened in Messages \u2014 not confirmed'
+};
+
+function deliveryState(m){
+  if(!m) return {state: 'unknown', label: '', confirmed: false};
+  if(m.dir === 'in') return {state: 'received', label: 'received', confirmed: true};
+  var raw = m.deliveryStatus || null;
+  if(raw && DELIVERY_STATES[raw]){
+    return {
+      state: raw, label: DELIVERY_STATES[raw],
+      /* Only a provider or the agent can confirm a send. Everything else is
+         us reporting our own intention back to ourselves. */
+      confirmed: raw === 'delivered' || raw === 'sent' || raw === 'bounced' ||
+                 raw === 'complained' || raw === 'failed'
+    };
+  }
+  /* Nothing recorded. On the text channel that means the sms: handoff, where
+     a draft was opened and nothing came back -- which is unverified, not
+     sent. Older rows predate the distinction and land here too, correctly. */
+  if((m.channel || 'sms') === 'sms'){
+    return {state: 'unverified', label: DELIVERY_STATES.unverified, confirmed: false};
+  }
+  return {state: 'unknown', label: '', confirmed: false};
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -7132,6 +7175,8 @@ var __LOGIC_EXPORTS__ = {
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,
+  deliveryState: deliveryState,
+  DELIVERY_STATES: DELIVERY_STATES,
   RECENT_REPLY_DAYS: RECENT_REPLY_DAYS,
   voiceExamples: voiceExamples,
   conversationThread: conversationThread,
