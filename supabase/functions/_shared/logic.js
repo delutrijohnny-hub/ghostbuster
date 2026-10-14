@@ -1106,14 +1106,14 @@ function buildDefaultVariants(){
       {id:'w3', builtin:true, needsChannel:true, text:"Hey {name}, {sender} here. Got {channel} open and locked you in for {date} at {time}. Want to focus on the biggest leverage points for local search and discovery. Talk soon."}
     ],
     monday: [
-      {id:'m1-v2', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Nothing needed from you beforehand — just keep it on the calendar."},
+      {id:'m1-v3', builtin:true, text:"Hey {name}, quick heads up that we're on for this {weekday} at {time}. Nothing needed from you beforehand - just keep it on the calendar."},
       {id:'m2-v2', builtin:true, text:"Hi {name}, hope the week's off to a good start. We're on for {weekday} at {time}. Say the word if the time stopped working and I'll move it."}
     ],
     midcheckin: [
       {id:'c1-v2', builtin:true, text:"Hey {name}, checking in ahead of {date}. Still a good time on your end?"},
       {id:'c2-v2', builtin:true, text:"Hi {name}, touching base before {date}. Let me know if anything shifted on your schedule and we'll find another slot."},
       {id:'c3', builtin:true, needsChannel:true, text:"Hey {name}, reviewing our plan for {channel} before {date}. Want to zone in on your local video packaging and CTR. Still all set?"},
-      {id:'c4', builtin:true, text:"Hey {name}, quick schedule check for {date}. Drop a 👍 if that time still works and I'll see you then."}
+      {id:'c4-v2', builtin:true, text:"Hey {name}, quick schedule check for {date}. Give me a thumbs up if that time still works and I'll see you then."}
     ],
     dayof: [
       {id:'d1-v2', builtin:true, text:"Hey {name}, hopping on at {time}. Here's the link: {link}"},
@@ -1146,7 +1146,7 @@ function buildDefaultVariants(){
     hourbefore: [
       {id:'h1', builtin:true, text:"Hey {name}, we're on in about an hour at {time}. Here's the link so it's handy: {link}"},
       {id:'h2', builtin:true, text:"{name}, coming up on {time}. Link's right here when you're ready: {link}"},
-      {id:'h3', builtin:true, text:"Hey {name}, about an hour out from our {time}. Drop a 👍 if you're still good and I'll see you there. {link}"},
+      {id:'h3-v2', builtin:true, text:"Hey {name}, about an hour out from our {time}. Give me a thumbs up if you're still good and I'll see you there. {link}"},
       /* The hour-before text for everyone who does not meet on video.
 
          All three above hand over a link, and eligibleVariants falls back to
@@ -1162,7 +1162,7 @@ function buildDefaultVariants(){
     ],
     noshow: [
       {id:'n1', builtin:true, text:"Hey {name}, missed you on {date}. No stress, it happens. What does later this week look like on your end?"},
-      {id:'n2-v2', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still happy to get you sorted — shoot me a time that works better and we can reset."},
+      {id:'n2-v3', builtin:true, text:"Hi {name}, bummer we missed each other on {date}. Still happy to get you sorted - shoot me a time that works better and we can reset."},
       {id:'n3', builtin:true, needsChannel:true, text:"Hey {name}, missed you for our {date} spot, all good. Still want to dig into the growth side for {channel}. Let me know if you want to grab another time this week."}
     ],
     /* The slow lane. Sent roughly monthly, indefinitely, to anyone who never
@@ -1181,7 +1181,7 @@ function buildDefaultVariants(){
     // someone coming back around, not a stranger, so the tone skips the
     // introduction but still reads as a first real connection.
     rebooked: [
-      {id:'rb1-v2', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Same plan as before — I'll come ready with specifics."},
+      {id:'rb1-v3', builtin:true, text:"Hey {name}, {sender} here. Glad we got this back on the calendar for {date} at {time}. Same plan as before - I'll come ready with specifics."},
       {id:'rb2-v2', builtin:true, text:"Hi {name}, saw the new time come through for {date} at {time}. Glad we're making it happen."}
     ],
     // Fires instead of "rebooked" when the prior contact's last known status
