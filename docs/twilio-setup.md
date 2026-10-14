@@ -59,15 +59,27 @@ benefit.
 Be literal about where the number comes from. Vague consent language is the
 single most common rejection.
 
-> The recipient books an appointment through our booking page or by scheduling
-> a meeting with a team member, and supplies their mobile number as part of
-> that booking. The booking form states that they will receive text messages
-> about the appointment. Consent is collected at the point of booking; we do
-> not purchase, rent or import contact lists. Messages relate only to the
-> appointment that person booked.
+> The recipient books a YouTube strategy consultation through our public
+> scheduling page and supplies their mobile number as part of that booking.
+> The booking page states, above the form, that by booking they agree to
+> receive text messages about the appointment, that message and data rates may
+> apply, and that replying STOP opts them out, with a link to our full text
+> messaging policy at https://www.ghostrecallcrm.com/sms-policy. Consent is
+> collected at the point of booking. We do not purchase, rent or import
+> contact lists, and we do not message anyone who has not booked with us.
+> Messages relate only to the appointment that person booked.
 
-**This must be true before you file.** If the booking page does not currently
-say that texts will be sent, add that line to it first — see section 5.
+**Every sentence of that has to be true before you file**, because reviewers
+open the landing page and read it.
+
+Two things it deliberately does NOT claim. The scheduling page is a Google
+Calendar appointment schedule, and Google offers no way to mark the phone
+field required, nor any checkbox question type — so the filing must not
+describe a tick-box consent that does not exist, and must not imply the phone
+number is mandatory. What it does have is the disclosure in the page
+description, which is editable, plus the policy page. That is an honest and
+defensible position; an invented checkbox is the kind of detail that gets a
+campaign rejected and the business flagged.
 
 ### Sample messages
 
@@ -159,14 +171,28 @@ Only after the campaign is **approved**.
 
 ## 5. Before you file: the booking page
 
-The message-flow text above claims the booking form tells people they will be
-texted. Make that true, or the filing is describing something that does not
-happen — carriers do check landing pages.
+Carriers open the landing page and read it, so this has to be in place first.
 
-Add to the booking page, near the phone field:
+The scheduling page is a Google Calendar appointment schedule. Its booking
+form cannot be customised — there is no "required" toggle on the phone field
+and no checkbox question type — so the **Description** is where the disclosure
+goes. Calendar -> the appointment schedule -> Edit -> Description, appended to
+the existing copy, then Save (top right; closing the panel without it discards
+the edit):
 
-> By booking, you agree to receive text messages about this appointment.
-> Message and data rates may apply. Reply STOP to opt out.
+> By booking, you agree to receive text messages from Market Maker Management
+> about this appointment. Message and data rates may apply. Reply STOP to opt
+> out. See ghostrecallcrm.com/sms-policy
+
+Then confirm it on the live page rather than trusting the editor — load the
+booking link in a browser and click "Show more" on the description. Three
+separate attempts at this did not take, which is why checking matters.
+
+The second piece of evidence is **https://www.ghostrecallcrm.com/sms-policy**,
+a public page covering who is messaged, consent at booking, sample messages,
+STOP and HELP keywords, sending hours, and an explicit statement that mobile
+numbers and consent are never shared with third parties. Carriers look for
+that last line specifically. It is linked from the site footer.
 
 ## 6. First real send
 
