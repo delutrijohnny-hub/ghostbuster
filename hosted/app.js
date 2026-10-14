@@ -3220,7 +3220,14 @@ function populatePrintSheet(state){
 
 function buildAIPrompt(client, stage){
   var sender = STATE.senderName || 'the sender';
-  var samples = eligibleVariants(STATE, stage, client).map(function(v){ return renderTemplate(v.text, client, sender); });
+  /* voiceExamples, not eligibleVariants.
+
+     eligibleVariants gives a person's own wording exactly the same billing as
+     the starter templates, so somebody who had written their own copy still
+     got drafts in the stock voice -- outvoted in their own account. This puts
+     their writing first and says, below, that it is theirs. */
+  var voice = voiceExamples(STATE, stage, client, sender);
+  var samples = voice.examples.map(function(e){ return e.text; });
   var callDate = safeDate(client.callDateTime);
   var tz = client.timezone || 'America/New_York';
   var lines = [
@@ -3238,8 +3245,12 @@ function buildAIPrompt(client, stage){
        top of them added nothing even for the account it was true of. */
     'You are drafting a single SMS text message for ' + sender + ', to send to a ' +
       termLower('contact') + ' named ' + firstName(client.name) + '.',
-    'Match ' + sender + '\'s real texting voice exactly, shown in these example messages they actually send for this same stage ("' + stage + '"):',
-    samples.map(function(s){ return '- "' + s + '"'; }).join('\n'),
+    voice.own
+      ? 'Match ' + sender + '\'s real texting voice exactly. The examples marked (their own wording) were written by ' + sender + ' personally \u2014 copy their rhythm, their punctuation and their level of formality from those above all else. The unmarked ones are stock templates: use them only to understand what this kind of message is for, never as a model for how ' + sender + ' writes.'
+      : 'Match ' + sender + '\'s real texting voice exactly, shown in these example messages they actually send for this same stage ("' + stage + '"):',
+    voice.examples.map(function(e){
+      return '- "' + e.text + '"' + (voice.own && e.mine ? '  (their own wording)' : '');
+    }).join('\n'),
     'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with their name unless the examples do.',
     'Infer what this business does from the examples. Never invent a service, industry or claim that is not in them.',
   ];
@@ -3682,7 +3693,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-ba0d5661';
+var BUILD_STAMP = '20261014-71be14fe';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4586,9 +4597,16 @@ document.addEventListener('click', function(ev){
       ndc.recap = NOTES_PANEL.notes.trim();
       saveState(STATE);
 
-      // The business's own words, so the model has a voice to match.
+      /* The business's own words, so the model has a voice to match.
+
+         For sms this used to be `STATE.variants.welcome.map(v => v.text)`:
+         raw template source, so the model was shown "Hey {name}, ..." with
+         the placeholders still in it, and starter copy ranked equally with
+         anything the person had written themselves. voiceExamples renders
+         them against this contact and puts their own wording first. */
       var examples = chan === 'sms'
-        ? (STATE.variants.welcome || []).map(function(v){ return v.text; })
+        ? voiceExamples(STATE, 'welcome', ndc, STATE.senderName).examples
+            .map(function(e){ return e.text; })
         : emailLibrary(STATE).map(function(d){ return d.body; });
 
       NOTES_PANEL.busy = true;

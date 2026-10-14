@@ -6591,6 +6591,151 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- whose voice a draft imitates ---');
+
+{
+  const mkState = (opts) => {
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    st.clients = {};
+    st.clients.c1 = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
+      status:'Booked', callDateTime: new Date(Date.now()+2*86400000).toISOString(),
+      messageLog: (opts && opts.typed) || []
+    });
+    if (opts && opts.own) {
+      st.variants.welcome = st.variants.welcome.concat(
+        opts.own.map((t,i) => ({id:'welcome_custom_'+i, text:t, builtin:false})));
+    }
+    if (opts && opts.otherStage) {
+      st.variants.monday = st.variants.monday.concat(
+        [{id:'monday_custom_0', text:opts.otherStage, builtin:false}]);
+    }
+    return st;
+  };
+
+  test('a new account has no voice of its own and says so', () => {
+    /* own:false is what stops the prompt claiming the stock library is the
+       sender's personal writing. Telling a model to imitate "their own
+       wording" when every example is a starter template is simply false, and
+       it would harden the generic voice instead of escaping it. */
+    const v = GB.voiceExamples(mkState({}), 'welcome', mkState({}).clients.c1, 'Johnny');
+    assert.strictEqual(v.own, false);
+    assert.ok(v.examples.length > 0, 'a new account got no examples at all');
+    assert.ok(v.examples.every(e => e.mine === false));
+  });
+
+  test('wording they wrote themselves comes first and is marked', () => {
+    const st = mkState({own: ['Yo {name}, we are on for {date}. Shout if you need anything.']});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.own, true);
+    assert.strictEqual(v.examples[0].mine, true, 'their own wording was not first');
+    assert.ok(/^Yo Sarah/.test(v.examples[0].text), v.examples[0].text);
+  });
+
+  test('a hand-typed send counts as their voice', () => {
+    /* The truest record of how somebody writes: nothing was suggested to
+       them, they just typed it. Logged against 'custom' by markSent. */
+    const st = mkState({typed: [
+      {id:'m1', stage:'welcome', variantId:'custom', channel:'sms',
+       text:'Sarah - all set for Tuesday. Bring questions.',
+       sentAt:new Date(Date.now()-3600000).toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.own, true);
+    assert.ok(v.examples.some(e => e.mine && /Bring questions/.test(e.text)),
+      'the hand-typed send was not offered as their voice');
+  });
+
+  test('the newest hand-typed send outranks older ones', () => {
+    const st = mkState({typed: [
+      {id:'old', stage:'welcome', variantId:'custom', channel:'sms', text:'Older wording here.',
+       sentAt:new Date(Date.now()-90*86400000).toISOString(), responded:false, reviewed:false},
+      {id:'new', stage:'welcome', variantId:'custom', channel:'sms', text:'Newer wording here.',
+       sentAt:new Date(Date.now()-3600000).toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    const mine = v.examples.filter(e => e.mine).map(e => e.text);
+    assert.ok(mine.indexOf('Newer wording here.') < mine.indexOf('Older wording here.'),
+      'an old message outranked a recent one: ' + JSON.stringify(mine));
+  });
+
+  test('a template send is not mistaken for their own writing', () => {
+    // variantId is a real template, so this is the stock voice being sent,
+    // not the person writing. Counting it would launder stock copy into
+    // "their own wording".
+    const st = mkState({typed: [
+      {id:'m1', stage:'welcome', variantId:'w1-v2', channel:'sms', text:'A stock template body.',
+       sentAt:new Date().toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.own, false);
+    assert.ok(!v.examples.some(e => /stock template body/i.test(e.text)));
+  });
+
+  test('starter templates still fill the tail, so the model knows the job', () => {
+    /* One custom line is not enough for a model to infer a whole business
+       from, and the starters carry what this touch is FOR even when the voice
+       comes from elsewhere. */
+    const st = mkState({own: ['Short one.']});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.ok(v.examples.some(e => !e.mine), 'the starters were dropped entirely');
+  });
+
+  test('their voice from another stage beats a starter from this one', () => {
+    const st = mkState({otherStage: 'Quick one {name}, still good for {date}?'});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.own, true);
+    assert.strictEqual(v.examples[0].mine, true);
+  });
+
+  test('the carrier opt-out line never becomes part of the voice', () => {
+    /* It is appended by the sender, not written by a person. An example
+       carrying it teaches the model to write compliance boilerplate into the
+       body of every draft. */
+    const st = mkState({typed: [
+      {id:'m1', stage:'welcome', variantId:'custom', channel:'sms',
+       text:'Hey Sarah, all set.' + GB.SMS_OPT_OUT_NOTICE,
+       sentAt:new Date().toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.ok(!v.examples.some(e => /reply stop/i.test(e.text)),
+      'an example still carried the opt-out line');
+  });
+
+  test('duplicates and empties do not eat the example budget', () => {
+    const st = mkState({typed: [
+      {id:'a', stage:'welcome', variantId:'custom', channel:'sms', text:'Same thing.',
+       sentAt:new Date().toISOString(), responded:false, reviewed:false},
+      {id:'b', stage:'welcome', variantId:'custom', channel:'sms', text:'same thing.',
+       sentAt:new Date().toISOString(), responded:false, reviewed:false},
+      {id:'c', stage:'welcome', variantId:'custom', channel:'sms', text:'   ',
+       sentAt:new Date().toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.examples.filter(e => /same thing/i.test(e.text)).length, 1);
+    assert.ok(!v.examples.some(e => !e.text.trim()));
+  });
+
+  test('an email they typed is not a texting voice example', () => {
+    const st = mkState({typed: [
+      {id:'m1', stage:'welcome', variantId:'custom', channel:'email',
+       text:'Dear Sarah, further to our conversation, please find attached.',
+       sentAt:new Date().toISOString(), responded:false, reviewed:false}
+    ]});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.own, false, 'an email was treated as their texting voice');
+  });
+
+  test('the example list stays within budget', () => {
+    const many = [];
+    for (let i = 0; i < 20; i++) many.push('Custom wording number ' + i + ' here.');
+    const st = mkState({own: many});
+    const v = GB.voiceExamples(st, 'welcome', st.clients.c1, 'Johnny');
+    assert.strictEqual(v.examples.length, GB.VOICE_EXAMPLE_MAX);
+  });
+}
+
 console.log('\n--- carrier opt-out language ---');
 
 {

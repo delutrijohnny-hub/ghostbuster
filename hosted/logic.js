@@ -3157,6 +3157,91 @@ function stripOptOutNotice(text){
     ? t.slice(0, -SMS_OPT_OUT_NOTICE.length) : t;
 }
 
+/* The examples a draft should imitate, in the order they deserve weight.
+
+   The prompt used to feed on eligibleVariants, which mixes a person's own
+   wording in with the starter templates and gives them equal billing. So
+   somebody who had written their own copy still got drafts that sounded like
+   the stock library -- the one voice in the pile that is definitely not
+   theirs outnumbered the one that is.
+
+   Precedence, best first:
+     1. variants they wrote themselves for THIS stage -- their voice, on the
+        exact job the draft is for
+     2. texts they typed by hand instead of sending the template. Logged
+        against 'custom', these are the truest record of how they actually
+        write, because nothing was suggested to them
+     3. their own variants from other stages -- still their voice
+     4. the starter templates for this stage -- generic, but they carry what
+        this touch is FOR, which a draft needs even when the voice comes
+        from elsewhere
+
+   Starters are always allowed to fill the tail: with one custom variant and
+   nothing else, a model has one sentence to infer a whole business from.
+
+   `own` says whether anything here is actually theirs, which is what lets the
+   prompt tell the model to follow those above everything else. Saying that
+   unconditionally would be a lie on a new account, where every example is
+   stock copy. */
+var VOICE_EXAMPLE_MAX = 6;
+
+function voiceExamples(state, stage, client, sender){
+  sender = sender || (state && state.senderName) || 'the sender';
+  var out = [], seen = {};
+  function add(text, mine){
+    var t = stripOptOutNotice(String(text == null ? '' : text)).trim();
+    /* The carrier opt-out line is stripped: it is appended by the sender, not
+       written by a person, and an example carrying it teaches the model to
+       write compliance boilerplate into the body of every draft. */
+    if(!t) return;
+    var k = t.toLowerCase();
+    if(seen[k]) return;
+    seen[k] = 1;
+    out.push({text: t, mine: !!mine});
+  }
+
+  var all = (state && state.variants) || {};
+  var here = Array.isArray(all[stage]) ? all[stage] : [];
+
+  // 1. their own, this stage
+  here.forEach(function(v){
+    if(v.builtin || v.retired) return;
+    add(renderTemplate(v.text, client, sender), true);
+  });
+
+  // 2. what they typed by hand, newest first
+  var typed = [];
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    (c && c.messageLog || []).forEach(function(m){
+      if(m.variantId !== 'custom') return;
+      if((m.channel || 'sms') !== 'sms') return;
+      typed.push(m);
+    });
+  });
+  typed.sort(function(a, b){ return Date.parse(b.sentAt || 0) - Date.parse(a.sentAt || 0); });
+  typed.forEach(function(m){ add(m.text, true); });
+
+  // 3. their own, other stages
+  Object.keys(all).forEach(function(st){
+    if(st === stage) return;
+    (Array.isArray(all[st]) ? all[st] : []).forEach(function(v){
+      if(v.builtin || v.retired) return;
+      add(renderTemplate(v.text, client, sender), true);
+    });
+  });
+
+  var own = out.length > 0;
+
+  // 4. the starters for this stage, to carry what the touch is for
+  (here.length ? here : (buildDefaultVariants()[stage] || [])).forEach(function(v){
+    if(v.retired) return;
+    add(renderTemplate(v.text, client, sender), false);
+  });
+
+  return {examples: out.slice(0, VOICE_EXAMPLE_MAX), own: own};
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -6843,6 +6928,8 @@ var __LOGIC_EXPORTS__ = {
   matchInboundReply: matchInboundReply,
   smsKeyword: smsKeyword,
   smsSendMode: smsSendMode,
+  voiceExamples: voiceExamples,
+  VOICE_EXAMPLE_MAX: VOICE_EXAMPLE_MAX,
   needsOptOutNotice: needsOptOutNotice,
   withOptOutNotice: withOptOutNotice,
   stripOptOutNotice: stripOptOutNotice,
