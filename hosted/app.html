@@ -1177,6 +1177,16 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .outcome-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
 .msg-log-item{border-bottom:1px solid var(--border);padding:8px 0;font-size:12.5px;}
 .msg-log-item .meta{color:var(--ink-faint);font-size:11px;}
+/* Both sides of a thread, told apart at a glance. Theirs is indented and
+   tinted so the shape of the conversation reads without anyone parsing the
+   meta line above each message. */
+.msg-log-item.msg-in{margin-left:22px;border-left:2px solid var(--accent,#e2566f);padding-left:10px;background:rgba(226,86,111,0.06);}
+.msg-log-item.msg-in .meta{color:var(--accent,#e2566f);}
+.unplaced{border:1px solid var(--accent,#e2566f);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:12.5px;}
+.unplaced h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
+.unplaced .u-row{padding:6px 0;border-top:1px solid var(--border);}
+.unplaced .u-row:first-of-type{border-top:0;}
+.unplaced .u-meta{color:var(--ink-faint);font-size:11px;}
 .preview-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px;}
 .preview-table th,.preview-table td{border:1px solid var(--border);padding:6px 8px;text-align:left;}
 .flag-dup{color:var(--amber);font-weight:700;}
@@ -1356,6 +1366,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
 
   <div class="tab-panel active" id="tab-calls">
+    <div id="unplaced-replies"></div>
     <div id="on-deck"></div>
     <div id="unlogged-calls"></div>
     <!-- The texts due today come first. The ranked list below is for deciding
@@ -1519,9 +1530,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261014-71be14fe"></script>
-<script src="data.js?v=20261014-71be14fe"></script>
-<script src="app.js?v=20261014-71be14fe"></script>
-<script src="auth.js?v=20261014-71be14fe"></script>
+<script src="logic.js?v=20261014-eda61339"></script>
+<script src="data.js?v=20261014-eda61339"></script>
+<script src="app.js?v=20261014-eda61339"></script>
+<script src="auth.js?v=20261014-eda61339"></script>
 </body>
 </html>

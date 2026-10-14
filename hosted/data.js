@@ -665,6 +665,10 @@ async function loadState(){
       // below, so a browser save cannot carry a stale 'ok' over the top of
       // an opt-out the webhook recorded while this tab was open.
       smsStatus: row.sms_status || 'ok',
+      // Filled below from sms_events. Declared here because loadState builds
+      // these rows by hand rather than through sanitizeClient, so a default
+      // on the sanitizer does not reach them.
+      replies: [],
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
@@ -677,7 +681,12 @@ async function loadState(){
           id: m.id, channel: m.channel || 'sms',
           stage: m.stage, variantId: m.variant_key, text: m.text,
           sentAt: m.sent_at, responded: !!m.responded, respondedAt: m.responded_at,
-          reviewed: !!m.reviewed
+          reviewed: !!m.reviewed,
+          /* Written by the provider webhooks, never by the browser -- which is
+             why rowMessage leaves it out. It was stored from the day the email
+             channel shipped and read by nothing, so "sent but never arrived"
+             was recorded and then invisible. */
+          deliveryStatus: m.delivery_status || null
         };
       }),
       notes: row.notes, recap: row.recap,
@@ -898,6 +907,51 @@ async function loadState(){
     phoneNumber: numRow.phone_number,
     label: numRow.label || ''
   } : null;
+
+  /* Inbound texts, so a conversation can be read as a conversation.
+
+     sms_events is written only by sms-webhook (service_role) and its RLS
+     policy shows a row to the organisation it was matched to. Rows that
+     matched nobody carry a null org_id and are invisible here, which is
+     correct -- an unknown number is not known to belong to anyone.
+
+     Rows with an org but no contact are the ones worth seeing: a reply that
+     arrived and could not be placed. They go to state.unplacedReplies rather
+     than being dropped, because a conversation view that silently omits a
+     real message looks complete while somebody waits for an answer nobody
+     saw.
+
+     Capped and newest-first: this is a reading surface, not an archive, and
+     an unbounded fetch would grow without limit on the busiest account.
+     Degrades to empty rather than failing the load -- no replies is the
+     normal state until a number is registered. */
+  var repliesRes = await sb.from('sms_events')
+    .select('id, body, from_phone, client_id, match_reason, created_at')
+    .eq('kind', 'sms.inbound')
+    .order('created_at', {ascending: false})
+    .limit(500);
+  state.unplacedReplies = [];
+  ((repliesRes && repliesRes.data) || []).forEach(function(row){
+    if(!row || !row.body) return;
+    var item = {id: row.id ? String(row.id) : null, text: row.body, at: row.created_at};
+    if(row.client_id && state.clients[row.client_id]){
+      state.clients[row.client_id].replies.push(item);
+    } else if(!row.client_id){
+      /* Keyword replies (STOP, START) are handled by the webhook and carry a
+         match_reason saying so; they are not an unanswered question waiting
+         for somebody. Everything else here is. */
+      if(row.match_reason === 'opted out' || row.match_reason === 'opted back in') return;
+      state.unplacedReplies.push({
+        id: item.id, text: item.text, at: item.at,
+        fromPhone: row.from_phone || '', reason: row.match_reason || 'could not be matched'
+      });
+    }
+  });
+  Object.keys(state.clients).forEach(function(cid){
+    state.clients[cid].replies.sort(function(a, b){
+      return Date.parse(a.at || 0) - Date.parse(b.at || 0);
+    });
+  });
 
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has

@@ -978,6 +978,7 @@ function renderAll(){
   renderProgressBar();
   renderStats();
   renderTodos();
+  renderUnplacedReplies();
   renderOnDeck();
   renderUnlogged();
   renderCallsBoard();
@@ -1527,6 +1528,35 @@ function buildAllClearPanel(subtitle){
 // number, a nudge text written in the moment, and the outcome buttons — the
 // half hour either side of a call is where show-up rate is actually won, and
 // it's the one stretch the board itself can't help with.
+/* Texts that arrived and could not be put on anybody.
+
+   The one failure this whole channel exists to prevent is a reply nobody
+   sees. Matching is deliberately strict -- an unknown number, or two
+   contacts sharing one that were texted in the same send, both refuse rather
+   than guess -- so refusals are expected, and a refusal that stayed only in
+   the database would be the old invisible-reply problem wearing a new name.
+
+   Above On deck, because it is the only thing on this screen where somebody
+   is already waiting for an answer. Renders nothing at all when the list is
+   empty, which is the normal state. */
+function renderUnplacedReplies(){
+  var box = el('unplaced-replies'); if(!box) return;
+  var list = unplacedReplies(STATE);
+  if(!list.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="unplaced"><h4>' + list.length + ' repl' +
+    (list.length === 1 ? 'y' : 'ies') + ' we could not match to a ' +
+    escapeHtml(termLower('contact')) + '</h4>' +
+    list.slice(0, 10).map(function(r){
+      return '<div class="u-row"><div class="u-meta">' +
+        escapeHtml(r.fromPhone || 'unknown number') + ' \u00b7 ' +
+        new Date(r.at).toLocaleString() + ' \u00b7 ' + escapeHtml(r.reason) +
+        '</div>' + escapeHtml(r.text) + '</div>';
+    }).join('') +
+    (list.length > 10 ? '<div class="u-meta" style="padding-top:6px;">and ' +
+      (list.length - 10) + ' more</div>' : '') +
+    '</div>';
+}
+
 function renderOnDeck(){
   var box = el('on-deck'); if(!box) return;
   var now = new Date();
@@ -3412,10 +3442,31 @@ function openClientModal(clientId){
   // list with its own reply checkbox — the reply question is asked once, in
   // Ghost Recall Today. Text bodies stay here because this is the one place
   // someone goes to read what was actually said.
-  var msgLog = c.messageLog.map(function(m){
-    return '<div class="msg-log-item"><div class="meta">' + escapeHtml(m.stage) + ' · ' + escapeHtml(m.variantId || '') + ' · ' +
-      new Date(m.sentAt).toLocaleString() + ' · ' + escapeHtml(interactionLabel({state: messageState(m, new Date()), hoursAgo: null})) +
-      '</div>' + escapeHtml(m.text) + '</div>';
+  /* Both halves of the conversation, not just ours.
+
+     This list used to render c.messageLog alone -- everything we sent, and
+     nothing they said back. The comment above still describes it as the one
+     place to read what was actually said, which it could not do while the
+     replies were missing. conversationThread merges the two by time. */
+  var thread = conversationThread(c);
+  var msgLog = thread.map(function(it){
+    if(it.dir === 'in'){
+      return '<div class="msg-log-item msg-in"><div class="meta">' +
+        escapeHtml(firstName(c.name)) + ' replied · ' +
+        new Date(it.at).toLocaleString() +
+        '</div>' + escapeHtml(it.text) + '</div>';
+    }
+    var m = c.messageLog[it.idx] || {};
+    /* Delivery state only when the provider told us something. On the sms:
+       handoff there is no receipt at all, and printing "sent" there would
+       claim knowledge we do not have. */
+    var delivery = it.deliveryStatus
+      ? ' · ' + escapeHtml(it.deliveryStatus === 'bounced' ? 'not delivered' : it.deliveryStatus)
+      : '';
+    return '<div class="msg-log-item msg-out"><div class="meta">' + escapeHtml(it.stage) + ' · ' +
+      escapeHtml(it.variantId || '') + ' · ' + new Date(it.at).toLocaleString() + ' · ' +
+      escapeHtml(interactionLabel({state: messageState(m, new Date()), hoursAgo: null})) + delivery +
+      '</div>' + escapeHtml(it.text) + '</div>';
   }).join('') || '<div style="color:var(--ink-faint);font-size:12px;">No messages sent yet.</div>';
 
   var outcomeButtons = ['Booked','Confirmed','Showed','Rescheduled','No-show','Ghosted'].map(function(o){
@@ -3693,7 +3744,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-71be14fe';
+var BUILD_STAMP = '20261014-eda61339';
 
 /* Which settings section to scroll to once the modal is up.
 

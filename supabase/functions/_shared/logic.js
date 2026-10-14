@@ -1884,6 +1884,9 @@ function sanitizeClient(raw, fallbackId){
       // — nobody ever answered the question — so it stays unreviewed and gets
       // surfaced for review rather than silently counting as a rejection.
       reviewed: (typeof m.reviewed === 'boolean') ? m.reviewed : !!m.responded,
+      // Survives sanitising for the same reason channel does: it comes from
+      // the provider and nothing in the browser can reconstruct it.
+      deliveryStatus: (typeof m.deliveryStatus === 'string') ? m.deliveryStatus : null,
       /* Channel and provider id survive sanitising.
 
          They did not, and the consequences spread further than they look. An
@@ -1920,6 +1923,18 @@ function sanitizeClient(raw, fallbackId){
        see rowClient in data.js, which deliberately omits it -- because a save
        carrying a stale 'ok' would silently un-opt-out somebody. */
     smsStatus: typeof raw.smsStatus === 'string' ? raw.smsStatus : 'ok',
+    /* What they texted back. Written by sms-webhook into sms_events and read
+       in by data.js; never written from the browser, because the browser is
+       not the thing that received them. */
+    replies: Array.isArray(raw.replies) ? raw.replies.filter(function(r){
+      return r && typeof r === 'object' && typeof r.text === 'string';
+    }).map(function(r){
+      return {
+        id: (typeof r.id === 'string' && r.id) ? r.id : uuid(),
+        text: r.text,
+        at: (typeof r.at === 'string' && !isNaN(Date.parse(r.at))) ? r.at : nowISO()
+      };
+    }) : [],
     name: (typeof raw.name === 'string' && raw.name.trim()) ? raw.name.trim() : 'Unknown',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
     email: typeof raw.email === 'string' ? raw.email : '',
@@ -3240,6 +3255,64 @@ function voiceExamples(state, stage, client, sender){
   });
 
   return {examples: out.slice(0, VOICE_EXAMPLE_MAX), own: own};
+}
+
+/* One conversation, both halves, in the order it happened.
+
+   The contact screen has always had a message log, and its own comment calls
+   it "the one place someone goes to read what was actually said" -- but it
+   lists only what WE said. Every reply was invisible: before the webhook
+   existed there was nowhere for one to arrive, and after it there was still
+   nowhere for one to be shown. A follow-up tool that cannot show you the
+   answer is asking people to keep the conversation in their head, which is
+   the job it was bought to do for them.
+
+   Sorted by time, not by side, because a thread read in any other order
+   misrepresents who said what first -- and whether a message was answered
+   before the next one went out is exactly the thing somebody opens this to
+   find out.
+
+   Ties go to the outbound message. A reply recorded in the same second as a
+   send is the carrier timestamping our own message at the moment it was
+   accepted; showing the answer above the question would be nonsense. */
+function conversationThread(client){
+  if(!client) return [];
+  var items = [];
+  (client.messageLog || []).forEach(function(m, i){
+    var t = Date.parse(m.sentAt);
+    items.push({
+      dir: 'out', at: m.sentAt, t: isNaN(t) ? 0 : t, idx: i,
+      text: m.text || '', stage: m.stage || '', variantId: m.variantId || '',
+      channel: m.channel || 'sms', responded: !!m.responded, reviewed: !!m.reviewed,
+      deliveryStatus: m.deliveryStatus || null, id: m.id
+    });
+  });
+  (client.replies || []).forEach(function(r){
+    var t = Date.parse(r.at);
+    items.push({dir: 'in', at: r.at, t: isNaN(t) ? 0 : t, text: r.text || '', id: r.id});
+  });
+  items.sort(function(a, b){
+    if(a.t !== b.t) return a.t - b.t;
+    if(a.dir === b.dir) return 0;
+    return a.dir === 'out' ? -1 : 1;
+  });
+  return items;
+}
+
+/* Replies that arrived but could not be put on anybody.
+
+   sms-webhook records these with the organisation set and the contact left
+   null -- an unknown number, or two contacts sharing one that were texted
+   together. They are real messages from real people, and the failure mode
+   worth avoiding is that a conversation view which quietly omits them looks
+   complete while someone waits for an answer nobody saw.
+
+   Newest first: an unanswered text gets less useful the older it is. */
+function unplacedReplies(state){
+  var list = (state && state.unplacedReplies) || [];
+  return list.slice().sort(function(a, b){
+    return Date.parse(b.at || 0) - Date.parse(a.at || 0);
+  });
 }
 
 function smsKeyword(body){
@@ -6929,6 +7002,8 @@ var __LOGIC_EXPORTS__ = {
   smsKeyword: smsKeyword,
   smsSendMode: smsSendMode,
   voiceExamples: voiceExamples,
+  conversationThread: conversationThread,
+  unplacedReplies: unplacedReplies,
   VOICE_EXAMPLE_MAX: VOICE_EXAMPLE_MAX,
   needsOptOutNotice: needsOptOutNotice,
   withOptOutNotice: withOptOutNotice,

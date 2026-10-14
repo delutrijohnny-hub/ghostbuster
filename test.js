@@ -6591,6 +6591,125 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- reading a conversation as a conversation ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (log, replies) => GB.sanitizeClient({
+    id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+    messageLog: log || [], replies: replies || []
+  });
+  const out = (h, text) => ({id:'m'+h, stage:'welcome', variantId:'w1-v2', channel:'sms',
+    text:text, sentAt:ago(h), responded:false, reviewed:false});
+
+  test('both halves appear, in the order they happened', () => {
+    /* The contact screen has always listed only what WE said -- its own
+       comment calls it "the one place someone goes to read what was actually
+       said". Every reply was invisible. A follow-up tool that cannot show the
+       answer is asking people to keep the conversation in their head, which
+       is the job it was bought to do for them. */
+    const c = mk([out(50,'First touch.'), out(20,'Second touch.')],
+                 [{id:'r1', text:'Sounds good.', at:ago(40)}]);
+    const t = GB.conversationThread(c);
+    assert.deepStrictEqual(t.map(x => x.dir), ['out','in','out']);
+    assert.deepStrictEqual(t.map(x => x.text),
+      ['First touch.', 'Sounds good.', 'Second touch.']);
+  });
+
+  test('a reply stamped in the same second sits below the message it answers', () => {
+    /* The carrier timestamps our own message at the moment it is accepted, so
+       equal times happen. Showing the answer above the question would be
+       nonsense. */
+    const at = ago(5);
+    const c = mk([{id:'m1', stage:'welcome', variantId:'w1-v2', channel:'sms',
+                   text:'Question?', sentAt:at, responded:true, reviewed:true}],
+                 [{id:'r1', text:'Answer.', at:at}]);
+    const t = GB.conversationThread(c);
+    assert.deepStrictEqual(t.map(x => x.dir), ['out','in']);
+  });
+
+  test('a contact with no replies still reads as a thread', () => {
+    const t = GB.conversationThread(mk([out(3,'Only us.')], []));
+    assert.strictEqual(t.length, 1);
+    assert.strictEqual(t[0].dir, 'out');
+  });
+
+  test('an empty or missing contact does not throw', () => {
+    assert.deepStrictEqual(GB.conversationThread(null), []);
+    assert.deepStrictEqual(GB.conversationThread(mk([], [])), []);
+  });
+
+  test('an unreadable timestamp does not reorder the thread or crash', () => {
+    const c = mk([out(10,'Good one.')], [{id:'r1', text:'Broken stamp.', at:ago(2)}]);
+    c.replies.push({id:'r2', text:'No stamp.', at:'not-a-date'});
+    const t = GB.conversationThread(c);
+    assert.strictEqual(t.length, 3);
+    assert.ok(t.every(x => typeof x.text === 'string'));
+  });
+
+  test('the outbound side keeps what the card needs to explain itself', () => {
+    // stage, variant and delivery state are what make a thread auditable --
+    // "which copy was this, and did it arrive" is the question people open it
+    // for.
+    const c = mk([out(4,'Hello.')], []);
+    c.messageLog[0].deliveryStatus = 'delivered';
+    const t = GB.conversationThread(c);
+    assert.strictEqual(t[0].stage, 'welcome');
+    assert.strictEqual(t[0].variantId, 'w1-v2');
+    assert.strictEqual(t[0].deliveryStatus, 'delivered');
+  });
+
+  test('delivery state survives the load and the sanitizer', () => {
+    /* message_log.delivery_status has been written since the email channel
+       shipped and read by nothing, so "sent but never arrived" was recorded
+       and then invisible -- which is indistinguishable from being ignored,
+       the exact confusion this product exists to remove. */
+    const c = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+      messageLog: [{id:'m1', stage:'welcome', variantId:'w1-v2', channel:'sms', text:'Hi.',
+                    sentAt:ago(2), responded:false, reviewed:false, deliveryStatus:'bounced'}]
+    });
+    assert.strictEqual(c.messageLog[0].deliveryStatus, 'bounced');
+    assert.strictEqual(GB.conversationThread(c)[0].deliveryStatus, 'bounced');
+  });
+
+  test('replies that matched nobody are kept, newest first', () => {
+    /* They are real messages from real people. A conversation view that
+       silently drops them looks complete while somebody waits for an answer
+       nobody saw. */
+    const st = {unplacedReplies: [
+      {id:'1', text:'older', at:ago(50), fromPhone:'+12135550100', reason:'no contact with that number'},
+      {id:'2', text:'newer', at:ago(2), fromPhone:'+12135550101', reason:'no contact with that number'}
+    ]};
+    const u = GB.unplacedReplies(st);
+    assert.deepStrictEqual(u.map(x => x.text), ['newer', 'older']);
+  });
+
+  test('a state with no unplaced replies gives an empty list, not a crash', () => {
+    assert.deepStrictEqual(GB.unplacedReplies({}), []);
+    assert.deepStrictEqual(GB.unplacedReplies(null), []);
+  });
+
+  test('unplacedReplies does not mutate the state it was given', () => {
+    // It sorts, and sorting in place would reorder the loaded state as a side
+    // effect of rendering it.
+    const list = [{id:'1', text:'older', at:ago(50)}, {id:'2', text:'newer', at:ago(2)}];
+    const st = {unplacedReplies: list};
+    GB.unplacedReplies(st);
+    assert.strictEqual(st.unplacedReplies[0].text, 'older', 'the caller\u2019s array was reordered');
+  });
+
+  test('sanitizeClient keeps replies and drops malformed ones', () => {
+    const c = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+      messageLog: [],
+      replies: [{id:'r1', text:'kept', at:ago(1)}, {id:'r2'}, null, {text:123}, 'nope']
+    });
+    assert.strictEqual(c.replies.length, 1);
+    assert.strictEqual(c.replies[0].text, 'kept');
+  });
+}
+
 console.log('\n--- whose voice a draft imitates ---');
 
 {
