@@ -10229,6 +10229,53 @@ test('another rep\u2019s number is never used as a fallback', async () => {
   assert.strictEqual(state.smsNumber, null, 'borrowed another rep\u2019s number');
 });
 
+test('a sandbox number is loaded as a sandbox, not as a live line', async () => {
+  /* A test number that looks identical to a live one is a test number
+     somebody eventually texts a customer from -- or, worse, believes they
+     did. Every surface needs to be able to say which it is. */
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550001111', status:'registered', label:'test', user_id:'u1', provider:'sandbox'}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber.sandbox, true);
+  assert.strictEqual(state.smsNumber.provider, 'sandbox');
+});
+
+test('a real number is never flagged as a sandbox', async () => {
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550001111', status:'registered', label:'main', user_id:'u1', provider:'twilio'}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber.sandbox, false);
+});
+
+test('a number with no provider recorded is treated as real, not sandbox', async () => {
+  /* The safe direction for that ambiguity. Treating an unknown number as a
+     sandbox would let somebody believe nothing was sent when it was. */
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550001111', status:'registered', label:'', user_id:'u1'}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber.sandbox, false);
+  assert.strictEqual(state.smsNumber.provider, 'twilio');
+});
+
+test('the send button and toast say when nothing reached a phone', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.ok(/Send test text/.test(app),
+    'a sandbox send is labelled the same as a real one');
+  assert.ok(/btn-sandbox/.test(app),
+    'a sandbox send button looks identical to the real one, so it gets pressed by muscle memory');
+  assert.ok(/nothing was sent to a phone/.test(app),
+    'the confirmation after a sandbox send claims the contact was texted');
+});
+
 test('a missing org_phone_numbers table never takes the app down', async () => {
   /* The documented failure mode of this harness: deploy code before its
      migration and loadState rejects on a relation that does not exist, so

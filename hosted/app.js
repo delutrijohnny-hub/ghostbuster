@@ -1361,10 +1361,14 @@ function buildTouchCard(client, stage, now){
         title:'Texting is allowed 8am to 9pm in their local time \u2014 the TCPA window, which carriers enforce themselves. This opens again in ' + win.hoursUntilOpen + ' hour' + (win.hoursUntilOpen === 1 ? '' : 's') + '.'},
         ['too late there \u2014 ' + win.reason]));
     } else {
-      actions.appendChild(h('button',{class:'btn btn-sm btn-primary',
+      var sandbox = !!(STATE.smsNumber && STATE.smsNumber.sandbox);
+      actions.appendChild(h('button',{
+        class:'btn btn-sm ' + (sandbox ? 'btn-sandbox' : 'btn-primary'),
         'data-action':'send-text','data-cid':client.id,'data-stage':stage,
-        title:'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
-        ['Send text']));
+        title: sandbox
+          ? 'Test number. The message is recorded exactly as a real one, but nothing is carried to a phone and ' + firstName(client.name) + ' will not receive it.'
+          : 'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
+        [sandbox ? 'Send test text' : 'Send text']));
     }
   } else if(route.mode === 'handoff'){
     var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
@@ -3893,7 +3897,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-67d227ec';
+var BUILD_STAMP = '20261014-e18a751b';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6203,7 +6207,9 @@ function doSendText(cid, stage, target){
     }
     saveState(STATE);
     renderAll();
-    showToast('Texted ' + client.name + ' from ' + (data.from || 'your number') + '.', lastSnapshot);
+    showToast(data.real === false
+      ? 'Test message recorded for ' + client.name + ' \u2014 nothing was sent to a phone.'
+      : 'Texted ' + client.name + ' from ' + (data.from || 'your number') + '.', lastSnapshot);
   }).catch(function(e){
     restore();
     showToast('Could not send that text: ' + (e && e.message ? e.message : 'the request failed') + '.');

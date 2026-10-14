@@ -1198,6 +1198,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
    glance rather than buried in wording. */
 .dlv-ok{color:var(--good,#3fb27f);}
 .dlv-unsure{color:var(--ink-faint);font-style:italic;}
+/* A sandbox send button must not look like the real one. Same shape so the
+   layout is honest about what is being tested, different colour so nobody
+   reaches for it by muscle memory and believes a customer was texted. */
+.btn-sandbox{background:#6b5bd2;color:#fff;border-color:#6b5bd2;}
 .unplaced{border:1px solid var(--accent,#e2566f);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:12.5px;}
 .unplaced h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
 .unplaced .u-row{padding:6px 0;border-top:1px solid var(--border);}
@@ -1571,9 +1575,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261014-67d227ec"></script>
-<script src="data.js?v=20261014-67d227ec"></script>
-<script src="app.js?v=20261014-67d227ec"></script>
-<script src="auth.js?v=20261014-67d227ec"></script>
+<script src="logic.js?v=20261014-e18a751b"></script>
+<script src="data.js?v=20261014-e18a751b"></script>
+<script src="app.js?v=20261014-e18a751b"></script>
+<script src="auth.js?v=20261014-e18a751b"></script>
 </body>
 </html>

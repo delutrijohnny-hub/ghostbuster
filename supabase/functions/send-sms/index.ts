@@ -16,10 +16,13 @@
 // and a row in org_phone_numbers for the caller's org. Without either it
 // refuses clearly rather than failing somewhere deeper.
 //
-// The provider is isolated to sendViaTwilio() so swapping it later is one
-// function, not a rewrite.
+// The provider lives behind the interface in _shared/providers.ts, picked per
+// NUMBER rather than per deployment -- so one rep can run on a sandbox number
+// that carries nothing anywhere while the rest send for real, and the whole
+// loop can be exercised without a carrier account or a real customer's phone.
 
 import '../_shared/logic.js';
+import { providerFor } from '../_shared/providers.ts';
 // deno-lint-ignore no-explicit-any
 const GB = (globalThis as any).GBLogic;
 
@@ -40,40 +43,18 @@ function json(body: unknown, status = 200) {
   });
 }
 
-async function sendViaTwilio(args: { from: string; to: string; body: string; statusCallback: string }) {
-  const form = new URLSearchParams({
-    From: args.from, To: args.to, Body: args.body,
-    // Without this the delivery receipt never arrives and "sent" is the last
-    // thing we ever know about the message -- which is indistinguishable
-    // from a text the carrier silently dropped.
-    StatusCallback: args.statusCallback,
-  });
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT_SID}/Messages.json`, {
-      method: 'POST',
-      headers: {
-        Authorization: 'Basic ' + btoa(`${ACCOUNT_SID}:${AUTH_TOKEN}`),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: form.toString(),
-    });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { ok: false as const, error: body?.message || `provider returned ${res.status}` };
-  }
-  return { ok: true as const, id: body?.sid as string | undefined };
-}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
-  if (!ACCOUNT_SID || !AUTH_TOKEN) {
-    return json({
-      error: 'Texting is not configured yet. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN on this function.',
-      code: 'no_provider',
-    }, 503);
-  }
+  /* No global provider check here any more.
+
+     Which provider a message uses depends on the NUMBER it goes out from, so
+     a team can run one rep on a sandbox number while the rest send for real.
+     Refusing everything because Twilio is unconfigured would make the sandbox
+     impossible to use, which is the one thing it is for. The check happens
+     once the number is known, below. */
 
   // Who is calling. The anon key alone proves nothing, so resolve the bearer
   // token to a real user before sending anything on their behalf.
@@ -142,7 +123,7 @@ Deno.serve(async (req) => {
   const nRes = await db(
     `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered` +
     `&or=(user_id.eq.${userId},user_id.is.null)` +
-    `&select=phone_number,user_id&order=user_id.asc.nullslast&limit=1`);
+    `&select=phone_number,user_id,provider&order=user_id.asc.nullslast&limit=1`);
   const num = (await nRes.json())?.[0];
   if (!num?.phone_number) {
     return json({
@@ -197,7 +178,12 @@ Deno.serve(async (req) => {
     messageLog: (Array.isArray(prior) ? prior : []).map(() => ({channel: 'sms'})),
   });
 
-  const sent = await sendViaTwilio({
+  const picked = providerFor(num.provider, { accountSid: ACCOUNT_SID, authToken: AUTH_TOKEN });
+  if (!picked.provider) {
+    return json({ error: picked.error, code: 'no_provider' }, 503);
+  }
+
+  const sent = await picked.provider.send({
     from: num.phone_number,
     // E.164. phoneKey gives the last ten digits, which for a US number is
     // the whole thing after the country code.
@@ -243,7 +229,10 @@ Deno.serve(async (req) => {
       reviewed: false,
       channel: 'sms',
       provider_id: sent.id || null,
-      delivery_status: 'sent',
+      /* What the provider said, not what we hoped. A provider that cannot
+         confirm anything reports 'queued', and that is what gets stored --
+         the delivery states are only worth having if each one is earned. */
+      delivery_status: sent.status || 'queued',
     }]),
   });
 
@@ -251,6 +240,8 @@ Deno.serve(async (req) => {
   return json({
     ok: true, providerId: sent.id, logged: logRes.ok,
     messageId: loggedRow?.id || null, from: num.phone_number,
+    // So the UI can say plainly that nothing reached a real phone.
+    provider: picked.provider.name, real: picked.provider.real,
     /* What actually went out, so the browser logs the same string rather
        than recomputing the opt-out rule and risking a different answer. Its
        own upsert would otherwise overwrite this row's text with a version

@@ -909,7 +909,7 @@ async function loadState(){
      handful per org, and picking here keeps the preference rule in one
      readable place instead of split across a PostgREST query string. */
   var numRes = await sb.from('org_phone_numbers')
-    .select('phone_number, status, label, user_id')
+    .select('phone_number, status, label, user_id, provider')
     .eq('status', 'registered');
   var numRows = (numRes && numRes.data) || [];
   var numRow = numRows.filter(function(r){ return r.user_id === uid; })[0]
@@ -918,6 +918,12 @@ async function loadState(){
   state.smsNumber = numRow ? {
     phoneNumber: numRow.phone_number,
     label: numRow.label || '',
+    provider: numRow.provider || 'twilio',
+    /* A sandbox number carries nothing to a real phone. Flagged here so every
+       surface can say so: a test number that looks identical to a live one is
+       a test number somebody eventually texts a customer from -- or worse,
+       believes they did. */
+    sandbox: (numRow.provider || 'twilio') === 'sandbox',
     // Whether this is their own line or the team's shared one, so the UI can
     // say which number a text will come from rather than implying it is theirs.
     mine: numRow.user_id === uid
