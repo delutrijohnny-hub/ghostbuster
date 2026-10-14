@@ -197,7 +197,7 @@ function billingNotice(state){
    which is not something to hold hostage. */
 var READ_ONLY_BLOCKED_ACTIONS = [
   // Working the list
-  'open-sms', 'mark-sent', 'copy-text', 'copy-remaining', 'generate-ai',
+  'open-sms', 'send-text', 'mark-sent', 'copy-text', 'copy-remaining', 'generate-ai',
   'interaction-outcome', 'interaction-confirm', 'review-replied', 'review-silent',
   'toggle-replied', 'toggle-replied-quick', 'focus-send', 'focus-copy',
   'focus-skip', 'focus-snooze', 'focus-skip-forever', 'snooze-touch', 'skip-touch',
@@ -1915,6 +1915,11 @@ function sanitizeClient(raw, fallbackId){
        is a different claim from "we never recorded it". */
     eventTitle: typeof raw.eventTitle === 'string' && raw.eventTitle ? raw.eventTitle : null,
     emailStatus: typeof raw.emailStatus === 'string' ? raw.emailStatus : 'ok',
+    /* Set by sms-webhook when a contact replies STOP, or when a carrier
+       reports the number undeliverable. Never written back by the browser --
+       see rowClient in data.js, which deliberately omits it -- because a save
+       carrying a stale 'ok' would silently un-opt-out somebody. */
+    smsStatus: typeof raw.smsStatus === 'string' ? raw.smsStatus : 'ok',
     name: (typeof raw.name === 'string' && raw.name.trim()) ? raw.name.trim() : 'Unknown',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
     email: typeof raw.email === 'string' ? raw.email : '',
@@ -3013,6 +3018,171 @@ function snoozeTouch(state, clientId, stage, now){
 // answer — yes or no — is what puts the send into the bandit's denominator;
 // a message nobody has answered for stays out of the math entirely.
 // Re-answering later just moves the response count, never the send count.
+/* An inbound text, matched to the contact and the message it answers.
+
+   The whole reason for owning a number. A text handed to the salesperson's
+   phone has an invisible reply, which is why reply logging has sat at zero
+   for a month: the question is on screen, there are 43 of them waiting on one
+   account, and answering it is a chore competing with the actual job. Three
+   rounds of making that question more reachable did not move it. A reply that
+   arrives in the product is one nobody has to log.
+
+   Pure, and separate from any provider: the webhook's job is to say "this
+   number texted at this time", and this decides what that means. Which keeps
+   the part that matters testable without an account, a number or a carrier
+   registration.
+
+   Last ten digits, because a contact's number may be stored as 2135550100
+   while the carrier reports +12135550100. Comparing fewer than ten would
+   start matching strangers. */
+function phoneKey(phone){
+  var d = normalizedPhone(phone);
+  return d.length > 10 ? d.slice(-10) : d;
+}
+
+/* Carrier opt-out keywords.
+
+   Two things make this sharper than it looks.
+
+   First, it must match the WHOLE message, not a substring. "stop by at 3" and
+   "can you cancel the 2pm" are ordinary replies from interested people; an
+   includes() test would opt them out of a channel they never asked to leave,
+   and nothing would ever tell anyone it had happened.
+
+   Second, YES is on the carriers' opt-IN list, and here it is the single most
+   common genuine reply to a booking follow-up. Treating it as a keyword would
+   divert the best replies in the book away from attribution, so it is
+   deliberately absent below -- a 'yes' is a reply, nothing more.
+
+   Returning null for everything else is what keeps a reply a reply. */
+var SMS_STOP_WORDS = {
+  stop: 1, stopall: 1, unsubscribe: 1, cancel: 1, end: 1, quit: 1, revoke: 1, optout: 1
+};
+var SMS_START_WORDS = { start: 1, unstop: 1 };
+
+/* Which of the two sending routes is available for this contact.
+
+   There are two, and they are not interchangeable:
+
+     provider  the text leaves from the org's own registered number, through
+               send-sms. The reply comes back to sms-webhook, so it is
+               recorded without anyone having to remember.
+     handoff   the sms: link that hands the draft to the salesperson's own
+               Messages app. The reply lands on their handset, invisible, and
+               has to be logged by hand -- which is the status quo, and the
+               status quo is 0 reviews out of 67 sends.
+
+   The handoff is kept as the fallback rather than removed, because the
+   provider route cannot work until A2P 10DLC registration clears, which
+   takes weeks. Removing it would mean nobody could text at all in the
+   meantime. It is chosen automatically so that the day the number is
+   registered, every send switches over with nothing to turn on.
+
+   'blocked' covers an opt-out, and it blocks BOTH routes on purpose. The
+   STOP was said to the business, not to a phone number, so texting the person
+   from a rep's personal handset is still the business texting someone who
+   asked it to stop -- the same TCPA problem with the paper trail removed.
+   An undeliverable number is different: the carrier could not reach it, which
+   may be a wrong digit rather than a refusal, so the handoff stays open. */
+function smsSendMode(state, client){
+  if(!client) return {mode: 'none', reason: 'no contact'};
+  var hasNumber = !!(state && state.smsNumber && state.smsNumber.phoneNumber);
+  var status = client.smsStatus || 'ok';
+  if(status === 'opted_out'){
+    return {mode: 'blocked', reason: 'replied STOP'};
+  }
+  if(phoneKey(client.phone).length < 10){
+    return {mode: 'none', reason: 'no usable phone number'};
+  }
+  if(status !== 'ok'){
+    /* Undeliverable. The provider route would just fail again and spend a
+       message doing it, so it is not offered -- but a human with the same
+       number in front of them may know something the carrier did not. */
+    return {mode: 'handoff', reason: 'the carrier could not reach that number'};
+  }
+  if(!hasNumber){
+    return {mode: 'handoff', reason: 'no registered texting number yet'};
+  }
+  return {mode: 'provider', reason: null};
+}
+
+function smsKeyword(body){
+  /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
+     "'stop'" and "  stop  " all count, while leaving the interior alone --
+     collapsing that would turn "stop calling me" into "stopcallingme".
+     Stripping the ends also removes surrounding whitespace, so a .trim() and
+     an `if(!t) return null` both stood here until mutation showed neither
+     could be made to fail a test. An empty string is in neither list. */
+  var t = String(body == null ? '' : body)
+    .toLowerCase()
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/[^a-z0-9]+$/, '');
+  if(Object.prototype.hasOwnProperty.call(SMS_STOP_WORDS, t)) return 'stop';
+  if(Object.prototype.hasOwnProperty.call(SMS_START_WORDS, t)) return 'start';
+  return null;
+}
+
+function matchInboundReply(state, fromPhone, at){
+  at = at || new Date();
+  var key = phoneKey(fromPhone);
+  /* A number too short to be a phone number matches too much. Six digits
+     would match the tail of every number ending the same way, and a contact
+     whose phone field holds junk would then catch replies from short codes
+     and carrier alerts. */
+  if(key.length < 10) return {client: null, idx: -1, reason: 'unusable number'};
+
+  var hits = [];
+  Object.keys(state.clients || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    if(phoneKey(c.phone) !== key) return;
+    hits.push(c);
+  });
+  if(!hits.length) return {client: null, idx: -1, reason: 'no contact with that number'};
+
+  /* Sharing a number is the normal case here, not the exception: on the live
+     book 424 of 830 contacts share theirs with another row, because the same
+     booking imports once per rep whose calendar it is on. Only 4 of those 180
+     numbers carry two different names, so these are duplicates of one person,
+     not two people on an office line. Refusing to attribute would throw away
+     half of all replies.
+
+     What separates the duplicates is which row was actually texted. Scoped to
+     one organisation and restricted to rows with a send, 191 of 201 shared
+     numbers resolve to exactly one contact. So pick among the rows that were
+     texted, and prefer the one texted most recently -- a reply answers the
+     message the person just received. */
+  var best = null, bestIdx = -1, bestAt = -Infinity, tied = false;
+  hits.forEach(function(c){
+    /* The message it answers is the most recent one sent BEFORE the reply
+       arrived. Not simply the latest: a cadence touch that goes out while
+       somebody is typing would otherwise steal the credit from the message
+       that actually earned it. */
+    var idx = -1, when = -Infinity;
+    (c.messageLog || []).forEach(function(m, i){
+      var t = Date.parse(m.sentAt);
+      if(isNaN(t) || t > at.getTime()) return;
+      if(t > when){ when = t; idx = i; }
+    });
+    /* A row with no send keeps when at -Infinity and so loses both
+       comparisons below -- that is what excludes it, not a guard. An
+       explicit `if(idx === -1) return;` stood here and no mutation of it
+       could fail a test, because it was unreachable. */
+    if(when > bestAt){ bestAt = when; best = c; bestIdx = idx; tied = false; }
+    else if(when === bestAt && best && c.id !== best.id){ tied = true; }
+  });
+
+  if(!best) return {
+    client: hits.length === 1 ? hits[0] : null, idx: -1,
+    reason: 'nothing had been sent to them yet'
+  };
+  /* Two rows texted at the same instant is the one case with nothing to go
+     on. It is the bulk send that created both, so either answer is a guess,
+     and a reply on the wrong record is worse than one a human has to place. */
+  if(tied) return {client: null, idx: -1, reason: 'two contacts share that number and were texted together'};
+  return {client: best, idx: bestIdx, reason: null};
+}
+
 /* The shape of a sent message, with the per-person parts taken out.
 
    message_log stores what was actually sent -- rendered, with the name, the
@@ -6618,6 +6788,10 @@ var __LOGIC_EXPORTS__ = {
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
   pendingQuestion: pendingQuestion,
+  phoneKey: phoneKey,
+  matchInboundReply: matchInboundReply,
+  smsKeyword: smsKeyword,
+  smsSendMode: smsSendMode,
   messageSkeleton: messageSkeleton,
   wordingBreakdown: wordingBreakdown,
   WORDING_MIN_SENDS: WORDING_MIN_SENDS,

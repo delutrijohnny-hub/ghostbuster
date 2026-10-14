@@ -1,0 +1,198 @@
+// Sends one text on behalf of a signed-in user and logs it.
+//
+// This is the half of two-way SMS that makes the other half mean anything.
+// Until now every text was handed to the salesperson's own phone via an
+// sms: link, so the reply landed on that phone, where GhostBuster could not
+// see it and a human had to remember to record it. They do not: 0 of the 67
+// sends since the review path was repaired have been reviewed, while 43
+// review questions sit unanswered on the owner's own account. Pointing
+// sms-webhook at a number changes nothing while the texts still go out from
+// a rep's handset -- the contact replies to the handset. The text has to
+// leave from the org's own number for the reply to come back somewhere the
+// system can see it.
+//
+// Requires, as function secrets:
+//   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+// and a row in org_phone_numbers for the caller's org. Without either it
+// refuses clearly rather than failing somewhere deeper.
+//
+// The provider is isolated to sendViaTwilio() so swapping it later is one
+// function, not a rewrite.
+
+import '../_shared/logic.js';
+// deno-lint-ignore no-explicit-any
+const GB = (globalThis as any).GBLogic;
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID');
+const AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN');
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+async function sendViaTwilio(args: { from: string; to: string; body: string; statusCallback: string }) {
+  const form = new URLSearchParams({
+    From: args.from, To: args.to, Body: args.body,
+    // Without this the delivery receipt never arrives and "sent" is the last
+    // thing we ever know about the message -- which is indistinguishable
+    // from a text the carrier silently dropped.
+    StatusCallback: args.statusCallback,
+  });
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT_SID}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Basic ' + btoa(`${ACCOUNT_SID}:${AUTH_TOKEN}`),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+    });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false as const, error: body?.message || `provider returned ${res.status}` };
+  }
+  return { ok: true as const, id: body?.sid as string | undefined };
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
+  if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+
+  if (!ACCOUNT_SID || !AUTH_TOKEN) {
+    return json({
+      error: 'Texting is not configured yet. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN on this function.',
+      code: 'no_provider',
+    }, 503);
+  }
+
+  // Who is calling. The anon key alone proves nothing, so resolve the bearer
+  // token to a real user before sending anything on their behalf.
+  const auth = req.headers.get('Authorization') || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  if (!token) return json({ error: 'Not signed in' }, 401);
+  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: SERVICE_KEY },
+  });
+  if (!userRes.ok) return json({ error: 'Not signed in' }, 401);
+  const user = await userRes.json();
+  const userId = user?.id;
+  if (!userId) return json({ error: 'Not signed in' }, 401);
+
+  let payload: { clientId?: string; text?: string; stage?: string; variantId?: string };
+  try { payload = await req.json(); } catch { return json({ error: 'Bad JSON' }, 400); }
+  const { clientId, text, stage, variantId } = payload;
+  if (!clientId || !text) return json({ error: 'clientId and text are required' }, 400);
+
+  const db = (path: string, init?: RequestInit) =>
+    fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      ...init,
+      headers: {
+        apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+        'Content-Type': 'application/json', ...(init?.headers || {}),
+      },
+    });
+
+  /* Ownership check. Service role bypasses RLS, so the caller's right to this
+     contact has to be proven explicitly rather than assumed. */
+  const cRes = await db(
+    `clients?id=eq.${encodeURIComponent(clientId)}&select=id,name,phone,user_id,org_id,sms_status`);
+  const client = (await cRes.json())?.[0];
+  if (!client || client.user_id !== userId) return json({ error: 'Not your contact' }, 403);
+  if (!client.phone) return json({ error: 'That contact has no phone number.', code: 'no_phone' }, 400);
+
+  /* An opt-out is a hard stop, and the only one here with a regulator behind
+     it. Texting someone who replied STOP violates the TCPA, and carriers
+     enforce it themselves by filtering or killing the 10DLC campaign -- which
+     would take texting down for every other contact at the same time. */
+  if ((client.sms_status || 'ok') !== 'ok') {
+    return json({
+      error: client.sms_status === 'opted_out'
+        ? 'That contact replied STOP and cannot be texted.'
+        : 'That number could not be reached by the carrier.',
+      code: 'bad_number',
+    }, 400);
+  }
+
+  /* The sending number belongs to the ORG, not the user, and it is the same
+     row sms-webhook uses to decide which org an inbound text belongs to.
+     Reading it from the contact's org rather than from a setting is what
+     keeps the two directions describing one number: a text that goes out
+     from a number the webhook does not know about would get a reply that
+     lands nowhere, which is the current situation with extra steps. */
+  const nRes = await db(
+    `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered&select=phone_number&limit=1`);
+  const num = (await nRes.json())?.[0];
+  if (!num?.phone_number) {
+    return json({
+      error: 'This team has no registered texting number yet. A2P 10DLC registration has to clear first.',
+      code: 'no_number',
+    }, 503);
+  }
+
+  const toDigits = GB.phoneKey(client.phone);
+  if (toDigits.length < 10) {
+    return json({ error: 'That phone number is not a full number.', code: 'bad_number' }, 400);
+  }
+
+  const sent = await sendViaTwilio({
+    from: num.phone_number,
+    // E.164. phoneKey gives the last ten digits, which for a US number is
+    // the whole thing after the country code.
+    to: `+1${toDigits}`,
+    body: text,
+    statusCallback: `${SUPABASE_URL}/functions/v1/sms-webhook`,
+  });
+  if (!sent.ok) return json({ error: sent.error, code: 'provider_error' }, 502);
+
+  /* Logged exactly the way a hand-sent text is, so every count, rate and
+     bandit stat treats them identically. provider_id is what ties the
+     delivery receipt and any reply back to THIS message -- without it the
+     webhook has a reply and no idea what it answers. Logging failure must
+     not read as a send failure: the text has already gone. */
+  const logRes = await db('message_log', {
+    method: 'POST',
+    /* The inserted row comes back so the browser can adopt its id.
+
+       This is the difference between one row and two. send-sms has to do the
+       logging, because provider_id is minted here and it is the only thing
+       tying a later receipt or reply back to this message. But the browser
+       also logs the send into its own state and upserts it on the next save.
+       Two ids for one text is two rows, and 297 duplicate message_log rows
+       had already inflated every reply figure in this product once.
+
+       So the id is returned, the browser overwrites its local one with it,
+       and its upsert merges onto this row instead of creating a sibling.
+       rowMessage omits provider_id and delivery_status, and a PostgREST
+       upsert only writes the columns it is given, so that merge leaves both
+       of them intact. */
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify([{
+      client_id: clientId,
+      stage: stage || 'custom',
+      variant_key: variantId || 'custom',
+      text,
+      sent_at: new Date().toISOString(),
+      responded: false,
+      reviewed: false,
+      channel: 'sms',
+      provider_id: sent.id || null,
+      delivery_status: 'sent',
+    }]),
+  });
+
+  const loggedRow = logRes.ok ? (await logRes.json().catch(() => []))?.[0] : null;
+  return json({
+    ok: true, providerId: sent.id, logged: logRes.ok,
+    messageId: loggedRow?.id || null, from: num.phone_number,
+  });
+});

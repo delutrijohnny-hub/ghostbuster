@@ -1339,10 +1339,39 @@ function buildTouchCard(client, stage, now){
   var actions = document.createElement('div');
   actions.className = 'card-actions';
   var digits = String(client.phone||'').replace(/\D/g,'');
-  var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
-  var smsLink = h('a',{class:'btn btn-sm btn-primary', href:smsHref, 'data-action':'open-sms','data-cid':client.id,'data-stage':stage},['Open in Messages']);
-  if(!digits) smsLink.setAttribute('aria-disabled','true');
-  actions.appendChild(smsLink);
+  /* Two sending routes, chosen by smsSendMode rather than here.
+
+     'provider' sends from the team's own number through send-sms, and the
+     reply comes back to sms-webhook on its own. 'handoff' is the old sms:
+     link to the salesperson's Messages app, whose reply lands on a handset
+     nobody logs. The handoff stays until A2P 10DLC registration clears,
+     because until then the provider route cannot send at all -- and the
+     switchover then happens by itself, with nothing to turn on. */
+  var route = smsSendMode(STATE, client);
+  if(route.mode === 'provider'){
+    actions.appendChild(h('button',{class:'btn btn-sm btn-primary',
+      'data-action':'send-text','data-cid':client.id,'data-stage':stage,
+      title:'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
+      ['Send text']));
+  } else if(route.mode === 'handoff'){
+    var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
+    actions.appendChild(h('a',{class:'btn btn-sm btn-primary', href:smsHref,
+      'data-action':'open-sms','data-cid':client.id,'data-stage':stage,
+      title:'Opens your Messages app. ' + route.reason + ' \u2014 so their reply comes to your phone and has to be logged by hand.'},
+      ['Open in Messages']));
+  } else if(route.mode === 'blocked'){
+    /* No send button at all, and no sms: link either. The STOP was said to
+       the business, so texting from a personal handset is the same violation
+       with no record of it. */
+    actions.appendChild(h('span',{class:'edited-note',
+      title:'Replying STOP opts a contact out for good. Texting them anyway breaks the TCPA and gets the team\u2019s number filtered by the carriers.'},
+      ['opted out of texts']));
+  } else {
+    var dead = h('a',{class:'btn btn-sm btn-primary', href:'#',
+      'data-action':'open-sms','data-cid':client.id,'data-stage':stage},['Open in Messages']);
+    dead.setAttribute('aria-disabled','true');
+    actions.appendChild(dead);
+  }
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
   /* Gmail rather than the in-app composer. It needs no provider account, it
      sends from the salesperson's own mailbox so it lands in their Sent folder,
@@ -3653,7 +3682,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261013-68ecd5ek';
+var BUILD_STAMP = '20261014-9451e5c4';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4919,6 +4948,9 @@ document.addEventListener('click', function(ev){
       renderAll();
       showToast('Pushed to tomorrow.');
       break;
+    case 'send-text':
+      doSendText(cid, stage, target);
+      break;
     case 'open-sms':
       /* Recorded before the handoff to Messages, not 700ms after it.
 
@@ -5049,6 +5081,9 @@ document.addEventListener('click', function(ev){
     case 'focus-send':
       // The anchor's own navigation opens Messages; this records the send.
       focusSend();
+      break;
+    case 'focus-send-provider':
+      focusSendProvider(target);
       break;
     case 'focus-copy': {
       var ft = el('focus-text');
@@ -5477,8 +5512,18 @@ document.addEventListener('keydown', function(ev){
     if(ev.key === 'Escape'){ ev.preventDefault(); exitFocusMode(); return; }
     if(ev.key === 'Enter' && !typing){
       ev.preventDefault();
-      var sendLink = document.querySelector('[data-action=focus-send]');
-      if(sendLink) sendLink.click(); else focusSend();
+      /* Whichever send action this contact actually has -- and if it has
+         none, Enter does nothing.
+
+         It used to read `if(sendLink) sendLink.click(); else focusSend()`,
+         so a contact with no send button still got marked as sent by the
+         Enter key. That was harmless while the only buttonless case was a
+         missing phone number. It is not harmless now: an opted-out contact
+         has no send button, and the fallback would have logged a text to
+         someone who replied STOP without anything appearing on screen. */
+      var sendEl = document.querySelector('[data-action=focus-send], [data-action=focus-send-provider]')
+        || document.querySelector('[data-action=focus-copy]');
+      if(sendEl) sendEl.click();
       return;
     }
     if((ev.key === 's' || ev.key === 'S') && !typing){ ev.preventDefault(); focusAdvance(); return; }
@@ -5713,6 +5758,85 @@ function markSentOnChannel(cid, stage, text, channel){
   saveState(STATE);
 }
 
+/* Send a text from the team's own number, through send-sms.
+
+   The opposite of the sms: handoff in one way that matters: this one knows
+   whether it worked. The handoff is optimistic -- Ghost Recall cannot see
+   whether Send was ever pressed in Messages, so it logs first and offers an
+   undo. Here the provider either accepted the message or it did not, so
+   nothing is logged until it did. An optimistic log on this path would
+   invent sends that never left.
+
+   The server does the logging, because provider_id is minted there and it is
+   the only thing tying a reply or a receipt back to this message. The local
+   log then adopts the server's row id, so the next save upserts onto that row
+   rather than creating a second one -- 297 duplicate rows have already
+   inflated every reply figure in this product once. */
+function doSendText(cid, stage, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  // Same double-send guard as the handoff path, and for the same reason: a
+  // second click while the first request is in flight would send twice.
+  if(hasSentStage(client, stage)) return;
+
+  var text = getCardText(STATE, client, stage);
+  var label = target ? target.textContent : '';
+  if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
+
+  var restore = function(){
+    if(target){ target.disabled = false; target.textContent = label || 'Send text'; }
+  };
+
+  window.GB_SUPABASE.functions.invoke('send-sms', {
+    body: {clientId: cid, text: text, stage: stage, variantId: null}
+  }).then(function(res){
+    /* invoke() resolves with {data, error}. A non-2xx is reported in error,
+       but the function's own body -- which carries the reason a send was
+       refused, like an opt-out or an unregistered number -- comes back in
+       res.data for a 2xx only. So both have to be read, or every failure
+       reads as a generic one. */
+    var err = res && res.error;
+    var data = res && res.data;
+    if(err || !data || !data.ok){
+      restore();
+      showToast(smsSendError(data, err));
+      return;
+    }
+    lastSnapshot = snapshot();
+    markSent(STATE, cid, stage, text);
+    var logged = client.messageLog[client.messageLog.length - 1];
+    if(logged){
+      logged.channel = 'sms';
+      // Adopting the server's id is what keeps this one row. See above.
+      if(data.messageId) logged.id = data.messageId;
+    }
+    saveState(STATE);
+    renderAll();
+    showToast('Texted ' + client.name + ' from ' + (data.from || 'your number') + '.', lastSnapshot);
+  }).catch(function(e){
+    restore();
+    showToast('Could not send that text: ' + (e && e.message ? e.message : 'the request failed') + '.');
+  });
+}
+
+/* What to tell someone when a text does not go out.
+
+   The function already answers why -- an opt-out, no registered number, a
+   provider rejection -- and that reason is the only useful part. A generic
+   "could not send" would send them looking in the wrong place, which on this
+   path means looking at the contact when the answer is that 10DLC
+   registration has not cleared. */
+function smsSendError(data, err){
+  var code = data && data.code;
+  if(code === 'no_number') return 'No registered texting number yet \u2014 A2P 10DLC registration has to clear first.';
+  if(code === 'bad_number') return (data && data.error) || 'That number cannot be texted.';
+  if(code === 'no_provider') return 'Texting is not switched on for this account yet.';
+  if(code === 'no_phone') return 'That contact has no phone number.';
+  if(data && data.error) return data.error;
+  if(err && err.message) return 'Could not send that text: ' + err.message + '.';
+  return 'Could not send that text.';
+}
+
 function doMarkSent(cid, stage, deferRender){
   var client = STATE.clients[cid];
   // A contact can vanish between the click and the handler -- deleted in
@@ -5850,6 +5974,7 @@ function renderFocus(){
     : null;
   var tz = tzChipInfo(c, new Date());
   var prog = cadenceProgress(c, new Date());
+  var focusRoute = smsSendMode(STATE, c);
 
   openModalHtml(
     '<div class="focus">' +
@@ -5868,15 +5993,75 @@ function renderFocus(){
       (tz.warn ? '<div class="focus-warn">⚠ It’s outside normal hours for ' + escapeHtml(c.name) + ' right now.</div>' : '') +
       '<textarea class="focus-text" id="focus-text" rows="6">' + escapeHtml(text) + '</textarea>' +
       '<div class="focus-acts">' +
-        (smsHref
+        (focusRoute.mode === 'provider'
+          ? '<button class="btn btn-primary btn-lg focus-send" data-action="focus-send-provider">Send &amp; next</button>'
+          : focusRoute.mode === 'handoff' && smsHref
           ? '<a class="btn btn-primary btn-lg focus-send" href="' + smsHref + '" data-action="focus-send">Send &amp; next</a>'
+          : focusRoute.mode === 'blocked'
+          /* No send action of any kind. Focus mode is a rapid loop -- the
+             whole point is that Enter advances without reading -- so an
+             opted-out contact appearing here with any send button is the one
+             place somebody would text them without noticing. */
+          ? '<span class="focus-warn">' + escapeHtml(c.name) + ' replied STOP and cannot be texted.</span>'
           : '<button class="btn btn-lg" data-action="focus-copy">Copy &amp; next</button>') +
         '<button class="btn" data-action="focus-skip">Not now</button>' +
         '<button class="btn btn-ghost" data-action="focus-snooze">Not today</button>' +
         '<button class="btn btn-ghost" data-action="focus-skip-forever">Never send this</button>' +
       '</div>' +
-      '<div class="focus-hint">Enter to send · S to skip · Esc to stop</div>' +
+      '<div class="focus-hint">' +
+        (focusRoute.mode === 'blocked' ? 'S to skip · Esc to stop' : 'Enter to send · S to skip · Esc to stop') +
+      '</div>' +
     '</div>', true);
+}
+
+/* The provider route inside focus mode.
+
+   One difference from focusSend, and it is the point of the whole channel:
+   this one waits. focusSend advances immediately because it cannot know
+   whether Messages ever sent anything, so it logs optimistically and relies
+   on the undo. Here the provider answers, so the queue must not move until it
+   has -- advancing first would leave a failed send behind a screen nobody is
+   looking at any more, which is the failure this product already has in the
+   form of 0 reviews out of 67 sends.
+
+   On a refusal it stays on this contact with the reason on screen, because
+   the reasons are all things the person can act on. */
+function focusSendProvider(target){
+  var cur = FOCUS && FOCUS.queue[FOCUS.i];
+  var c = cur && STATE.clients[cur.cid];
+  if(!c){ focusAdvance(); return; }
+
+  var edited = el('focus-text');
+  var text = (edited && edited.value) || getCardText(STATE, c, cur.stage);
+  if(edited && edited.value !== getCardText(STATE, c, cur.stage)){
+    editedTextCache[cur.cid + '|' + cur.stage] = edited.value;
+  }
+  if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
+
+  window.GB_SUPABASE.functions.invoke('send-sms', {
+    body: {clientId: cur.cid, text: text, stage: cur.stage, variantId: null}
+  }).then(function(res){
+    var err = res && res.error, data = res && res.data;
+    if(err || !data || !data.ok){
+      if(target){ target.disabled = false; target.textContent = 'Send & next'; }
+      showToast(smsSendError(data, err));
+      return;
+    }
+    lastSnapshot = snapshot();
+    markSent(STATE, cur.cid, cur.stage, text);
+    var logged = c.messageLog[c.messageLog.length - 1];
+    if(logged){
+      logged.channel = 'sms';
+      // The server's row id, so the next save merges rather than duplicating.
+      if(data.messageId) logged.id = data.messageId;
+    }
+    saveState(STATE);
+    FOCUS.sent++;
+    focusAdvance();
+  }).catch(function(e){
+    if(target){ target.disabled = false; target.textContent = 'Send & next'; }
+    showToast('Could not send that text: ' + (e && e.message ? e.message : 'the request failed') + '.');
+  });
 }
 
 function focusSend(){

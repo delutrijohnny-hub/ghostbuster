@@ -412,3 +412,31 @@ enabled = true
 # declarative_schema_path = "./database"
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
+
+# ---------------------------------------------------------------------------
+# Provider webhooks: JWT verification OFF, on purpose.
+# ---------------------------------------------------------------------------
+# A provider calling in has no Supabase JWT to send, so with verify_jwt on the
+# platform gateway answers 401 before the function runs. email-webhook was
+# deployed that way and stayed that way: every Resend delivery event and every
+# email reply was rejected at the gate, which is why email reply tracking
+# recorded nothing while looking correctly built. Confirmed by an
+# unauthenticated POST returning UNAUTHORIZED_NO_AUTH_HEADER.
+#
+# These entries exist so that a plain `supabase functions deploy`, without
+# --no-verify-jwt, cannot quietly put it back.
+#
+# Neither endpoint is open: each verifies its provider's own signature and
+# refuses outright when its signing secret is absent (503). That check is the
+# authentication; the JWT gate was only ever preventing it from running.
+[functions.email-webhook]
+verify_jwt = false
+
+[functions.sms-webhook]
+verify_jwt = false
+
+# send-sms keeps verify_jwt on: it is called by the signed-in browser, and it
+# resolves the bearer token to a real user before sending anything on their
+# behalf. Unlike the webhooks it has a JWT to verify.
+[functions.send-sms]
+verify_jwt = true

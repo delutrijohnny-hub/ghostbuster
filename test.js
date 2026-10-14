@@ -6591,6 +6591,269 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- which sending route a contact gets ---');
+
+{
+  const withNumber = {smsNumber: {phoneNumber: '+15550001111'}};
+  const noNumber = {};
+  const c = (o) => Object.assign({id: 'c1', phone: '2135550100', smsStatus: 'ok'}, o);
+
+  test('a registered number means the text goes out through the provider', () => {
+    assert.strictEqual(GB.smsSendMode(withNumber, c({})).mode, 'provider');
+  });
+
+  test('without a registered number it falls back to the Messages handoff', () => {
+    /* The fallback is the whole reason this function exists. A2P 10DLC
+       registration takes weeks, and until it clears the provider route
+       cannot send at all -- removing the handoff would mean nobody could
+       text anybody in the meantime. */
+    const m = GB.smsSendMode(noNumber, c({}));
+    assert.strictEqual(m.mode, 'handoff');
+    assert.ok(/registered/.test(m.reason), m.reason);
+  });
+
+  test('an opt-out blocks the handoff too, not just the provider', () => {
+    /* The STOP was said to the business, not to a phone number. Letting a rep
+       text them from their own handset is the same TCPA violation with the
+       paper trail removed -- and it is the route that leaves no record, so it
+       is the one that would never be noticed. */
+    for (const st of [withNumber, noNumber]) {
+      const m = GB.smsSendMode(st, c({smsStatus: 'opted_out'}));
+      assert.strictEqual(m.mode, 'blocked', 'an opted-out contact was offered ' + m.mode);
+      assert.ok(/STOP/.test(m.reason), m.reason);
+    }
+  });
+
+  test('an undeliverable number keeps the handoff but not the provider', () => {
+    /* Different from a refusal: the carrier could not reach it, which may be
+       a wrong digit. Sending again through the provider would fail again and
+       spend a message doing it, but a person looking at the same number may
+       know something the carrier did not. */
+    const m = GB.smsSendMode(withNumber, c({smsStatus: 'undelivered'}));
+    assert.strictEqual(m.mode, 'handoff');
+    assert.ok(/carrier/.test(m.reason), m.reason);
+  });
+
+  test('no usable phone number offers no route at all', () => {
+    for (const phone of ['', '555', 'n/a', null]) {
+      assert.strictEqual(GB.smsSendMode(withNumber, c({phone: phone})).mode, 'none',
+        JSON.stringify(phone) + ' was offered a route');
+    }
+    assert.strictEqual(GB.smsSendMode(withNumber, null).mode, 'none');
+  });
+
+  test('a number on the org but not yet registered is not a sending number', () => {
+    /* org_phone_numbers rows exist from the moment a number is provisioned,
+       while status stays 'pending' until 10DLC clears. Treating a pending row
+       as sendable would route every text into a carrier filter, which fails
+       silently -- the worst possible failure for this channel. data.js only
+       loads a registered row, so an absent smsNumber is what pending looks
+       like here. */
+    assert.strictEqual(GB.smsSendMode({smsNumber: null}, c({})).mode, 'handoff');
+    assert.strictEqual(GB.smsSendMode({smsNumber: {phoneNumber: ''}}, c({})).mode, 'handoff');
+  });
+}
+
+console.log('\n--- opt-out keywords ---');
+
+{
+  test('a bare STOP opts out, however it is punctuated', () => {
+    for (const b of ['STOP', 'stop', 'stop.', '  Stop  ', '"stop"', 'STOP!',
+                     'STOPALL', 'unsubscribe', 'CANCEL', 'quit', 'END',
+                     'revoke', 'optout']) {
+      assert.strictEqual(GB.smsKeyword(b), 'stop', JSON.stringify(b) + ' was not read as an opt-out');
+    }
+  });
+
+  test('a sentence containing stop is a reply, not an opt-out', () => {
+    /* The reason this matches the whole message and not a substring. Every
+       one of these comes from someone still talking to us, and an includes()
+       test would remove them from the channel permanently while telling
+       nobody it had happened. */
+    for (const b of ['stop by at 3', 'please stop emailing, text me instead',
+                     'can you cancel the 2pm', 'stop calling me',
+                     'Stopping by later', 'I need to cancel and rebook',
+                     'no stop worries']) {
+      assert.strictEqual(GB.smsKeyword(b), null, JSON.stringify(b) + ' was read as an opt-out');
+    }
+  });
+
+  test('yes is a reply, not an opt-in keyword', () => {
+    /* YES is on the carriers' opt-IN list and is also the most common real
+       answer to a booking follow-up. Treating it as a keyword would divert
+       the best replies in the book away from attribution -- the one thing
+       this whole channel exists to capture. */
+    for (const b of ['yes', 'YES', 'yes!', 'Yes please', 'yep', 'y']) {
+      assert.strictEqual(GB.smsKeyword(b), null, JSON.stringify(b) + ' was treated as a keyword');
+    }
+  });
+
+  test('START and UNSTOP opt back in', () => {
+    assert.strictEqual(GB.smsKeyword('start'), 'start');
+    assert.strictEqual(GB.smsKeyword('UNSTOP'), 'start');
+    assert.strictEqual(GB.smsKeyword('start the call at 4'), null);
+  });
+
+  test('an empty or missing body is not a keyword', () => {
+    for (const b of ['', '   ', '...', null, undefined]) {
+      assert.strictEqual(GB.smsKeyword(b), null, JSON.stringify(b) + ' was a keyword');
+    }
+  });
+}
+
+console.log('\n--- an inbound text finds its contact ---');
+
+{
+  const hrs = (n) => new Date(Date.now() - n * 3600000).toISOString();
+  const withClients = (defs) => {
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    defs.forEach((d, i) => {
+      st.clients[d.id || ('c' + i)] = GB.sanitizeClient({
+        id: d.id || ('c' + i), name: d.name || ('P' + i), phone: d.phone,
+        timezone: 'America/New_York', status: 'Booked', ignored: !!d.ignored,
+        messageLog: (d.sent || []).map((h, j) => ({
+          id: 'm' + i + j, stage: 'welcome', variantId: 'w1', text: 'x',
+          sentAt: hrs(h), responded: false, respondedAt: null, reviewed: false
+        }))
+      });
+    });
+    return st;
+  };
+
+  test('a reply is matched however the number is formatted', () => {
+    /* The contact's number is stored as a person typed it; the carrier
+       reports E.164. Comparing them raw would match nothing at all, which
+       would make the whole channel silently useless. */
+    const st = withClients([{id: 'c1', phone: '(213) 555-0100', sent: [26]}]);
+    for (const inbound of ['+12135550100', '12135550100', '2135550100', '213-555-0100']) {
+      const m = GB.matchInboundReply(st, inbound, new Date());
+      assert.ok(m.client, inbound + ' did not match: ' + m.reason);
+      assert.strictEqual(m.client.id, 'c1');
+      assert.strictEqual(m.idx, 0);
+    }
+  });
+
+  test('it credits the message that was actually sent before the reply', () => {
+    /* Not simply the latest. A cadence touch going out while somebody is
+       typing would otherwise steal the credit from the message that earned
+       the reply -- and that credit is the entire input to the learning. */
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: [50, 26, 0.2]}]);
+    // Reply arrived an hour ago: after the 26h send, before the 12-minute one.
+    const m = GB.matchInboundReply(st, '2135550100', new Date(Date.now() - 3600000));
+    assert.strictEqual(m.idx, 1, 'credited index ' + m.idx + ' instead of the 26h send');
+  });
+
+  test('an unknown number is left alone rather than guessed at', () => {
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: [26]}]);
+    const m = GB.matchInboundReply(st, '2125559999', new Date());
+    assert.strictEqual(m.client, null);
+    assert.ok(/no contact/.test(m.reason), m.reason);
+  });
+
+  test('a short or junk number matches nobody', () => {
+    /* Six digits would match the tail of every number ending the same way,
+       which on a book of 900 contacts is somebody else's customer. */
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: [26]}]);
+    for (const bad of ['550100', '', null, 'HELP', '+1']) {
+      const m = GB.matchInboundReply(st, bad, new Date());
+      assert.strictEqual(m.client, null, String(bad) + ' matched something');
+    }
+
+    /* And the case that makes the length guard load-bearing rather than
+       decorative: a contact whose stored phone is junk or a short code. Both
+       sides then normalise to the same short string and match, so a reply
+       from any short sender id -- "22395", a carrier alert -- would be
+       credited to that contact. Mutation showed the earlier cases above pass
+       with or without the guard. */
+    const junk = withClients([{id: 'j1', phone: '550100', sent: [26]}]);
+    assert.strictEqual(GB.matchInboundReply(junk, '550100', new Date()).client, null,
+      'a short stored number caught a short-code reply');
+    const alpha = withClients([{id: 'j2', phone: '22395', sent: [26]}]);
+    assert.strictEqual(GB.matchInboundReply(alpha, '22395', new Date()).client, null);
+  });
+
+  test('a shared number goes to whichever row was texted most recently', () => {
+    /* Sharing a number is the normal case, not an edge case. On the live book
+       424 of 830 contacts share theirs with another row, because one booking
+       imports once per rep whose calendar carries it, and only 4 of those 180
+       numbers carry two different names. Refusing to attribute -- which is
+       what this did when first written -- would have discarded half of every
+       reply the channel receives.
+
+       The row that was texted an hour ago is the one the person is answering;
+       the duplicate last touched a week ago is not. */
+    const st = withClients([
+      {id: 'c1', phone: '2135550100', sent: [170]},
+      {id: 'c2', phone: '+1 213 555 0100', sent: [2]},
+    ]);
+    const m = GB.matchInboundReply(st, '2135550100', new Date());
+    assert.ok(m.client, 'refused a shared number: ' + m.reason);
+    assert.strictEqual(m.client.id, 'c2');
+  });
+
+  test('a duplicate that was never texted does not take the credit', () => {
+    /* 492 of 693 number-and-org pairs have no send at all. A row nobody has
+       written to cannot be the one being answered, however recently it was
+       created, so it must not outrank the row that was actually texted. */
+    const st = withClients([
+      {id: 'c1', phone: '2135550100', sent: [30]},
+      {id: 'c2', phone: '2135550100', sent: []},
+    ]);
+    const m = GB.matchInboundReply(st, '2135550100', new Date());
+    assert.ok(m.client, m.reason);
+    assert.strictEqual(m.client.id, 'c1');
+    assert.strictEqual(m.idx, 0);
+  });
+
+  test('two rows texted in the same instant are left for a human', () => {
+    /* The remaining 10 cases. Both rows went out in one bulk send, so there
+       is nothing in the data to choose between them and either answer is a
+       coin flip -- and a real reply filed on the wrong record is worse than
+       one a person has to place by hand. */
+    const st = withClients([
+      {id: 'c1', phone: '2135550100', sent: [26]},
+      {id: 'c2', phone: '+1 213 555 0100', sent: [26]},
+    ]);
+    const m = GB.matchInboundReply(st, '2135550100', new Date());
+    assert.strictEqual(m.client, null, 'guessed between two simultaneous sends');
+    assert.ok(/texted together/.test(m.reason), m.reason);
+  });
+
+  test('a reply from a contact nobody has texted yet names the contact', () => {
+    /* Worth distinguishing from an unknown number: the contact exists, so a
+       person can see who texted and why there is nothing to attribute it to.
+       An unknown number has no one to name. */
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: []}]);
+    const m = GB.matchInboundReply(st, '2135550100', new Date());
+    assert.ok(m.client, 'lost the contact it had already found');
+    assert.strictEqual(m.client.id, 'c1');
+    assert.strictEqual(m.idx, -1);
+    assert.ok(/nothing had been sent/.test(m.reason), m.reason);
+  });
+
+  test('an archived contact does not catch replies', () => {
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: [26], ignored: true}]);
+    assert.strictEqual(GB.matchInboundReply(st, '2135550100', new Date()).client, null);
+  });
+
+  test('a contact who has been sent nothing yet is reported, not crashed on', () => {
+    // Somebody texting the number before any cadence touch went out. Real,
+    // and it must not throw inside a webhook.
+    const st = withClients([{id: 'c1', phone: '2135550100', sent: []}]);
+    const m = GB.matchInboundReply(st, '2135550100', new Date());
+    assert.ok(m.client, 'the contact should still be identified');
+    assert.strictEqual(m.idx, -1);
+    assert.ok(/nothing had been sent/.test(m.reason), m.reason);
+  });
+
+  test('it holds up on a broken state', () => {
+    assert.doesNotThrow(() => GB.matchInboundReply({}, '2135550100', new Date()));
+    assert.doesNotThrow(() => GB.matchInboundReply({clients: {c: null}}, '2135550100', new Date()));
+    assert.doesNotThrow(() => GB.matchInboundReply(GB.buildDefaultState(), null, new Date()));
+  });
+}
+
 console.log('\n--- reply rate per wording, read off the log ---');
 
 {
@@ -7881,7 +8144,7 @@ function makeLoadCtx(tableResults){
       Object.prototype.hasOwnProperty.call(results, name) ? results[name] : {data: [], error: null});
     const chain = {
       eq(){ return chain; }, order(){ return chain; }, not(){ return chain; },
-      is(){ return chain; },
+      is(){ return chain; }, limit(){ return chain; },
       // update().eq().select() has to resolve the same way a read does, or
       // reassignClient cannot be tested at all.
       select(){ return chain; },
@@ -9231,6 +9494,62 @@ test('loadState says who is signed in', async () => {
   const d = makeLoadCtx({});
   const state = await d.run('loadState()');
   assert.strictEqual(state.userId, 'u1');
+});
+
+test('a registered texting number is carried onto state', async () => {
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [{phone_number:'+15550001111', status:'registered', label:'main'}], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.ok(state.smsNumber, 'the number did not reach state');
+  assert.strictEqual(state.smsNumber.phoneNumber, '+15550001111');
+  assert.strictEqual(d.ctx.smsSendMode(state, {id:'c', phone:'2135550100'}).mode, 'provider');
+});
+
+test('an opt-out recorded by the webhook reaches the contact in the app', async () => {
+  /* The whole chain in one assertion: sms-webhook writes clients.sms_status,
+     loadState carries it onto the contact, and smsSendMode then refuses both
+     routes. If any link drops it the app offers a Send button for someone who
+     replied STOP, which is the violation the column exists to prevent -- and
+     nothing on screen would look wrong. */
+  const d = makeLoadCtx({
+    clients: {data: [
+      {id:'c1', user_id:'u1', name:'Opted Out', phone:'2135550100', timezone:'America/New_York',
+       status:'Booked', sms_status:'opted_out', message_log: []},
+      {id:'c2', user_id:'u1', name:'Fine', phone:'2135550101', timezone:'America/New_York',
+       status:'Booked', sms_status:'ok', message_log: []}
+    ], error: null},
+    org_phone_numbers: {data: [{phone_number:'+15550001111', status:'registered', label:''}], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.clients.c1.smsStatus, 'opted_out', 'the opt-out did not survive the load');
+  assert.strictEqual(d.ctx.smsSendMode(state, state.clients.c1).mode, 'blocked');
+  // And the contact who never opted out is unaffected.
+  assert.strictEqual(d.ctx.smsSendMode(state, state.clients.c2).mode, 'provider');
+});
+
+test('a missing org_phone_numbers table never takes the app down', async () => {
+  /* The documented failure mode of this harness: deploy code before its
+     migration and loadState rejects on a relation that does not exist, so
+     nobody can open the app at all -- not the new panel, the whole thing.
+     An absent number is the normal state today, so it has to read as "fall
+     back to the Messages handoff", never as an error. */
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: null, error: {message: 'relation "org_phone_numbers" does not exist'}}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber, null);
+  assert.strictEqual(d.ctx.smsSendMode(state, {id:'c', phone:'2135550100'}).mode, 'handoff');
+});
+
+test('an unregistered number is not treated as a sending number', async () => {
+  /* data.js filters on status=registered, and the stub ignores the filter, so
+     this asserts the shape the filter guarantees rather than the filter -- a
+     pending row reaching state at all would make every text vanish into a
+     carrier filter that reports success. */
+  const d = makeLoadCtx({});
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber, null);
 });
 
 test('an ignored contact is not counted as work', async () => {

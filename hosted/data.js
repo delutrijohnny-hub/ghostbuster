@@ -661,6 +661,10 @@ async function loadState(){
       eventTitle: row.event_title || null,
       organizerEmail: row.organizer_email,
       emailStatus: row.email_status || 'ok',
+      // Written only by sms-webhook. Deliberately absent from rowClient
+      // below, so a browser save cannot carry a stale 'ok' over the top of
+      // an opt-out the webhook recorded while this tab was open.
+      smsStatus: row.sms_status || 'ok',
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
@@ -872,6 +876,29 @@ async function loadState(){
     cancelAtPeriodEnd: !!subRes.data.cancel_at_period_end,
     trialEndsAt: subRes.data.trial_ends_at
   } : null;
+  /* The org's own texting number, if one is live.
+
+     Only a 'registered' row counts. A number exists in this table from the
+     moment it is provisioned, while status stays 'pending' until A2P 10DLC
+     registration clears -- and texts sent through a pending number are
+     filtered by the carriers SILENTLY. Treating a pending row as sendable
+     would route every message into a black hole that reports success, which
+     for a reply-tracking product is the worst available failure. So the
+     filter is here, and smsSendMode reads an absent number as "fall back to
+     the Messages handoff".
+
+     Degrades to null rather than failing the load: no number is the normal
+     state today, not an error. */
+  var numRes = await sb.from('org_phone_numbers')
+    .select('phone_number, status, label')
+    .eq('status', 'registered')
+    .limit(1);
+  var numRow = (numRes && numRes.data && numRes.data[0]) || null;
+  state.smsNumber = numRow ? {
+    phoneNumber: numRow.phone_number,
+    label: numRow.label || ''
+  } : null;
+
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.
