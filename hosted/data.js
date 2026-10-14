@@ -898,14 +898,29 @@ async function loadState(){
 
      Degrades to null rather than failing the load: no number is the normal
      state today, not an error. */
+  /* This person's OWN number first, the org's shared one only as a fallback.
+
+     A client who has been dealing with one rep for a month should not get a
+     reminder from somebody else's line -- the reason to own the number is
+     that the recipient recognises the sender. RLS already limits this to the
+     caller's org, so the only choice left is whose number within it.
+
+     Rows are fetched rather than filtered in SQL because there are at most a
+     handful per org, and picking here keeps the preference rule in one
+     readable place instead of split across a PostgREST query string. */
   var numRes = await sb.from('org_phone_numbers')
-    .select('phone_number, status, label')
-    .eq('status', 'registered')
-    .limit(1);
-  var numRow = (numRes && numRes.data && numRes.data[0]) || null;
+    .select('phone_number, status, label, user_id')
+    .eq('status', 'registered');
+  var numRows = (numRes && numRes.data) || [];
+  var numRow = numRows.filter(function(r){ return r.user_id === uid; })[0]
+            || numRows.filter(function(r){ return !r.user_id; })[0]
+            || null;
   state.smsNumber = numRow ? {
     phoneNumber: numRow.phone_number,
-    label: numRow.label || ''
+    label: numRow.label || '',
+    // Whether this is their own line or the team's shared one, so the UI can
+    // say which number a text will come from rather than implying it is theirs.
+    mine: numRow.user_id === uid
   } : null;
 
   /* Inbound texts, so a conversation can be read as a conversation.

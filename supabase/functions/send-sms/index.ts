@@ -129,8 +129,20 @@ Deno.serve(async (req) => {
      keeps the two directions describing one number: a text that goes out
      from a number the webhook does not know about would get a reply that
      lands nowhere, which is the current situation with extra steps. */
+  /* The CALLER's own number first, the org's shared one only as a fallback.
+
+     A client who has been dealing with Ethan for a month should not get a
+     reminder from a number that is not his -- the entire reason to own the
+     number is that the recipient recognises the sender. The first version of
+     this took the org's first registered row, which would have put the whole
+     team on one line and quietly undone that.
+
+     Ordered so a row with a user_id wins: PostgREST sorts nulls last here, so
+     the personal number comes before the org fallback. */
   const nRes = await db(
-    `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered&select=phone_number&limit=1`);
+    `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered` +
+    `&or=(user_id.eq.${userId},user_id.is.null)` +
+    `&select=phone_number,user_id&order=user_id.asc.nullslast&limit=1`);
   const num = (await nRes.json())?.[0];
   if (!num?.phone_number) {
     return json({

@@ -10098,6 +10098,51 @@ test('an opt-out recorded by the webhook reaches the contact in the app', async 
   assert.strictEqual(d.ctx.smsSendMode(state, state.clients.c2).mode, 'provider');
 });
 
+test('a rep sends from their own number, not the team\u2019s', async () => {
+  /* The point of owning the number is that the client recognises the sender.
+     A contact who has dealt with one rep for a month getting a reminder from
+     somebody else's line undoes that -- and the first version of this picked
+     the org's first registered row, which would have put the whole team on
+     one line without anyone noticing. */
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550009999', status:'registered', label:'team', user_id:null},
+      {phone_number:'+15550001111', status:'registered', label:'mine', user_id:'u1'}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber.phoneNumber, '+15550001111', 'took the team line over their own');
+  assert.strictEqual(state.smsNumber.mine, true);
+});
+
+test('a rep with no number of their own falls back to the team line', async () => {
+  // What a small team with one shared number actually wants, and what every
+  // account looks like before each rep has been provisioned.
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550009999', status:'registered', label:'team', user_id:null}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber.phoneNumber, '+15550009999');
+  assert.strictEqual(state.smsNumber.mine, false, 'the team line was presented as theirs');
+});
+
+test('another rep\u2019s number is never used as a fallback', async () => {
+  /* RLS shows every number in the org, so without this a rep with no line of
+     their own would send from a colleague's -- replies would then land in
+     that colleague's inbox and the client would be talking to the wrong
+     person. */
+  const d = makeLoadCtx({
+    org_phone_numbers: {data: [
+      {phone_number:'+15550002222', status:'registered', label:'ethan', user_id:'u2'},
+      {phone_number:'+15550003333', status:'registered', label:'zach', user_id:'u3'}
+    ], error: null}
+  });
+  const state = await d.run('loadState()');
+  assert.strictEqual(state.smsNumber, null, 'borrowed another rep\u2019s number');
+});
+
 test('a missing org_phone_numbers table never takes the app down', async () => {
   /* The documented failure mode of this harness: deploy code before its
      migration and loadState rejects on a relation that does not exist, so

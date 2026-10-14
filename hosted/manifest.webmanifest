@@ -1,0 +1,15 @@
+{
+  "name": "Ghost Recall",
+  "short_name": "Ghost Recall",
+  "description": "Follow-up that never forgets a lead.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#14161f",
+  "theme_color": "#14161f",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

@@ -6,6 +6,17 @@
 <title>Ghost Recall — follow-up that never forgets a lead</title>
 <meta name="description" content="Ghost Recall tells your salespeople who to contact, when, how and what to say. Built for teams who lose deals to silence, not to competitors.">
 <meta name="theme-color" content="#14161f">
+<!-- Phone first. Reps work from a handset, not a desk, and without these
+     "Add to Home Screen" gives a grey placeholder icon and opens in a Safari
+     tab with the address bar eating a line of the screen. With them it opens
+     full-screen with its own icon, which is the difference between a
+     bookmark and something that reads as an app. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ghost Recall">
 <meta property="og:title" content="Ghost Recall">
 <meta property="og:description" content="Follow-up that never forgets a lead.">
 <meta property="og:type" content="website">
