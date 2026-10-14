@@ -29,8 +29,14 @@ Setup
    database, and the agent will say so rather than silently syncing nothing.
 2. Get a device token from Ghost Recall: Menu -> Business settings -> Connect
    this Mac. It is shown once.
-3. Run:   GR_TOKEN=<token> python3 tools/imessage-agent.py
-   Add --watch to keep it running and sync every couple of minutes.
+3. Save it:   python3 tools/imessage-agent.py --set-token
+   It asks you to paste it and stores it in ~/.ghost-recall-token, mode 0600.
+   Deliberately not a command-line argument: a command containing a secret
+   lands in shell history, and a command containing a placeholder gets run
+   verbatim.
+4. See what it would do:  python3 tools/imessage-agent.py --dry-run
+   Then for real:         python3 tools/imessage-agent.py
+   Or leave it running:   python3 tools/imessage-agent.py --watch
 
 No packages to install. Standard library only.
 """
@@ -51,6 +57,13 @@ ENDPOINT = os.environ.get(
     'https://gqfpsjksosxvszzhhezu.supabase.co/functions/v1/imessage-sync')
 CHAT_DB = os.path.expanduser('~/Library/Messages/chat.db')
 STATE_PATH = os.path.expanduser('~/.ghost-recall-agent.json')
+# The token lives in a file rather than being pasted on the command line.
+#
+# A command containing a placeholder is a command somebody runs verbatim --
+# it has already happened in this project, with an API key set to the literal
+# string "re_yourNewKeyHere". A token on the command line also ends up in
+# shell history, which is a poor home for a long-lived credential.
+TOKEN_PATH = os.path.expanduser('~/.ghost-recall-token')
 
 # Apple stores dates as nanoseconds since 2001-01-01 UTC.
 APPLE_EPOCH = 978307200
@@ -86,6 +99,35 @@ def save_state(state):
     with open(tmp, 'w') as f:
         json.dump(state, f)
     os.replace(tmp, STATE_PATH)
+
+
+def read_token():
+    """GR_TOKEN if set, otherwise the saved file."""
+    env = os.environ.get('GR_TOKEN', '').strip()
+    if env:
+        return env
+    try:
+        with open(TOKEN_PATH) as f:
+            return f.read().strip()
+    except Exception:
+        return ''
+
+
+def save_token():
+    """Ask for the token and store it readable only by this user."""
+    import getpass
+    tok = getpass.getpass('Paste the device token from Ghost Recall (it will not echo): ').strip()
+    if not tok:
+        raise SystemExit('Nothing pasted; no token saved.')
+    old = os.umask(0o077)          # 0600 before the file exists, not after
+    try:
+        with open(TOKEN_PATH, 'w') as f:
+            f.write(tok + '\n')
+    finally:
+        os.umask(old)
+    os.chmod(TOKEN_PATH, 0o600)
+    print('Saved to %s (readable only by you).' % TOKEN_PATH)
+    print('Now run:  python3 tools/imessage-agent.py --dry-run')
 
 
 def open_db():
@@ -295,12 +337,22 @@ def main():
                     help='report what would be sent without sending anything')
     ap.add_argument('--max', type=int, default=0, dest='max_messages',
                     help='stop after this many messages (for a first cautious run)')
+    ap.add_argument('--set-token', action='store_true',
+                    help='paste the device token once and save it to ~/.ghost-recall-token')
     args = ap.parse_args()
 
-    token = os.environ.get('GR_TOKEN', '').strip()
+    if args.set_token:
+        save_token()
+        return
+
+    token = read_token()
     if not token:
-        raise SystemExit('Set GR_TOKEN to the device token from Ghost Recall '
-                         '(Business settings -> Connect this Mac).')
+        raise SystemExit(
+            'No device token yet.\n'
+            'In Ghost Recall: Menu -> Business settings -> Connect this Mac,\n'
+            'then save the token with:\n'
+            '    python3 tools/imessage-agent.py --set-token\n'
+            'It will ask you to paste it, and nothing is written to your shell history.')
 
     if args.dry_run:
         numbers = fetch_since_map(token)

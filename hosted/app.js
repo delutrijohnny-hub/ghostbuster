@@ -3884,7 +3884,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-2d831f59';
+var BUILD_STAMP = '20261014-cf723023';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6083,13 +6083,21 @@ function createDeviceToken(btn){
         'if you lose it, disconnect this Mac and create another.</div>' +
         '<textarea readonly rows="2" style="width:100%;margin:10px 0;font-family:ui-monospace,monospace;font-size:12px;">' +
         escapeHtml(tok) + '</textarea>' +
-        '<div class="hint">In Terminal, from the ghostbuster folder:</div>' +
-        '<textarea readonly rows="3" style="width:100%;margin:6px 0;font-family:ui-monospace,monospace;font-size:12px;">' +
-        'GR_TOKEN=' + escapeHtml(tok) + ' python3 tools/imessage-agent.py --dry-run</textarea>' +
-        '<div class="hint">That reports what it would sync without sending anything. ' +
-        'Drop <strong>--dry-run</strong> to do it, and add <strong>--watch</strong> to keep it running. ' +
-        'Terminal needs Full Disk Access (System Settings \u2192 Privacy &amp; Security) or macOS blocks ' +
-        'reading Messages.</div>', true);
+        /* The commands below carry no token.
+
+           A command with a secret in it gets pasted into shell history, and a
+           command with a PLACEHOLDER in it gets run verbatim -- which has
+           already happened here, with an API key set to the literal string
+           "re_yourNewKeyHere". So the agent asks for the token itself, once,
+           and remembers it. */
+        '<div class="hint">In Terminal, from the ghostbuster folder, run these two. ' +
+        'The first asks you to paste the token above; nothing goes into your shell history.</div>' +
+        '<textarea readonly rows="2" style="width:100%;margin:6px 0;font-family:ui-monospace,monospace;font-size:12px;">' +
+        'python3 tools/imessage-agent.py --set-token\npython3 tools/imessage-agent.py --dry-run</textarea>' +
+        '<div class="hint">The second reports what it would sync without sending anything. ' +
+        'Drop <strong>--dry-run</strong> to do it for real, and use <strong>--watch</strong> to keep it ' +
+        'running. Terminal needs Full Disk Access (System Settings \u2192 Privacy &amp; Security) or ' +
+        'macOS blocks reading Messages.</div>', true);
     });
 }
 
