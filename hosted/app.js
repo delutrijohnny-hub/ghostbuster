@@ -978,6 +978,7 @@ function renderAll(){
   renderProgressBar();
   renderStats();
   renderTodos();
+  renderRecentReplies();
   renderUnplacedReplies();
   renderOnDeck();
   renderUnlogged();
@@ -1350,10 +1351,20 @@ function buildTouchCard(client, stage, now){
      switchover then happens by itself, with nothing to turn on. */
   var route = smsSendMode(STATE, client);
   if(route.mode === 'provider'){
-    actions.appendChild(h('button',{class:'btn btn-sm btn-primary',
-      'data-action':'send-text','data-cid':client.id,'data-stage':stage,
-      title:'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
-      ['Send text']));
+    /* Quiet hours are shown here and enforced in send-sms. Both, deliberately:
+       the server is what makes it true, and this is what stops somebody
+       clicking into a refusal they could have been told about first. */
+    var win = smsSendWindow(client, new Date());
+    if(!win.ok){
+      actions.appendChild(h('span',{class:'edited-note',
+        title:'Texting is allowed 8am to 9pm in their local time \u2014 the TCPA window, which carriers enforce themselves. This opens again in ' + win.hoursUntilOpen + ' hour' + (win.hoursUntilOpen === 1 ? '' : 's') + '.'},
+        ['too late there \u2014 ' + win.reason]));
+    } else {
+      actions.appendChild(h('button',{class:'btn btn-sm btn-primary',
+        'data-action':'send-text','data-cid':client.id,'data-stage':stage,
+        title:'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
+        ['Send text']));
+    }
   } else if(route.mode === 'handoff'){
     var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
     actions.appendChild(h('a',{class:'btn btn-sm btn-primary', href:smsHref,
@@ -1539,6 +1550,32 @@ function buildAllClearPanel(subtitle){
    Above On deck, because it is the only thing on this screen where somebody
    is already waiting for an answer. Renders nothing at all when the list is
    empty, which is the normal state. */
+/* Who wrote back, on the screen where the work happens.
+
+   The conversation view only shows a reply to somebody who opens that
+   contact, and nobody opens contacts speculatively -- the review prompt that
+   asked "did they reply?" was answered 0 times out of 67 sends. A reply that
+   waits to be found is the invisible reply again.
+
+   Above the unplaced panel and On deck, because somebody is waiting for an
+   answer. Clicking one opens that contact, where the full thread is. */
+function renderRecentReplies(){
+  var box = el('recent-replies'); if(!box) return;
+  var list = recentReplies(STATE, new Date());
+  if(!list.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="unplaced replies-panel"><h4>' + list.length + ' repl' +
+    (list.length === 1 ? 'y' : 'ies') + ' in the last ' + RECENT_REPLY_DAYS + ' days</h4>' +
+    list.slice(0, 12).map(function(r){
+      return '<div class="u-row"><div class="u-meta">' +
+        '<button class="linkish" data-action="open-client" data-cid="' + escapeHtml(r.clientId) + '">' +
+        escapeHtml(r.name) + '</button> \u00b7 ' + new Date(r.at).toLocaleString() +
+        '</div>' + escapeHtml(r.text) + '</div>';
+    }).join('') +
+    (list.length > 12 ? '<div class="u-meta" style="padding-top:6px;">and ' +
+      (list.length - 12) + ' more</div>' : '') +
+    '</div>';
+}
+
 function renderUnplacedReplies(){
   var box = el('unplaced-replies'); if(!box) return;
   var list = unplacedReplies(STATE);
@@ -3511,6 +3548,45 @@ function openClientModal(clientId){
     '</div></div>' +
     '<div class="field-row"><label>Timeline</label><div id="tl-mount" class="timeline"><div class="tl-loading">Loading history…</div></div></div>' +
     '<div class="field-row"><label>Message log</label>' + msgLog + '</div>' +
+    /* Replying without leaving the thread.
+
+       The conversation view made replies readable; this makes them
+       answerable. Without it, reading "can we push to Friday?" here still
+       ends with somebody opening a different app to answer -- and a reply
+       sent from there lands outside the thread, which is the invisible-reply
+       problem rebuilding itself one message at a time.
+
+       Only on the provider route. Over the sms: handoff there is no number of
+       ours to send from, and the reply would come back to a handset. The
+       reason is shown rather than the box being silently absent. */
+    (function(){
+      var rr = smsSendMode(STATE, c);
+      if(rr.mode === 'blocked'){
+        return '<div class="field-row"><label>Reply</label>' +
+          '<div style="color:var(--ink-faint);font-size:12px;">' +
+          escapeHtml(firstName(c.name)) + ' replied STOP, so they cannot be texted.</div></div>';
+      }
+      if(rr.mode !== 'provider'){
+        return '<div class="field-row"><label>Reply</label>' +
+          '<div style="color:var(--ink-faint);font-size:12px;">' +
+          'Replying from here needs your own texting number \u2014 ' + escapeHtml(rr.reason || 'not available yet') +
+          '. Until then use Messages from the daily list.</div></div>';
+      }
+      var win = smsSendWindow(c, new Date());
+      if(!win.ok){
+        return '<div class="field-row"><label>Reply</label>' +
+          '<div style="color:var(--ink-faint);font-size:12px;">Too late to text them \u2014 ' +
+          escapeHtml(win.reason) + '. Texting runs 8am\u20139pm their time; opens again in ' +
+          win.hoursUntilOpen + ' hour' + (win.hoursUntilOpen === 1 ? '' : 's') + '.</div></div>';
+      }
+      return '<div class="field-row"><label>Reply</label>' +
+        '<textarea id="reply-text" rows="3" placeholder="Write back to ' +
+        escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
+        '<div style="margin-top:6px;"><button class="btn btn-sm btn-primary" data-action="send-reply" data-cid="' +
+        escapeHtml(c.id) + '">Send reply</button>' +
+        '<span class="u-meta" style="margin-left:8px;">Goes out from ' +
+        escapeHtml(STATE.smsNumber.phoneNumber) + '</span></div></div>';
+    })() +
     '<div class="field-row" style="text-align:right;"><a href="#" class="delete-client-link" data-action="delete-client-quick" data-cid="'+c.id+'" title="Remove this client entirely">Delete client</a></div>',
     true
   );
@@ -3744,7 +3820,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-eda61339';
+var BUILD_STAMP = '20261014-7ef25221';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5020,6 +5096,9 @@ document.addEventListener('click', function(ev){
     case 'send-text':
       doSendText(cid, stage, target);
       break;
+    case 'send-reply':
+      doSendReply(cid, target);
+      break;
     case 'open-sms':
       /* Recorded before the handoff to Messages, not 700ms after it.
 
@@ -5841,6 +5920,50 @@ function markSentOnChannel(cid, stage, text, channel){
    log then adopts the server's row id, so the next save upserts onto that row
    rather than creating a second one -- 297 duplicate rows have already
    inflated every reply figure in this product once. */
+/* A free-text reply inside a conversation.
+
+   Deliberately NOT routed through markSent. markSent picks a cadence variant,
+   scores it, and advances Booked -> Confirmed -> Reminded as reminders go
+   out. None of that is true of answering a question: a reply to "can we push
+   to Friday?" is not a touch in the sequence, and letting it advance the
+   status would move somebody to Reminded for a message that reminded them of
+   nothing. It is logged against 'custom' for the same reason a hand-edited
+   send is -- it is nobody's template, so it must not move any template's
+   numbers. */
+function doSendReply(cid, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var box = el('reply-text');
+  var text = box && box.value.trim();
+  if(!text){ showToast('Nothing to send yet.'); return; }
+
+  if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
+  var restore = function(){
+    if(target){ target.disabled = false; target.textContent = 'Send reply'; }
+  };
+
+  window.GB_SUPABASE.functions.invoke('send-sms', {
+    body: {clientId: cid, text: text, stage: 'custom', variantId: 'custom'}
+  }).then(function(res){
+    var err = res && res.error, data = res && res.data;
+    if(err || !data || !data.ok){ restore(); showToast(smsSendError(data, err)); return; }
+    client.messageLog.push({
+      id: data.messageId || uid(),
+      stage: 'custom', variantId: 'custom',
+      text: data.sentText || text,
+      sentAt: nowISO(), responded: false, respondedAt: null, reviewed: false,
+      channel: 'sms', deliveryStatus: 'sent'
+    });
+    saveState(STATE);
+    if(box) box.value = '';
+    openClientModal(cid);   // redraw the thread with the new message in it
+    showToast('Replied to ' + client.name + '.');
+  }).catch(function(e){
+    restore();
+    showToast('Could not send that reply: ' + (e && e.message ? e.message : 'the request failed') + '.');
+  });
+}
+
 function doSendText(cid, stage, target){
   var client = STATE.clients[cid];
   if(!client) return;
@@ -5905,6 +6028,7 @@ function smsSendError(data, err){
   if(code === 'bad_number') return (data && data.error) || 'That number cannot be texted.';
   if(code === 'no_provider') return 'Texting is not switched on for this account yet.';
   if(code === 'no_phone') return 'That contact has no phone number.';
+  if(code === 'quiet_hours') return (data && data.error) || 'Too late to text them where they are.';
   if(data && data.error) return data.error;
   if(err && err.message) return 'Could not send that text: ' + err.message + '.';
   return 'Could not send that text.';

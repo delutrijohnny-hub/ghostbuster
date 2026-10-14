@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
   /* Ownership check. Service role bypasses RLS, so the caller's right to this
      contact has to be proven explicitly rather than assumed. */
   const cRes = await db(
-    `clients?id=eq.${encodeURIComponent(clientId)}&select=id,name,phone,user_id,org_id,sms_status`);
+    `clients?id=eq.${encodeURIComponent(clientId)}&select=id,name,phone,user_id,org_id,sms_status,timezone`);
   const client = (await cRes.json())?.[0];
   if (!client || client.user_id !== userId) return json({ error: 'Not your contact' }, 403);
   if (!client.phone) return json({ error: 'That contact has no phone number.', code: 'no_phone' }, 400);
@@ -137,6 +137,32 @@ Deno.serve(async (req) => {
       error: 'This team has no registered texting number yet. A2P 10DLC registration has to clear first.',
       code: 'no_number',
     }, 503);
+  }
+
+  /* Quiet hours, enforced HERE rather than only in the browser.
+
+     8am-9pm in the recipient's local time is the TCPA window, and carriers
+     enforce it themselves: a campaign caught sending at 3am gets filtered or
+     shut off, taking texting down for every other contact at once. The window
+     and the check both already existed in logic.js and were used for exactly
+     one thing -- a grey warning chip on the card. A warning is not a guard,
+     and the person most likely to clear their list at 2am is the one least
+     likely to read it.
+
+     Server-side because that is the only place it cannot be skipped: a
+     disabled button is a suggestion, and any later caller -- a cadence
+     runner, a bulk action, a retry -- would otherwise have to remember this
+     rule on its own. */
+  const windowCheck = GB.smsSendWindow(
+    {timezone: client.timezone || 'America/New_York'}, new Date());
+  if (!windowCheck.ok) {
+    return json({
+      error: 'Too late to text them \u2014 ' + windowCheck.reason +
+        '. Texting is allowed 8am to 9pm their time; this opens again in ' +
+        windowCheck.hoursUntilOpen + ' hour' + (windowCheck.hoursUntilOpen === 1 ? '' : 's') + '.',
+      code: 'quiet_hours',
+      hoursUntilOpen: windowCheck.hoursUntilOpen,
+    }, 400);
   }
 
   const toDigits = GB.phoneKey(client.phone);

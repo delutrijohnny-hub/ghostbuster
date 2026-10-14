@@ -6591,6 +6591,157 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- who wrote back ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (clients) => {
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    clients.forEach(c => {
+      st.clients[c.id] = GB.sanitizeClient({
+        id:c.id, name:c.name, phone:'2135550100', timezone:'America/New_York',
+        status:'Booked', ignored: !!c.ignored, messageLog: [],
+        replies: c.replies || []
+      });
+    });
+    return st;
+  };
+
+  test('replies across the book are collected, newest first', () => {
+    /* The conversation view only shows a reply to somebody who opens that
+       contact, and nobody opens contacts speculatively -- the review prompt
+       asking "did they reply?" was answered 0 times out of 67 sends. A reply
+       that waits to be found is the invisible reply again. */
+    const st = mk([
+      {id:'c1', name:'Sarah', replies:[{id:'r1', text:'older one', at:ago(40)}]},
+      {id:'c2', name:'Mike',  replies:[{id:'r2', text:'newer one', at:ago(2)}]}
+    ]);
+    const r = GB.recentReplies(st, new Date());
+    assert.deepStrictEqual(r.map(x => x.text), ['newer one', 'older one']);
+    assert.deepStrictEqual(r.map(x => x.name), ['Mike', 'Sarah']);
+  });
+
+  test('old replies fall out of the window', () => {
+    // A work list, not an archive: a reply from five weeks ago is history.
+    const st = mk([{id:'c1', name:'Sarah', replies:[
+      {id:'r1', text:'last month', at:ago(24*35)},
+      {id:'r2', text:'yesterday', at:ago(26)}
+    ]}]);
+    const r = GB.recentReplies(st, new Date());
+    assert.deepStrictEqual(r.map(x => x.text), ['yesterday']);
+  });
+
+  test('an archived contact does not raise a reply', () => {
+    // Ignored contacts are out of the queue on purpose; surfacing their
+    // replies would put them back in it through a side door.
+    const st = mk([{id:'c1', name:'Junk', ignored:true,
+      replies:[{id:'r1', text:'hello', at:ago(2)}]}]);
+    assert.deepStrictEqual(GB.recentReplies(st, new Date()), []);
+  });
+
+  test('a reply stamped in the future is not shown', () => {
+    // Clock skew on a carrier timestamp would otherwise pin a reply to the
+    // top of the list permanently.
+    const st = mk([{id:'c1', name:'Sarah', replies:[
+      {id:'r1', text:'from the future', at:new Date(Date.now()+86400000).toISOString()},
+      {id:'r2', text:'real one', at:ago(1)}
+    ]}]);
+    assert.deepStrictEqual(GB.recentReplies(st, new Date()).map(x => x.text), ['real one']);
+  });
+
+  test('the window is adjustable and an empty book is empty', () => {
+    const st = mk([{id:'c1', name:'Sarah', replies:[{id:'r1', text:'3 days ago', at:ago(72)}]}]);
+    assert.strictEqual(GB.recentReplies(st, new Date(), 7).length, 1);
+    assert.strictEqual(GB.recentReplies(st, new Date(), 1).length, 0);
+    assert.deepStrictEqual(GB.recentReplies({}, new Date()), []);
+    assert.deepStrictEqual(GB.recentReplies(null, new Date()), []);
+  });
+
+  test('each reply carries the contact it belongs to', () => {
+    // So the panel can open that contact's thread rather than just naming them.
+    const st = mk([{id:'c7', name:'Sarah', replies:[{id:'r1', text:'hi', at:ago(1)}]}]);
+    assert.strictEqual(GB.recentReplies(st, new Date())[0].clientId, 'c7');
+  });
+}
+
+console.log('\n--- quiet hours ---');
+
+{
+  const ny = {timezone:'America/New_York'};
+  const at = (iso) => new Date(iso);
+
+  test('texting is allowed 8am to 9pm in the contact\u2019s own zone', () => {
+    /* The TCPA window, and carriers enforce it themselves -- a campaign
+       caught sending at 3am gets filtered or shut off, which takes texting
+       down for every other contact at the same time. */
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T12:30:00Z')).ok, true,  '8:30am ET');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-15T00:30:00Z')).ok, true,  '8:30pm ET');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T11:00:00Z')).ok, false, '7am ET');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-15T01:30:00Z')).ok, false, '9:30pm ET');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T06:00:00Z')).ok, false, '2am ET');
+  });
+
+  test('the boundaries themselves fall the right way', () => {
+    // 8am exactly is allowed; 9pm exactly is not -- 21:00 is already outside.
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T12:00:00Z')).ok, true,  '8:00am ET');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-15T01:00:00Z')).ok, false, '9:00pm ET');
+  });
+
+  test('it reads the contact\u2019s clock, not the sender\u2019s', () => {
+    /* A rep in California texting New York at 7am local is reaching them at
+       10am, which is fine. The reverse is not, and getting this backwards
+       would make the guard wrong in exactly the cases it exists for. */
+    const moment = at('2026-10-14T15:00:00Z');   // 11am ET / 8am PT
+    assert.strictEqual(GB.smsSendWindow({timezone:'America/New_York'}, moment).ok, true);
+    assert.strictEqual(GB.smsSendWindow({timezone:'America/Los_Angeles'}, moment).ok, true);
+    const early = at('2026-10-14T13:00:00Z');    // 9am ET / 6am PT
+    assert.strictEqual(GB.smsSendWindow({timezone:'America/New_York'}, early).ok, true);
+    assert.strictEqual(GB.smsSendWindow({timezone:'America/Los_Angeles'}, early).ok, false,
+      'a 6am Pacific contact was textable');
+  });
+
+  test('it says how long until the window opens', () => {
+    // So a refusal can be acted on rather than just retried blindly.
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T11:00:00Z')).hoursUntilOpen, 1);  // 7am -> 8am
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-14T06:00:00Z')).hoursUntilOpen, 6);  // 2am -> 8am
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-15T01:30:00Z')).hoursUntilOpen, 11); // 9pm -> 8am
+  });
+
+  test('midnight does not produce a negative or 24-hour wait', () => {
+    // The wrap is where this arithmetic usually breaks.
+    for (let h = 0; h < 24; h++) {
+      const when = at('2026-10-14T' + String((h + 4) % 24).padStart(2,'0') + ':30:00Z');
+      const w = GB.smsSendWindow(ny, when);
+      if (!w.ok) {
+        assert.ok(w.hoursUntilOpen > 0 && w.hoursUntilOpen <= 24,
+          'hour ' + w.hour + ' gave hoursUntilOpen ' + w.hoursUntilOpen);
+      }
+    }
+  });
+
+  test('it holds across a DST changeover', () => {
+    /* US DST ends 2026-11-01. An offset computed once and reused would be an
+       hour out on one side of it, which is how a guard like this silently
+       starts allowing 7am sends. */
+    // The same UTC instant, one day apart, lands either side of 8am local --
+    // which is the whole point: 12:30Z is 8:30am EDT on the 31st and 7:30am
+    // EST on the 1st, so the verdict flips without the clock time changing.
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-10-31T12:30:00Z')).ok, true,  '8:30am EDT');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-11-01T12:30:00Z')).ok, false, '7:30am EST');
+    assert.strictEqual(GB.smsSendWindow(ny, at('2026-11-01T13:30:00Z')).ok, true,  '8:30am EST');
+  });
+
+  test('a contact with no timezone still gets a real answer', () => {
+    // timezone is always populated in practice (resolved from the area code
+    // when the calendar did not say), but a missing one must not throw or
+    // silently allow a 3am send.
+    const w = GB.smsSendWindow({}, at('2026-10-14T06:00:00Z'));
+    assert.strictEqual(typeof w.ok, 'boolean');
+    assert.strictEqual(w.tz, 'America/New_York');
+  });
+}
+
 console.log('\n--- reading a conversation as a conversation ---');
 
 {

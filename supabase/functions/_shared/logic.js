@@ -197,7 +197,7 @@ function billingNotice(state){
    which is not something to hold hostage. */
 var READ_ONLY_BLOCKED_ACTIONS = [
   // Working the list
-  'open-sms', 'send-text', 'mark-sent', 'copy-text', 'copy-remaining', 'generate-ai',
+  'open-sms', 'send-text', 'send-reply', 'mark-sent', 'copy-text', 'copy-remaining', 'generate-ai',
   'interaction-outcome', 'interaction-confirm', 'review-replied', 'review-silent',
   'toggle-replied', 'toggle-replied-quick', 'focus-send', 'focus-copy',
   'focus-skip', 'focus-snooze', 'focus-skip-forever', 'snooze-touch', 'skip-touch',
@@ -3313,6 +3313,85 @@ function unplacedReplies(state){
   return list.slice().sort(function(a, b){
     return Date.parse(b.at || 0) - Date.parse(a.at || 0);
   });
+}
+
+/* Whether a text may legally go out to this contact right now.
+
+   The TCPA window is 8am to 9pm in the RECIPIENT's local time, and carriers
+   enforce it independently of the regulator -- a campaign caught texting at
+   3am gets filtered or shut off, which takes texting down for every other
+   contact at the same time.
+
+   isOutsideLocalHours and this exact window already existed, and were used
+   for one thing: a grey warning chip on the card. A warning is not a guard.
+   Nothing stopped a 2am send, and the person most likely to make one is a
+   salesperson clearing their list late at night, which is exactly when the
+   warning is least likely to be read.
+
+   The contact's own zone, not the sender's. A rep in California texting a
+   contact in New York at 7am local is reaching them at 10am, which is fine;
+   the reverse is not. client.timezone is always populated (resolved from the
+   area code when the calendar did not say), so there is always an answer.
+
+   Returns when the window next opens, so the refusal can say "9 hours from
+   now" rather than just no. */
+function smsSendWindow(client, now){
+  now = now || new Date();
+  var tz = (client && client.timezone) || 'America/New_York';
+  var hour = localHourInTZ(now, tz);
+  if(hour >= LOCAL_HOURS_START && hour < LOCAL_HOURS_END){
+    return {ok: true, reason: null, hour: hour, tz: tz};
+  }
+  /* Hours until 8am there. Before 8am it is today; from 9pm it is tomorrow.
+     Computed in whole hours from the local hour rather than by building a
+     date in another zone, which is the part that goes wrong across DST. */
+  var until = hour < LOCAL_HOURS_START
+    ? LOCAL_HOURS_START - hour
+    : (24 - hour) + LOCAL_HOURS_START;
+  return {
+    ok: false,
+    reason: 'it is ' + (hour === 0 ? 12 : (hour > 12 ? hour - 12 : hour)) +
+      (hour < 12 ? 'am' : 'pm') + ' where they are',
+    hoursUntilOpen: until,
+    hour: hour,
+    tz: tz
+  };
+}
+
+/* Replies that arrived recently, across the whole book.
+
+   The conversation view shows a reply only to somebody who opens that
+   contact. Nobody will. That is not a guess: the review prompt asking "did
+   they reply?" sat on screen for weeks and was answered 0 times out of 67
+   sends, with 43 questions outstanding. A surface that waits to be visited
+   is the same invisible reply with extra steps.
+
+   So the morning list says who wrote back. Newest first, because an
+   unanswered text gets less useful the older it is, and windowed because
+   this is a work list rather than an archive -- a reply from five weeks ago
+   is history, not a task.
+
+   Only replies the webhook recorded appear here. A reply that came to a
+   rep's own handset over the sms: handoff cannot, because nothing saw it;
+   that is the gap the provider number closes. */
+var RECENT_REPLY_DAYS = 7;
+
+function recentReplies(state, now, days){
+  now = now || new Date();
+  var window = (typeof days === 'number' ? days : RECENT_REPLY_DAYS) * 86400000;
+  var cutoff = now.getTime() - window;
+  var out = [];
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    (c.replies || []).forEach(function(r){
+      var t = Date.parse(r.at);
+      if(isNaN(t) || t < cutoff || t > now.getTime()) return;
+      out.push({clientId: c.id, name: c.name, text: r.text, at: r.at, t: t});
+    });
+  });
+  out.sort(function(a, b){ return b.t - a.t; });
+  return out;
 }
 
 function smsKeyword(body){
@@ -7001,6 +7080,9 @@ var __LOGIC_EXPORTS__ = {
   matchInboundReply: matchInboundReply,
   smsKeyword: smsKeyword,
   smsSendMode: smsSendMode,
+  smsSendWindow: smsSendWindow,
+  recentReplies: recentReplies,
+  RECENT_REPLY_DAYS: RECENT_REPLY_DAYS,
   voiceExamples: voiceExamples,
   conversationThread: conversationThread,
   unplacedReplies: unplacedReplies,

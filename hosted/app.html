@@ -1187,6 +1187,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .unplaced .u-row{padding:6px 0;border-top:1px solid var(--border);}
 .unplaced .u-row:first-of-type{border-top:0;}
 .unplaced .u-meta{color:var(--ink-faint);font-size:11px;}
+/* Replies that DID land on somebody read as good news, not as a problem to
+   fix, so they are tinted green rather than borrowing the alert colour. */
+.replies-panel{border-color:var(--good,#3fb27f);}
+.replies-panel h4{color:var(--good,#3fb27f);}
+.unplaced .linkish{background:none;border:0;padding:0;font:inherit;color:inherit;text-decoration:underline;cursor:pointer;}
 .preview-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px;}
 .preview-table th,.preview-table td{border:1px solid var(--border);padding:6px 8px;text-align:left;}
 .flag-dup{color:var(--amber);font-weight:700;}
@@ -1366,6 +1371,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
 
   <div class="tab-panel active" id="tab-calls">
+    <div id="recent-replies"></div>
     <div id="unplaced-replies"></div>
     <div id="on-deck"></div>
     <div id="unlogged-calls"></div>
@@ -1530,9 +1536,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261014-eda61339"></script>
-<script src="data.js?v=20261014-eda61339"></script>
-<script src="app.js?v=20261014-eda61339"></script>
-<script src="auth.js?v=20261014-eda61339"></script>
+<script src="logic.js?v=20261014-7ef25221"></script>
+<script src="data.js?v=20261014-7ef25221"></script>
+<script src="app.js?v=20261014-7ef25221"></script>
+<script src="auth.js?v=20261014-7ef25221"></script>
 </body>
 </html>
