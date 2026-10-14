@@ -3394,6 +3394,55 @@ function recentReplies(state, now, days){
   return out;
 }
 
+/* Every text conversation in one list, newest activity first.
+
+   The thread already existed on the contact screen, which meant reading your
+   messages was a matter of guessing which contact to open. That is fine for
+   one person you remember and useless across 218 of them -- and it is why a
+   reply sitting in a thread nobody opened was, in practice, a reply nobody
+   saw.
+
+   Ordered by last activity in either direction, the way any messaging app
+   orders an inbox, because recency is what makes a conversation worth
+   looking at and it has nothing to do with which side spoke.
+
+   `awaitingReply` is the useful flag: their last word was the most recent
+   thing in the thread and nobody has answered. That is a person actively
+   waiting, which is a different and more urgent thing than a contact who has
+   simply gone quiet. */
+function conversationList(state, now){
+  now = now || new Date();
+  var rows = [];
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    var thread = conversationThread(c).filter(function(it){
+      return it.dir === 'in' || it.channel === 'sms';
+    });
+    if(!thread.length) return;
+    var last = thread[thread.length - 1];
+    var inbound = 0;
+    thread.forEach(function(it){ if(it.dir === 'in') inbound++; });
+    rows.push({
+      clientId: c.id,
+      name: c.name,
+      phone: c.phone || '',
+      status: c.status,
+      smsStatus: c.smsStatus || 'ok',
+      lastAt: last.at,
+      lastT: last.t,
+      lastDir: last.dir,
+      lastText: last.text,
+      messages: thread.length,
+      replies: inbound,
+      /* Their word was last and nothing has gone back. Someone is waiting. */
+      awaitingReply: last.dir === 'in'
+    });
+  });
+  rows.sort(function(a, b){ return b.lastT - a.lastT; });
+  return rows;
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -7082,6 +7131,7 @@ var __LOGIC_EXPORTS__ = {
   smsSendMode: smsSendMode,
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
+  conversationList: conversationList,
   RECENT_REPLY_DAYS: RECENT_REPLY_DAYS,
   voiceExamples: voiceExamples,
   conversationThread: conversationThread,

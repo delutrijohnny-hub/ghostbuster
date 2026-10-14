@@ -978,6 +978,7 @@ function renderAll(){
   renderProgressBar();
   renderStats();
   renderTodos();
+  renderThreadsTab();
   renderRecentReplies();
   renderUnplacedReplies();
   renderOnDeck();
@@ -1559,6 +1560,69 @@ function buildAllClearPanel(subtitle){
 
    Above the unplaced panel and On deck, because somebody is waiting for an
    answer. Clicking one opens that contact, where the full thread is. */
+/* The inbox: every text conversation in one place.
+
+   Until this existed, reading a thread meant guessing which contact to open.
+   Fine for somebody you remember, useless across 218 of them -- and the
+   reason a reply sitting in an unopened thread was, in practice, unseen.
+
+   Clicking a row opens that contact, where the thread and the reply box
+   already live, rather than building a second place to read and answer. */
+function renderThreadsTab(){
+  var box = el('threads-list'); if(!box) return;
+  var rows = conversationList(STATE, new Date());
+  var waiting = rows.filter(function(r){ return r.awaitingReply; }).length;
+
+  var countEl = el('threads-count');
+  if(countEl) countEl.textContent = waiting ? '(' + waiting + ')' : '';
+
+  if(!rows.length){
+    /* Never render nothing. An empty strip is indistinguishable from a broken
+       panel, and on this account the reason it is empty is specific and worth
+       saying: texts handed to Messages get their replies on a handset, where
+       nothing here can see them. */
+    box.innerHTML = '<div style="color:var(--ink-faint);font-size:12.5px;padding:10px 0;">' +
+      (STATE.smsNumber
+        ? 'No texts yet. Conversations appear here once you send from ' +
+          escapeHtml(STATE.smsNumber.phoneNumber) + '.'
+        : 'No conversations yet. Texts opened in Messages are sent from your own phone, so their ' +
+          'replies arrive there and cannot be shown here. Threads start filling in once this team ' +
+          'has its own texting number.') + '</div>';
+    return;
+  }
+
+  box.innerHTML =
+    (waiting
+      ? '<div style="font-size:12px;color:var(--accent,#e2566f);padding:6px 0 10px;">' +
+        waiting + ' conversation' + (waiting === 1 ? '' : 's') + ' waiting on a reply from you.</div>'
+      : '') +
+    rows.map(function(r){
+      var who = r.lastDir === 'out'
+        ? '<span class="thr-you">You: </span>'
+        : '';
+      return '<button class="thr-row' + (r.awaitingReply ? ' waiting' : '') +
+        '" data-action="open-client" data-cid="' + escapeHtml(r.clientId) + '">' +
+        '<span class="thr-top"><span class="thr-name">' + escapeHtml(r.name) + '</span>' +
+        '<span class="thr-when">' + escapeHtml(shortWhen(r.lastAt)) + '</span></span>' +
+        '<div class="thr-last">' + who + escapeHtml(r.lastText) + '</div></button>';
+    }).join('');
+}
+
+/* "3h" / "2d" / a date once it stops being this week. An inbox is scanned,
+   not read, so a full timestamp on every row is noise. */
+function shortWhen(iso){
+  var t = Date.parse(iso);
+  if(isNaN(t)) return '';
+  var mins = Math.floor((Date.now() - t) / 60000);
+  if(mins < 1) return 'now';
+  if(mins < 60) return mins + 'm';
+  var hrs = Math.floor(mins / 60);
+  if(hrs < 24) return hrs + 'h';
+  var days = Math.floor(hrs / 24);
+  if(days < 7) return days + 'd';
+  return new Date(t).toLocaleDateString();
+}
+
 function renderRecentReplies(){
   var box = el('recent-replies'); if(!box) return;
   var list = recentReplies(STATE, new Date());
@@ -3820,7 +3884,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-7ef25221';
+var BUILD_STAMP = '20261014-aec0177b';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5680,8 +5744,9 @@ document.addEventListener('keydown', function(ev){
   if(ev.key === '/'){ ev.preventDefault(); var s = el('calls-search'); if(s){ UI.tab='calls'; document.querySelector('[data-action=tab][data-tab=calls]').click(); s.focus(); } return; }
   // Kept in step with the tab bar, including Closed and the Graveyard — a
   // shortcut that stops halfway along the row is worse than none.
-  if(['1','2','3','4','5','6','7'].indexOf(ev.key) !== -1){
-    var tabs = ['calls','clients','variants','weekly','calendar','closed','dead'];
+  if(['1','2','3','4','5','6','7','8'].indexOf(ev.key) !== -1){
+    // Kept in step with the tab bar. Texts sits third there, so it does here.
+    var tabs = ['calls','clients','threads','variants','weekly','calendar','closed','dead'];
     var btn = document.querySelector('[data-action=tab][data-tab="'+tabs[+ev.key-1]+'"]');
     if(btn) btn.click();
   }

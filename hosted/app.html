@@ -1192,6 +1192,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .replies-panel{border-color:var(--good,#3fb27f);}
 .replies-panel h4{color:var(--good,#3fb27f);}
 .unplaced .linkish{background:none;border:0;padding:0;font:inherit;color:inherit;text-decoration:underline;cursor:pointer;}
+/* Inbox rows. One line of who, one of what was last said, so a long list is
+   scannable without opening anything. */
+.thr-row{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--border);padding:10px 2px;cursor:pointer;font:inherit;color:inherit;}
+.thr-row:hover{background:var(--surface-2,rgba(255,255,255,0.03));}
+.thr-top{display:flex;gap:8px;align-items:baseline;justify-content:space-between;}
+.thr-name{font-weight:600;font-size:13.5px;}
+.thr-when{color:var(--ink-faint);font-size:11px;white-space:nowrap;}
+.thr-last{color:var(--ink-faint);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.thr-row.waiting .thr-name:after{content:'waiting on you';margin-left:8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
+.thr-row.waiting .thr-last{color:var(--ink,#e8e8ea);}
+.thr-you{color:var(--ink-faint);}
 .preview-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px;}
 .preview-table th,.preview-table td{border:1px solid var(--border);padding:6px 8px;text-align:left;}
 .flag-dup{color:var(--amber);font-weight:700;}
@@ -1341,6 +1352,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <nav class="tabs" aria-label="Sections">
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
   <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
+  <button class="tab-btn" data-action="tab" data-tab="threads">Texts <span id="threads-count"></span></button>
   <button class="tab-btn" data-action="tab" data-tab="variants">Messages</button>
   <button class="tab-btn" data-action="tab" data-tab="emails">Emails</button>
   <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
@@ -1415,6 +1427,13 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
         <tbody id="clients-table-body"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="tab-panel" id="tab-threads">
+    <div class="card-head"><h3>Text conversations</h3>
+      <span style="font-size:12px;color:var(--ink-faint);">Every thread, newest first. Open one to read it and write back.</span>
+    </div>
+    <div id="threads-list"></div>
   </div>
 
   <div class="tab-panel" id="tab-variants">
@@ -1536,9 +1555,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261014-7ef25221"></script>
-<script src="data.js?v=20261014-7ef25221"></script>
-<script src="app.js?v=20261014-7ef25221"></script>
-<script src="auth.js?v=20261014-7ef25221"></script>
+<script src="logic.js?v=20261014-aec0177b"></script>
+<script src="data.js?v=20261014-aec0177b"></script>
+<script src="app.js?v=20261014-aec0177b"></script>
+<script src="auth.js?v=20261014-aec0177b"></script>
 </body>
 </html>

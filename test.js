@@ -6591,6 +6591,94 @@ test('a held contact says it is waiting on a human, not that it is handled', () 
   assert.ok(/your turn/.test(label), 'got: ' + label);
 });
 
+console.log('\n--- the text inbox ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (defs) => {
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    defs.forEach(d => {
+      st.clients[d.id] = GB.sanitizeClient({
+        id:d.id, name:d.name, phone:'213555010'+d.id.slice(-1),
+        timezone:'America/New_York', status:'Booked', ignored: !!d.ignored,
+        messageLog: (d.sent||[]).map((h,i) => ({id:d.id+'m'+i, stage:'welcome', variantId:'w1-v2',
+          channel: d.channel || 'sms', text:'sent at '+h+'h', sentAt:ago(h),
+          responded:false, reviewed:false})),
+        replies: (d.got||[]).map((h,i) => ({id:d.id+'r'+i, text:'reply at '+h+'h', at:ago(h)}))
+      });
+    });
+    return st;
+  };
+
+  test('conversations are ordered by last activity, either side', () => {
+    /* How any inbox orders itself. Recency is what makes a thread worth
+       opening and it has nothing to do with which side spoke last. */
+    const st = mk([
+      {id:'c1', name:'Old', sent:[100]},
+      {id:'c2', name:'TheyJustWrote', sent:[80], got:[1]},
+      {id:'c3', name:'WeJustWrote', sent:[5]}
+    ]);
+    assert.deepStrictEqual(GB.conversationList(st, new Date()).map(r => r.name),
+      ['TheyJustWrote', 'WeJustWrote', 'Old']);
+  });
+
+  test('a thread where they spoke last is flagged as waiting on you', () => {
+    /* Different from a contact who has gone quiet, and more urgent: somebody
+       is actively waiting. It is the one thing in this list worth acting on
+       immediately. */
+    const st = mk([
+      {id:'c1', name:'Waiting', sent:[10], got:[2]},
+      {id:'c2', name:'Answered', sent:[1], got:[5]}
+    ]);
+    const rows = GB.conversationList(st, new Date());
+    assert.strictEqual(rows.find(r => r.name === 'Waiting').awaitingReply, true);
+    assert.strictEqual(rows.find(r => r.name === 'Answered').awaitingReply, false);
+  });
+
+  test('contacts with no texts at all are not in the inbox', () => {
+    // An inbox of people you have never messaged is a contact list.
+    const st = mk([{id:'c1', name:'Never', sent:[]}, {id:'c2', name:'Did', sent:[3]}]);
+    assert.deepStrictEqual(GB.conversationList(st, new Date()).map(r => r.name), ['Did']);
+  });
+
+  test('an archived contact is not in the inbox', () => {
+    const st = mk([{id:'c1', name:'Junk', ignored:true, sent:[2], got:[1]}]);
+    assert.deepStrictEqual(GB.conversationList(st, new Date()), []);
+  });
+
+  test('an email-only contact does not appear as a text thread', () => {
+    /* This is the Texts tab. An emailed contact showing here would make the
+       list claim conversations that never happened on this channel. */
+    const st = mk([{id:'c1', name:'Emailed', sent:[3], channel:'email'}]);
+    assert.deepStrictEqual(GB.conversationList(st, new Date()), []);
+  });
+
+  test('an inbound reply alone is enough to make a thread', () => {
+    // Somebody texting the number cold still deserves a row -- it is a real
+    // conversation even though we never started it.
+    const st = mk([{id:'c1', name:'ColdInbound', sent:[], got:[2]}]);
+    const rows = GB.conversationList(st, new Date());
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].awaitingReply, true);
+  });
+
+  test('each row carries the last thing said and who said it', () => {
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[2]}]);
+    const r = GB.conversationList(st, new Date())[0];
+    assert.strictEqual(r.lastDir, 'in');
+    assert.strictEqual(r.lastText, 'reply at 2h');
+    assert.strictEqual(r.messages, 2);
+    assert.strictEqual(r.replies, 1);
+    assert.strictEqual(r.clientId, 'c1');
+  });
+
+  test('an empty book gives an empty inbox rather than throwing', () => {
+    assert.deepStrictEqual(GB.conversationList({}, new Date()), []);
+    assert.deepStrictEqual(GB.conversationList(null, new Date()), []);
+  });
+}
+
 console.log('\n--- who wrote back ---');
 
 {
