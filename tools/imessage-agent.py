@@ -101,6 +101,31 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
+def up_to_date_line(watched):
+    """What a quiet sync should say.
+
+    "Nothing new. (0 messages scanned)" is indistinguishable from a broken
+    agent, which is why it got run five times in a row to check. The steady
+    state deserves to look like success, with the time of the last real sync
+    as the evidence.
+    """
+    state = load_state()
+    last = state.get('lastSyncAt')
+    when = ''
+    if last:
+        try:
+            t = time.mktime(time.strptime(last[:19], '%Y-%m-%dT%H:%M:%S')) - time.timezone
+            mins = int((time.time() - t) / 60)
+            when = (' Last new message synced %s.'
+                    % ('just now' if mins < 2 else
+                       '%d minutes ago' % mins if mins < 90 else
+                       '%d hours ago' % (mins // 60) if mins < 2880 else
+                       '%d days ago' % (mins // 1440)))
+        except Exception:
+            pass
+    return 'Up to date - nothing new to sync.%s Watching %d client numbers.' % (when, watched)
+
+
 def read_token():
     """GR_TOKEN if set, otherwise the saved file."""
     env = os.environ.get('GR_TOKEN', '').strip()
@@ -128,6 +153,62 @@ def save_token():
     os.chmod(TOKEN_PATH, 0o600)
     print('Saved to %s (readable only by you).' % TOKEN_PATH)
     print('Now run:  python3 tools/imessage-agent.py --dry-run')
+
+
+SERVICE_LABEL = 'com.ghostrecall.imessage-agent'
+SERVICE_PLIST = os.path.expanduser(
+    '~/Library/LaunchAgents/%s.plist' % SERVICE_LABEL)
+SERVICE_LOG = os.path.expanduser('~/Library/Logs/ghost-recall-agent.log')
+
+
+def install_service():
+    """Run on login, in the background, with no terminal window.
+
+    A sync that lives in a terminal tab is a sync that stops the first time
+    the window is closed or the Mac restarts -- and then quietly shows stale
+    threads, which is worse than showing none. launchd restarts it and starts
+    it at login.
+    """
+    script = os.path.abspath(__file__)
+    plist = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>%(label)s</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>%(script)s</string>
+    <string>--watch</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>%(log)s</string>
+  <key>StandardErrorPath</key><string>%(log)s</string>
+</dict>
+</plist>
+""" % {'label': SERVICE_LABEL, 'script': script, 'log': SERVICE_LOG}
+
+    os.makedirs(os.path.dirname(SERVICE_PLIST), exist_ok=True)
+    with open(SERVICE_PLIST, 'w') as f:
+        f.write(plist)
+    os.system('launchctl unload %s 2>/dev/null' % SERVICE_PLIST)
+    rc = os.system('launchctl load %s' % SERVICE_PLIST)
+    if rc != 0:
+        raise SystemExit('launchctl could not load the service. The file is at\n  %s'
+                         % SERVICE_PLIST)
+    print('Running in the background, and will start again at login.')
+    print('  log:     %s' % SERVICE_LOG)
+    print('  stop it: python3 tools/imessage-agent.py --uninstall-service')
+    print('\nClose any terminal tabs still running --watch; this replaces them.')
+
+
+def uninstall_service():
+    os.system('launchctl unload %s 2>/dev/null' % SERVICE_PLIST)
+    if os.path.exists(SERVICE_PLIST):
+        os.remove(SERVICE_PLIST)
+    print('Background sync stopped and removed. Threads already in Ghost Recall stay.')
 
 
 def open_db():
@@ -322,8 +403,7 @@ def sync_once(token, verbose=True, reset=False, max_messages=0):
                   % (totals['sent'], totals['inbound'], totals['outbound'],
                      totals['linked'], totals['skipped'], totals['failed']))
         else:
-            print('Nothing new. (%d messages scanned, %d client numbers watched)'
-                  % (scanned, len(numbers)))
+            print(up_to_date_line(len(numbers)))
     return totals['sent']
 
 
@@ -339,10 +419,25 @@ def main():
                     help='stop after this many messages (for a first cautious run)')
     ap.add_argument('--set-token', action='store_true',
                     help='paste the device token once and save it to ~/.ghost-recall-token')
+    ap.add_argument('--install-service', action='store_true',
+                    help='run in the background from now on, and at every login')
+    ap.add_argument('--uninstall-service', action='store_true',
+                    help='stop the background sync')
     args = ap.parse_args()
 
     if args.set_token:
         save_token()
+        return
+
+    if args.uninstall_service:
+        uninstall_service()
+        return
+
+    if args.install_service:
+        if not read_token():
+            raise SystemExit('Save a device token first:  '
+                             'python3 tools/imessage-agent.py --set-token')
+        install_service()
         return
 
     token = read_token()
@@ -364,9 +459,16 @@ def main():
             conn.close()
             shutil.rmtree(tmpdir, ignore_errors=True)
         ins = sum(1 for m in batch if not m['fromMe'])
-        print('Would send %d messages (%d replies, %d sent by you) across %d client numbers.'
-              % (len(batch), ins, len(batch) - ins, len({m['phone'] for m in batch})))
-        print('Scanned %d messages; everything else stays on this Mac.' % scanned)
+        if batch:
+            print('Would send %d messages (%d replies, %d sent by you) across %d client numbers.'
+                  % (len(batch), ins, len(batch) - ins, len({m['phone'] for m in batch})))
+            print('Scanned %d new messages; everything else stays on this Mac.' % scanned)
+        else:
+            # "0 messages" on its own reads as a failure, and it is the
+            # opposite: it is the steady state once the first sync has caught
+            # up. Saying so plainly is the difference between trusting this
+            # and running it five more times to check.
+            print(up_to_date_line(len(numbers)))
         return
 
     if args.watch:
