@@ -1191,17 +1191,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 /* Both sides of a thread, told apart at a glance. Theirs is indented and
    tinted so the shape of the conversation reads without anyone parsing the
    meta line above each message. */
-.msg-log-item.msg-in{margin-left:22px;border-left:2px solid var(--accent,#e2566f);padding-left:10px;background:rgba(226,86,111,0.06);}
-.msg-log-item.msg-in .meta{color:var(--accent,#e2566f);}
+.msg-log-item.msg-in{margin-left:22px;border-left:2px solid var(--red);padding-left:10px;background:var(--red-soft);}
+.msg-log-item.msg-in .meta{color:var(--red);}
 /* Confirmed states read plainly; unconfirmed ones are visibly hedged, so
    "a carrier delivered this" and "we opened a draft" are legible apart at a
    glance rather than buried in wording. */
-.dlv-ok{color:var(--good,#3fb27f);}
+.dlv-ok{color:var(--green);}
 .dlv-unsure{color:var(--ink-faint);font-style:italic;}
 /* A sandbox send button must not look like the real one. Same shape so the
    layout is honest about what is being tested, different colour so nobody
    reaches for it by muscle memory and believes a customer was texted. */
-.btn-sandbox{background:#6b5bd2;color:#fff;border-color:#6b5bd2;}
+.btn-sandbox{background:var(--amber);color:#fff;border-color:var(--amber);}
 /* Setup status. Each route states plainly whether it is carrying messages,
    waiting on something, or wrong -- so "coming soon" reads as a fact rather
    than a promise, and a broken route is not quietly the same colour as a
@@ -1213,31 +1213,90 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .setup-detail{color:var(--ink-faint);font-size:12px;margin-top:3px;}
 .setup-badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
   padding:2px 7px;border-radius:999px;white-space:nowrap;}
-.setup-on{background:rgba(63,178,127,.16);color:var(--good,#3fb27f);}
-.setup-standby{background:rgba(255,255,255,.07);color:var(--ink-faint);}
-.setup-soon{background:rgba(107,91,210,.18);color:#9d8ff0;}
-.setup-test{background:rgba(107,91,210,.18);color:#9d8ff0;}
-.setup-bad{background:rgba(226,86,111,.16);color:var(--accent,#e2566f);}
-.setup-off{background:rgba(255,255,255,.07);color:var(--ink-faint);}
-.unplaced{border:1px solid var(--accent,#e2566f);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:12.5px;}
-.unplaced h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
+.setup-on{background:var(--green-soft);color:var(--green);}
+.setup-standby{background:var(--bg);color:var(--ink-faint);}
+.setup-soon{background:var(--amber-soft);color:var(--amber);}
+.setup-test{background:var(--amber-soft);color:var(--amber);}
+.setup-bad{background:var(--red-soft);color:var(--red);}
+.setup-off{background:var(--bg);color:var(--ink-faint);}
+
+/* ---- messaging workspace ---------------------------------------------- */
+.msgx{display:grid;grid-template-columns:290px minmax(0,1fr) 260px;gap:0;
+  border:1px solid var(--border);border-radius:10px;overflow:hidden;
+  height:calc(100vh - 210px);min-height:420px;}
+.msgx-list{border-right:1px solid var(--border);overflow-y:auto;}
+.msgx-thread{display:flex;flex-direction:column;min-width:0;overflow:hidden;}
+.msgx-profile{border-left:1px solid var(--border);overflow-y:auto;padding:12px;}
+
+.msgx-head{padding:10px 12px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;justify-content:space-between;}
+.msgx-head h4{margin:0;font-size:14px;}
+.msgx-sub{color:var(--ink-faint);font-size:11.5px;}
+
+.msgx-rows{padding:0;}
+.msgx-row{display:block;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--border);padding:9px 12px;cursor:pointer;font:inherit;color:inherit;}
+.msgx-row:hover{background:var(--bg);}
+.msgx-row.active{background:var(--red-soft);box-shadow:inset 3px 0 0 var(--red);}
+.msgx-row .r-top{display:flex;justify-content:space-between;gap:6px;align-items:baseline;}
+.msgx-row .r-name{font-weight:600;font-size:13px;}
+.msgx-row .r-when{color:var(--ink-faint);font-size:10.5px;white-space:nowrap;}
+.msgx-row .r-last{color:var(--ink-faint);font-size:12px;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.msgx-row .r-tags{margin-top:4px;display:flex;gap:5px;flex-wrap:wrap;}
+.msgx-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  padding:1px 6px;border-radius:999px;background:var(--bg);color:var(--ink-faint);}
+.msgx-tag.wait{background:var(--red-soft);color:var(--red);}
+
+.msgx-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;}
+.msgx-b{max-width:74%;padding:7px 10px;border-radius:12px;font-size:13px;line-height:1.4;
+  word-wrap:break-word;white-space:pre-wrap;}
+.msgx-b.out{align-self:flex-end;background:var(--red);color:#fff;border-bottom-right-radius:3px;}
+.msgx-b.in{align-self:flex-start;background:var(--bg);border:1px solid var(--border);border-bottom-left-radius:3px;}
+.msgx-meta{font-size:10px;color:var(--ink-faint);margin-top:3px;}
+.msgx-b.out .msgx-meta{color:rgba(255,255,255,.75);}
+.msgx-compose{border-top:1px solid var(--border);padding:9px 12px;}
+.msgx-compose textarea{width:100%;resize:vertical;min-height:54px;font:inherit;font-size:13px;}
+.msgx-compose .row{display:flex;gap:8px;align-items:center;margin-top:7px;flex-wrap:wrap;}
+.msgx-empty{display:flex;align-items:center;justify-content:center;height:100%;
+  color:var(--ink-faint);font-size:13px;padding:24px;text-align:center;}
+.msgx-pfield{margin-bottom:10px;}
+.msgx-pfield label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--ink-faint);margin-bottom:2px;}
+.msgx-pfield .v{font-size:13px;}
+
+/* One pane at a time on a phone: the list, then the conversation. A
+   three-column grid at 375px is three unusable columns. */
+@media (max-width: 860px){
+  .msgx{grid-template-columns:1fr;height:auto;min-height:0;}
+  .msgx-list{border-right:0;max-height:none;}
+  .msgx-profile{border-left:0;border-top:1px solid var(--border);}
+  .msgx[data-view="thread"] .msgx-list{display:none;}
+  .msgx[data-view="list"] .msgx-thread,
+  .msgx[data-view="list"] .msgx-profile{display:none;}
+  .msgx-msgs{max-height:60vh;}
+}
+.msgx-back{display:none;}
+@media (max-width: 860px){ .msgx-back{display:inline-block;} }
+.unplaced{border:1px solid var(--red);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:12.5px;}
+.unplaced h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--red);}
 .unplaced .u-row{padding:6px 0;border-top:1px solid var(--border);}
 .unplaced .u-row:first-of-type{border-top:0;}
 .unplaced .u-meta{color:var(--ink-faint);font-size:11px;}
 /* Replies that DID land on somebody read as good news, not as a problem to
    fix, so they are tinted green rather than borrowing the alert colour. */
-.replies-panel{border-color:var(--good,#3fb27f);}
-.replies-panel h4{color:var(--good,#3fb27f);}
+.replies-panel{border-color:var(--green);}
+.replies-panel h4{color:var(--green);}
 .unplaced .linkish{background:none;border:0;padding:0;font:inherit;color:inherit;text-decoration:underline;cursor:pointer;}
 /* Inbox rows. One line of who, one of what was last said, so a long list is
    scannable without opening anything. */
 .thr-row{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--border);padding:10px 2px;cursor:pointer;font:inherit;color:inherit;}
-.thr-row:hover{background:var(--surface-2,rgba(255,255,255,0.03));}
+.thr-row:hover{background:var(--bg);}
 .thr-top{display:flex;gap:8px;align-items:baseline;justify-content:space-between;}
 .thr-name{font-weight:600;font-size:13.5px;}
 .thr-when{color:var(--ink-faint);font-size:11px;white-space:nowrap;}
 .thr-last{color:var(--ink-faint);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.thr-row.waiting .thr-name:after{content:'waiting on you';margin-left:8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--accent,#e2566f);}
+.thr-row.waiting .thr-name:after{content:'waiting on you';margin-left:8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--red);}
 .thr-row.waiting .thr-last{color:var(--ink,#e8e8ea);}
 .thr-you{color:var(--ink-faint);}
 .preview-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px;}
@@ -1467,10 +1526,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   </div>
 
   <div class="tab-panel" id="tab-threads">
-    <div class="card-head"><h3>Text conversations</h3>
-      <span style="font-size:12px;color:var(--ink-faint);">Every thread, newest first. Open one to read it and write back.</span>
+    <!-- Three panes on a desktop, one at a time on a phone.
+
+         Who / what was said / who they are. A salesperson working a pipeline
+         is answering one question at a time -- "who needs me", then "what did
+         we say", then "what do I know about them" -- and a layout that makes
+         them open a modal to reach the third loses the first two. -->
+    <div class="msgx" id="msgx">
+      <div class="msgx-list" id="msgx-list"></div>
+      <div class="msgx-thread" id="msgx-thread"></div>
+      <div class="msgx-profile" id="msgx-profile"></div>
     </div>
-    <div id="threads-list"></div>
   </div>
 
   <div class="tab-panel" id="tab-variants">
@@ -1592,9 +1658,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261014-cef1a526"></script>
-<script src="data.js?v=20261014-cef1a526"></script>
-<script src="app.js?v=20261014-cef1a526"></script>
-<script src="auth.js?v=20261014-cef1a526"></script>
+<script src="logic.js?v=20261015-92b917e6"></script>
+<script src="data.js?v=20261015-92b917e6"></script>
+<script src="app.js?v=20261015-92b917e6"></script>
+<script src="auth.js?v=20261015-92b917e6"></script>
 </body>
 </html>

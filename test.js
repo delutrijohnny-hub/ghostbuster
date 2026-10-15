@@ -1595,9 +1595,18 @@ test('the analytics that read reply data still work after an outcome', () => {
   const appSrcH   = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
   const dataSrcH  = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
   const all = strip(logicSrcH + '\n' + appSrcH + '\n' + dataSrcH);
+  /* Parameters count as defined.
+
+     A callback passed in and then called -- doSendReply(cid, target, text,
+     onDone) -- is ordinary JavaScript, and without this the check reports
+     every one of them as an undefined function. It still catches a real
+     typo, because a misspelled call matches no parameter either. */
+  const params = [...all.matchAll(/function\s*[A-Za-z_$\w]*\s*\(([^)]*)\)/g)]
+    .flatMap(m => m[1].split(',').map(x => x.trim()).filter(Boolean));
   const defined = new Set([
     ...[...all.matchAll(/function\s+([A-Za-z_$]\w*)/g)].map(m => m[1]),
-    ...[...all.matchAll(/(?:var|let|const)\s+([A-Za-z_$]\w*)\s*=\s*(?:function|\()/g)].map(m => m[1])
+    ...[...all.matchAll(/(?:var|let|const)\s+([A-Za-z_$]\w*)\s*=\s*(?:function|\()/g)].map(m => m[1]),
+    ...params
   ]);
   const KEYWORDS = new Set(['if','for','while','switch','catch','return','typeof','new','await',
     'else','do','try','throw','delete','void','in','of','function','var','let','const']);

@@ -74,7 +74,11 @@ function slimerSvg(size){
 
 var STATE = null;
 
-var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touchPick:{}, clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true};
+var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touchPick:{}, clientsSearch:'', statusFilter:null, calendarView:'month', calendarAnchor:new Date(), recentSendsOpen:true,
+  // Which conversation the messaging workspace is showing. Null on a phone
+  // means the list is up; on a desktop the newest thread is picked so the
+  // panes are never all empty at once.
+  threadCid:null};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1573,43 +1577,137 @@ function buildAllClearPanel(subtitle){
    Clicking a row opens that contact, where the thread and the reply box
    already live, rather than building a second place to read and answer. */
 function renderThreadsTab(){
-  var box = el('threads-list'); if(!box) return;
+  var wrap = el('msgx'); if(!wrap) return;
   var rows = conversationList(STATE, new Date());
   var waiting = rows.filter(function(r){ return r.awaitingReply; }).length;
 
   var countEl = el('threads-count');
   if(countEl) countEl.textContent = waiting ? '(' + waiting + ')' : '';
 
+  /* The selected conversation survives a re-render, and falls back to the
+     top of the list rather than to nothing -- a workspace that empties itself
+     every time a message arrives is a workspace nobody can work in. */
+  if(UI.threadCid && !rows.some(function(r){ return r.clientId === UI.threadCid; })){
+    UI.threadCid = null;
+  }
+  if(!UI.threadCid && rows.length && window.innerWidth > 860){
+    UI.threadCid = rows[0].clientId;
+  }
+  wrap.setAttribute('data-view', UI.threadCid ? 'thread' : 'list');
+
+  renderMsgxList(rows, waiting);
+  renderMsgxThread();
+  renderMsgxProfile();
+}
+
+function renderMsgxList(rows, waiting){
+  var box = el('msgx-list'); if(!box) return;
   if(!rows.length){
-    /* Never render nothing. An empty strip is indistinguishable from a broken
-       panel, and on this account the reason it is empty is specific and worth
-       saying: texts handed to Messages get their replies on a handset, where
-       nothing here can see them. */
-    box.innerHTML = '<div style="color:var(--ink-faint);font-size:12.5px;padding:10px 0;">' +
+    box.innerHTML = '<div class="msgx-head"><h4>Conversations</h4></div>' +
+      '<div class="msgx-empty">' +
       (STATE.smsNumber
         ? 'No texts yet. Conversations appear here once you send from ' +
           escapeHtml(STATE.smsNumber.phoneNumber) + '.'
-        : 'No conversations yet. Texts opened in Messages are sent from your own phone, so their ' +
-          'replies arrive there and cannot be shown here. Threads start filling in once this team ' +
-          'has its own texting number.') + '</div>';
+        : 'No conversations yet. Texts opened in Messages are sent from your own phone, ' +
+          'so their replies arrive there and cannot be shown here.') + '</div>';
     return;
+  }
+  box.innerHTML =
+    '<div class="msgx-head"><h4>Conversations</h4>' +
+    '<span class="msgx-sub">' + (waiting ? waiting + ' waiting' : rows.length + ' total') + '</span></div>' +
+    '<div class="msgx-rows">' + rows.map(function(r){
+      var tags = [];
+      if(r.awaitingReply) tags.push('<span class="msgx-tag wait">waiting on you</span>');
+      if(r.status) tags.push('<span class="msgx-tag">' + escapeHtml(r.status) + '</span>');
+      if(r.smsStatus === 'opted_out') tags.push('<span class="msgx-tag wait">opted out</span>');
+      return '<button class="msgx-row' + (r.clientId === UI.threadCid ? ' active' : '') +
+        '" data-action="msgx-open" data-cid="' + escapeHtml(r.clientId) + '">' +
+        '<span class="r-top"><span class="r-name">' + escapeHtml(r.name) + '</span>' +
+        '<span class="r-when">' + escapeHtml(shortWhen(r.lastAt)) + '</span></span>' +
+        '<div class="r-last">' + (r.lastDir === 'out' ? 'You: ' : '') + escapeHtml(r.lastText) + '</div>' +
+        (tags.length ? '<div class="r-tags">' + tags.join('') + '</div>' : '') +
+        '</button>';
+    }).join('') + '</div>';
+}
+
+function renderMsgxThread(){
+  var box = el('msgx-thread'); if(!box) return;
+  var c = UI.threadCid && STATE.clients[UI.threadCid];
+  if(!c){
+    box.innerHTML = '<div class="msgx-empty">Pick a conversation to read it.</div>';
+    return;
+  }
+  var thread = conversationThread(c);
+  var route = smsSendMode(STATE, c);
+  var win = smsSendWindow(c, new Date());
+
+  var bubbles = thread.map(function(it){
+    var ds = deliveryState(it);
+    return '<div class="msgx-b ' + (it.dir === 'in' ? 'in' : 'out') + '">' +
+      escapeHtml(it.text) +
+      '<div class="msgx-meta">' + escapeHtml(shortWhen(it.at)) +
+      (it.dir === 'out' && ds.label ? ' \u00b7 ' + escapeHtml(ds.label) : '') + '</div></div>';
+  }).join('') || '<div class="msgx-empty">Nothing yet.</div>';
+
+  /* The composer states the same truth the contact screen does, rather than
+     re-deriving it: one rule for whether a text may go out, used everywhere. */
+  var composer;
+  if(route.mode === 'blocked'){
+    composer = '<div class="msgx-sub">' + escapeHtml(firstName(c.name)) +
+      ' replied STOP, so they cannot be texted.</div>';
+  } else if(route.mode !== 'provider'){
+    composer = '<div class="msgx-sub">Replying from here needs your own texting number \u2014 ' +
+      escapeHtml(route.reason || 'not available yet') +
+      '. For now use <strong>Open in Messages</strong> from Today.</div>';
+  } else if(!win.ok){
+    composer = '<div class="msgx-sub">Too late to text them \u2014 ' + escapeHtml(win.reason) +
+      '. Texting runs 8am\u20139pm their time.</div>';
+  } else {
+    composer = '<textarea id="msgx-text" rows="2" placeholder="Write back to ' +
+      escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
+      '<div class="row"><button class="btn btn-sm btn-primary" data-action="msgx-send" data-cid="' +
+      escapeHtml(c.id) + '">Send</button>' +
+      '<span class="msgx-sub">from ' + escapeHtml(STATE.smsNumber.phoneNumber) + '</span></div>';
   }
 
   box.innerHTML =
-    (waiting
-      ? '<div style="font-size:12px;color:var(--accent,#e2566f);padding:6px 0 10px;">' +
-        waiting + ' conversation' + (waiting === 1 ? '' : 's') + ' waiting on a reply from you.</div>'
+    '<div class="msgx-head">' +
+      '<div><button class="btn btn-sm btn-ghost msgx-back" data-action="msgx-back">\u2039 All</button> ' +
+      '<strong>' + escapeHtml(c.name) + '</strong>' +
+      '<div class="msgx-sub">' + escapeHtml(c.phone || 'no phone on file') + '</div></div>' +
+      '<button class="btn btn-sm" data-action="open-client" data-cid="' + escapeHtml(c.id) + '">Open contact</button>' +
+    '</div>' +
+    '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
+    '<div class="msgx-compose">' + composer + '</div>';
+
+  var scroller = el('msgx-msgs');
+  if(scroller) scroller.scrollTop = scroller.scrollHeight;
+}
+
+function renderMsgxProfile(){
+  var box = el('msgx-profile'); if(!box) return;
+  var c = UI.threadCid && STATE.clients[UI.threadCid];
+  if(!c){ box.innerHTML = ''; return; }
+  var now = new Date();
+  var prog = cadenceProgress(c, now);
+  var tz = tzChipInfo(c, now);
+  var pause = replyPauseUntil(c);
+
+  function field(label, value){
+    return '<div class="msgx-pfield"><label>' + escapeHtml(label) + '</label>' +
+      '<div class="v">' + value + '</div></div>';
+  }
+  box.innerHTML =
+    field('Status', escapeHtml(c.status || '\u2014')) +
+    field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
+    field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
+    (pause && pause > now.getTime()
+      ? field('Automation', '<span class="msgx-tag wait">paused \u2014 they replied</span>')
       : '') +
-    rows.map(function(r){
-      var who = r.lastDir === 'out'
-        ? '<span class="thr-you">You: </span>'
-        : '';
-      return '<button class="thr-row' + (r.awaitingReply ? ' waiting' : '') +
-        '" data-action="open-client" data-cid="' + escapeHtml(r.clientId) + '">' +
-        '<span class="thr-top"><span class="thr-name">' + escapeHtml(r.name) + '</span>' +
-        '<span class="thr-when">' + escapeHtml(shortWhen(r.lastAt)) + '</span></span>' +
-        '<div class="thr-last">' + who + escapeHtml(r.lastText) + '</div></button>';
-    }).join('');
+    (c.callDateTime ? field('Call', escapeHtml(fmtDate(safeDate(c.callDateTime), c.timezone) + ' ' +
+        fmtTime(safeDate(c.callDateTime), c.timezone))) : '') +
+    (c.email ? field('Email', escapeHtml(c.email)) : '') +
+    (c.notes ? field('Notes', escapeHtml(c.notes.slice(0, 240))) : '');
 }
 
 /* "3h" / "2d" / a date once it stops being this week. An inbox is scanned,
@@ -3897,7 +3995,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261014-cef1a526';
+var BUILD_STAMP = '20261015-92b917e6';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -4589,6 +4687,12 @@ document.addEventListener('click', function(ev){
       UI.tab = target.getAttribute('data-tab');
       document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.toggle('active', b===target); });
       document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.toggle('active', p.id==='tab-'+UI.tab); });
+      /* The messaging workspace is laid out from the window width, and a
+         hidden panel measures nothing useful. Rendered at load in a narrow
+         pane it picks the phone layout and keeps it after the window grows,
+         because switching tabs only toggles a class. Re-rendering on arrival
+         costs nothing and makes the panes right whatever happened before. */
+      if(UI.tab === 'threads') renderThreadsTab();
       break;
     case 'set-stats-range':
       UI.statsRange = target.getAttribute('data-range');
@@ -5203,6 +5307,17 @@ document.addEventListener('click', function(ev){
       break;
     case 'send-reply':
       doSendReply(cid, target);
+      break;
+    case 'msgx-open':
+      UI.threadCid = cid;
+      renderThreadsTab();
+      break;
+    case 'msgx-back':
+      UI.threadCid = null;
+      renderThreadsTab();
+      break;
+    case 'msgx-send':
+      doMsgxSend(cid, target);
       break;
     case 'new-device-token':
       createDeviceToken(target);
@@ -6161,11 +6276,27 @@ function revokeDeviceToken(id){
   });
 }
 
-function doSendReply(cid, target){
+/* Sending from the workspace composer.
+
+   Deliberately the same path as the contact screen's reply box -- one way to
+   send a free-text message, so the cadence rules, the opt-out check and the
+   logging cannot drift between two places that look the same to a user. */
+function doMsgxSend(cid, target){
+  var box = el('msgx-text');
+  var text = box && box.value.trim();
+  if(!text){ showToast('Nothing to send yet.'); return; }
+  doSendReply(cid, target, text, function(){ renderThreadsTab(); });
+}
+
+function doSendReply(cid, target, textOverride, onDone){
   var client = STATE.clients[cid];
   if(!client) return;
+  /* The text comes from whichever composer called -- the contact screen's box
+     or the workspace one. Everything after this point is identical, which is
+     the point: two composers, one set of rules about whether and how a
+     message may go out. */
   var box = el('reply-text');
-  var text = box && box.value.trim();
+  var text = textOverride || (box && box.value.trim());
   if(!text){ showToast('Nothing to send yet.'); return; }
 
   if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
@@ -6187,7 +6318,9 @@ function doSendReply(cid, target){
     });
     saveState(STATE);
     if(box) box.value = '';
-    openClientModal(cid);   // redraw the thread with the new message in it
+    var mx = el('msgx-text'); if(mx) mx.value = '';
+    if(onDone) onDone();
+    else openClientModal(cid);   // redraw the thread with the new message in it
     showToast('Replied to ' + client.name + '.');
   }).catch(function(e){
     restore();
@@ -6700,6 +6833,19 @@ async function init(){
 // timer; it's cheap and touches nothing else.
 if(typeof setInterval !== 'undefined'){
   setInterval(function(){ if(STATE) renderOnDeck(); }, 30000);
+}
+
+/* The workspace switches between three panes and one on a width boundary, so
+   a resize past it has to re-lay it out -- otherwise dragging a window wider
+   leaves a phone layout on a desktop. Debounced, because resize fires per
+   pixel and this rebuilds three panels. */
+if(typeof window !== 'undefined' && window.addEventListener){
+  var msgxResizeTimer = null;
+  window.addEventListener('resize', function(){
+    if(UI.tab !== 'threads' || !STATE) return;
+    clearTimeout(msgxResizeTimer);
+    msgxResizeTimer = setTimeout(renderThreadsTab, 180);
+  });
 }
 // No DOMContentLoaded auto-boot here — auth.js owns the boot sequence in the
 // hosted build (it calls init() itself only once a signed-in session is
