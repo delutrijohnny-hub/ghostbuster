@@ -1741,6 +1741,10 @@ function renderMsgxThread(){
           escapeHtml(c.id) + '" title="Writes a suggested reply into the box for you to edit. ' +
           'Nothing is sent.">\u2728 Draft a reply</button>'
         : '') +
+      '<button class="btn btn-sm btn-ghost" data-action="msgx-schedule" data-cid="' +
+        escapeHtml(c.id) + '" title="Queue this for later. Every rule is checked again at send ' +
+        'time, so it will not go out if they reply, opt out, or follow-ups are paused.">' +
+        'Schedule\u2026</button>' +
       '<span class="msgx-sub">from ' + escapeHtml(STATE.smsNumber.phoneNumber) + '</span></div>';
   }
 
@@ -1808,7 +1812,23 @@ function renderMsgxProfile(){
             '" data-days="30">30 days</button>')) +
     '</div>';
 
+  /* What is queued for this contact. Visible to the whole team, because an
+     upcoming message only one person can see is how two people send the same
+     thing twice. */
+  var queued = (STATE.scheduled || []).filter(function(q){ return q.clientId === c.id; });
+  var queuedBody = queued.length
+    ? queued.map(function(q){
+        return '<div class="msgx-queued"><div class="msgx-sub">' +
+          escapeHtml(fmtDate(safeDate(q.sendAt), c.timezone)) + ' ' +
+          escapeHtml(fmtTime(safeDate(q.sendAt), c.timezone)) +
+          ' <button class="linkish" data-action="msgx-unschedule" data-id="' +
+          escapeHtml(q.id) + '">cancel</button></div>' +
+          escapeHtml(q.body.slice(0, 90)) + '</div>';
+      }).join('')
+    : '';
+
   box.innerHTML =
+    (queued.length ? field('Queued to send', queuedBody) : '') +
     field('Status', escapeHtml(c.status || '\u2014')) +
     field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
     field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
@@ -4104,7 +4124,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-d3ed357a';
+var BUILD_STAMP = '20261015-26bdccf1';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5439,6 +5459,12 @@ document.addEventListener('click', function(ev){
     case 'msgx-draft':
       doDraftReply(cid, target);
       break;
+    case 'msgx-schedule':
+      doScheduleSend(cid, target);
+      break;
+    case 'msgx-unschedule':
+      doCancelScheduled(target.getAttribute('data-id'));
+      break;
     case 'msgx-pause': {
       var days = parseInt(target.getAttribute('data-days'), 10) || 7;
       var until = new Date(Date.now() + days * 86400000).toISOString();
@@ -6418,6 +6444,78 @@ function revokeDeviceToken(id){
    Deliberately the same path as the contact screen's reply box -- one way to
    send a free-text message, so the cadence rules, the opt-out check and the
    logging cannot drift between two places that look the same to a user. */
+/* Queueing a message for later.
+
+   The composer's text is taken as-is; nothing here decides whether sending is
+   wise, because that decision belongs at send time. send-scheduled re-runs
+   every rule when the moment arrives -- a reply, an opt-out or a pause in the
+   meantime drops it, and quiet hours hold it rather than cancelling. */
+function doScheduleSend(cid, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var box = el('msgx-text');
+  var text = box && box.value.trim();
+  if(!text){ showToast('Write the message first, then schedule it.'); return; }
+  if(!STATE.userId || !STATE.orgId){
+    showToast('Could not tell which account you are in \u2014 try reloading.');
+    return;
+  }
+
+  var choice = prompt(
+    'Send this later:\n  1  tomorrow morning\n  2  in 3 days\n  3  next week\n\n' +
+    'Type 1, 2 or 3.', '1');
+  if(choice === null) return;
+  var days = choice.trim() === '3' ? 7 : choice.trim() === '2' ? 3 : 1;
+
+  /* 9am in THEIR timezone, not ours.
+
+     A message queued "tomorrow morning" by somebody in New York for a contact
+     in Los Angeles should land at 9am Pacific. Quiet hours would hold it
+     anyway, but arriving at the right hour beats arriving at the first legal
+     one. parseDatetimeLocalInTZ does the wall-clock-to-UTC conversion the
+     client modal already uses, so DST is handled the same way in both. */
+  var tz = client.timezone || 'America/New_York';
+  var day = formatDatetimeLocalInTZ(addDays(new Date(), days), tz).slice(0, 10);
+  var whenIso = parseDatetimeLocalInTZ(day + 'T09:00', tz);
+  var when = whenIso ? new Date(whenIso) : null;
+  if(!when || isNaN(when.getTime())){
+    showToast('Could not work out when that would be \u2014 try again.');
+    if(target){ target.disabled = false; target.textContent = 'Schedule\u2026'; }
+    return;
+  }
+
+  if(target){ target.disabled = true; target.textContent = 'Queuing\u2026'; }
+  window.GB_SUPABASE.from('scheduled_messages')
+    .insert({client_id: cid, org_id: STATE.orgId, user_id: STATE.userId,
+             body: text, send_at: when.toISOString(), status: 'pending'})
+    .then(function(res){
+      if(target){ target.disabled = false; target.textContent = 'Schedule\u2026'; }
+      if(res && res.error){ showToast('Could not queue that message.'); return; }
+      STATE.scheduled = STATE.scheduled || [];
+      STATE.scheduled.push({id: uid(), clientId: cid, body: text, sendAt: when.toISOString()});
+      if(box) box.value = '';
+      renderThreadsTab();
+      showToast('Queued for ' + fmtDate(when, client.timezone) + ' \u2014 it will not go ' +
+        'if they reply or opt out first.');
+    }, function(){
+      if(target){ target.disabled = false; target.textContent = 'Schedule\u2026'; }
+      showToast('Could not queue that message.');
+    });
+}
+
+function doCancelScheduled(id){
+  if(!id) return;
+  window.GB_SUPABASE.from('scheduled_messages')
+    .update({status: 'cancelled', reason: 'cancelled by hand', resolved_at: nowISO()})
+    .eq('id', id)
+    .then(function(res){
+      if(res && res.error){ showToast('Could not cancel that message.'); return; }
+      STATE.scheduled = (STATE.scheduled || []).filter(function(s){ return s.id !== id; });
+      renderThreadsTab();
+      showToast('Removed from the queue.');
+    }, function(){ showToast('Could not cancel that message.'); });
+}
+
 /* Drafting a suggested reply.
 
    It writes into the composer and stops. There is deliberately no "draft and

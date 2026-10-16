@@ -6768,6 +6768,111 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- a scheduled send, decided at send time ---');
+
+{
+  const T = Date.now();
+  const hrs = (n) => new Date(T + n*3600000).toISOString();
+  // 11am New York, comfortably inside sending hours whatever the test runner's
+  // own clock is doing.
+  const AT = new Date('2026-10-20T15:00:00Z');
+  const mk = (o) => GB.sanitizeClient(Object.assign({
+    id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
+    status:'Booked', messageLog: []
+  }, o || {}));
+
+  test('a normal contact passes', () => {
+    const v = GB.scheduledSendCheck(mk({}), AT);
+    assert.strictEqual(v.ok, true);
+    assert.strictEqual(v.reason, null);
+  });
+
+  test('a reply since scheduling drops the message', () => {
+    /* The single most visible way this could embarrass somebody: a queued
+       nudge landing on top of an answer, reading as not having listened. */
+    const v = GB.scheduledSendCheck(mk({messageLog:[{id:'m1', stage:'welcome',
+      variantId:'w1', channel:'sms', text:'x',
+      sentAt:new Date(AT.getTime()-20*3600000).toISOString(),
+      responded:true, respondedAt:new Date(AT.getTime()-2*3600000).toISOString(),
+      reviewed:true}]}), AT);
+    assert.strictEqual(v.ok, false);
+    assert.ok(/replied/.test(v.reason), v.reason);
+    assert.ok(!v.hold, 'a reply should drop the message, not hold it');
+  });
+
+  test('an opt-out since scheduling drops it', () => {
+    const v = GB.scheduledSendCheck(mk({smsStatus:'opted_out'}), AT);
+    assert.strictEqual(v.ok, false);
+    assert.ok(/STOP/.test(v.reason), v.reason);
+  });
+
+  test('a pause since scheduling drops it', () => {
+    const v = GB.scheduledSendCheck(
+      mk({automationPausedUntil:new Date(AT.getTime()+86400000).toISOString()}), AT);
+    assert.strictEqual(v.ok, false);
+    assert.ok(/paused/.test(v.reason), v.reason);
+  });
+
+  test('archiving, a finished status and a lost number all drop it', () => {
+    assert.ok(/archived/.test(GB.scheduledSendCheck(mk({ignored:true}), AT).reason));
+    assert.ok(/sequence finished/.test(GB.scheduledSendCheck(mk({status:'Completed'}), AT).reason));
+    assert.ok(/no usable phone/.test(GB.scheduledSendCheck(mk({phone:''}), AT).reason));
+    assert.ok(/carrier/.test(GB.scheduledSendCheck(mk({smsStatus:'undelivered'}), AT).reason));
+  });
+
+  test('quiet hours HOLD rather than drop', () => {
+    /* The distinction that matters. A message queued for 3am is still wanted
+       -- just not at 3am. Cancelling it would throw away something somebody
+       meant to send; holding lets the next run pick it up at 8am. */
+    const night = new Date('2026-10-20T06:00:00Z');   // 2am New York
+    const v = GB.scheduledSendCheck(mk({}), night);
+    assert.strictEqual(v.ok, false);
+    assert.strictEqual(v.hold, true, 'quiet hours cancelled the message instead of holding it');
+    assert.ok(/sending hours/.test(v.reason), v.reason);
+  });
+
+  test('a drop is never reported as a hold', () => {
+    /* A held message is retried forever; a dropped one must not be. Getting
+       this backwards would retry a message to somebody who said STOP every
+       five minutes. */
+    const night = new Date('2026-10-20T06:00:00Z');
+    const v = GB.scheduledSendCheck(mk({smsStatus:'opted_out'}), night);
+    assert.strictEqual(v.ok, false);
+    assert.ok(!v.hold, 'an opted-out contact would be retried every five minutes');
+  });
+
+  test('every refusal says why', () => {
+    // A message that vanishes from a queue is indistinguishable from one that
+    // was never scheduled.
+    [{ignored:true}, {smsStatus:'opted_out'}, {phone:''}, {status:'Completed'},
+     {automationPausedUntil: new Date(AT.getTime()+8.64e7).toISOString()}]
+      .forEach(o => {
+        const v = GB.scheduledSendCheck(mk(o), AT);
+        assert.strictEqual(v.ok, false);
+        assert.ok(v.reason && v.reason.length > 8, 'no usable reason for ' + JSON.stringify(o));
+      });
+  });
+
+  test('a missing contact does not throw', () => {
+    const v = GB.scheduledSendCheck(null, AT);
+    assert.strictEqual(v.ok, false);
+    assert.ok(/no longer exists/.test(v.reason));
+  });
+
+  test('the runner uses the same check the app does', () => {
+    /* Not a second implementation. The rule somebody sees in the app and the
+       rule applied at 9am tomorrow have to be the same code, or they drift
+       and the drift is invisible until it sends something it should not. */
+    const fn = fs.readFileSync(
+      path.join(__dirname, 'supabase', 'functions', 'send-scheduled', 'index.ts'), 'utf8');
+    assert.ok(/GB\.scheduledSendCheck\(client, now\)/.test(fn),
+      'the runner does not use scheduledSendCheck');
+    assert.ok(/verdict\.hold/.test(fn), 'the runner ignores the hold/drop distinction');
+    assert.ok(/auth !== SERVICE_KEY/.test(fn),
+      'the runner can be called without the service-role key');
+  });
+}
+
 console.log('\n--- automation controls ---');
 
 {
@@ -7960,7 +8065,15 @@ console.log('\n--- opt-out keywords ---');
 console.log('\n--- an inbound text finds its contact ---');
 
 {
-  const hrs = (n) => new Date(Date.now() - n * 3600000).toISOString();
+  /* One clock for the whole block.
+
+     hrs() called Date.now() per message, so two contacts both "texted 26
+     hours ago" usually landed on the same millisecond and occasionally 1ms
+     apart. When they differ there is no tie to detect, and the
+     texted-together test failed at random -- which is worse than no test,
+     because it teaches you to re-run instead of read. */
+  const T0 = Date.now();
+  const hrs = (n) => new Date(T0 - n * 3600000).toISOString();
   const withClients = (defs) => {
     const st = GB.buildDefaultState();
     st.clients = {};

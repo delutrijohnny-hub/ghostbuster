@@ -1042,6 +1042,17 @@ async function loadState(){
     });
   });
 
+  /* What is queued to go out. Pending only: a resolved row is history, and
+     the question this answers is "what is about to happen". */
+  var schedRes = await sb.from('scheduled_messages')
+    .select('id, client_id, body, send_at, status')
+    .eq('status', 'pending')
+    .order('send_at', {ascending: true})
+    .limit(500);
+  state.scheduled = ((schedRes && schedRes.data) || []).map(function(r){
+    return {id: r.id, clientId: r.client_id, body: r.body, sendAt: r.send_at};
+  });
+
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.

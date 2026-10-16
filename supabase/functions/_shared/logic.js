@@ -3791,6 +3791,67 @@ function setAutomationPause(state, clientId, until, note){
   return client;
 }
 
+/* Whether a message scheduled earlier may still go out now.
+
+   The entire correctness story of scheduled sending lives here, and it is one
+   idea: the rules are checked AT SEND TIME, not when the message was queued.
+
+   Everything that makes a text unwise can change between scheduling it and
+   sending it, and all of it changes in the direction of "do not send". They
+   reply. They text STOP. Somebody pauses follow-ups. The appointment gets
+   cancelled. A queue that decided at schedule time would send a chasing
+   message to somebody who answered an hour ago -- which is worse than not
+   having scheduled sends, because the person trusted it.
+
+   Returns a reason rather than a bare false, because a message that silently
+   disappears from a queue is indistinguishable from one that was never
+   scheduled. */
+function scheduledSendCheck(client, now, opts){
+  now = now || new Date();
+  opts = opts || {};
+  if(!client) return {ok: false, reason: 'the contact no longer exists'};
+
+  if(client.ignored) return {ok: false, reason: 'the contact was archived'};
+
+  if((client.smsStatus || 'ok') === 'opted_out'){
+    return {ok: false, reason: 'they replied STOP'};
+  }
+  if((client.smsStatus || 'ok') !== 'ok'){
+    return {ok: false, reason: 'the carrier could not reach that number'};
+  }
+  if(phoneKey(client.phone).length < 10){
+    return {ok: false, reason: 'the contact has no usable phone number'};
+  }
+
+  /* They answered. Sending a queued nudge on top of a reply is the single
+     most visible way this could embarrass somebody -- it reads as not having
+     been listening. */
+  var replied = replyPauseUntil(client);
+  if(replied !== null && now.getTime() < replied){
+    return {ok: false, reason: 'they replied, so the follow-up was dropped'};
+  }
+
+  var held = Date.parse(client.automationPausedUntil || '');
+  if(!isNaN(held) && now.getTime() < held){
+    return {ok: false, reason: 'follow-ups are paused for this contact'};
+  }
+
+  if(stopsCadence(client.status)){
+    return {ok: false, reason: 'the sequence finished \u2014 status is ' + (client.status || 'set')};
+  }
+
+  /* Quiet hours, checked here as well as in send-sms. A message queued for
+     9pm their time must not go at 9pm; it is held until the window reopens
+     rather than cancelled, because the content is still wanted. */
+  var win = smsSendWindow(client, now);
+  if(!win.ok){
+    return {ok: false, hold: true,
+            reason: 'outside sending hours \u2014 ' + win.reason};
+  }
+
+  return {ok: true, reason: null};
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -7481,6 +7542,7 @@ var __LOGIC_EXPORTS__ = {
   recentReplies: recentReplies,
   conversationList: conversationList,
   automationState: automationState,
+  scheduledSendCheck: scheduledSendCheck,
   setAutomationPause: setAutomationPause,
   replyDraftPrompt: replyDraftPrompt,
   canDraftReply: canDraftReply,

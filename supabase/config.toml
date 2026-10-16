@@ -446,3 +446,8 @@ verify_jwt = true
 # -- the same way it silently rejected every Resend webhook for weeks.
 [functions.imessage-sync]
 verify_jwt = false
+
+# The scheduled-send runner is called by pg_cron with the service-role key and
+# refuses anything else, so the platform JWT gate would only get in the way.
+[functions.send-scheduled]
+verify_jwt = false
