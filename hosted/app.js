@@ -4147,7 +4147,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261016-674be000';
+var BUILD_STAMP = '20261016-a2a86c67';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6697,9 +6697,18 @@ function doSendReply(cid, target, textOverride, onDone){
 function doSendText(cid, stage, target){
   var client = STATE.clients[cid];
   if(!client) return;
-  // Same double-send guard as the handoff path, and for the same reason: a
-  // second click while the first request is in flight would send twice.
-  if(hasSentStage(client, stage)) return;
+  /* Same double-send guard as the handoff path, and for the same reason: a
+     second click while the first request is in flight would send twice.
+
+     It SAYS so now. This was a bare `return`, so a button that refused to act
+     looked identical to one that was broken -- and that is exactly how it
+     looked while testing the sandbox, where nothing happened and nothing
+     explained why. A guard that declines silently is indistinguishable from a
+     bug. */
+  if(hasSentStage(client, stage)){
+    showToast('That touch has already been sent to ' + firstName(client.name) + '.');
+    return;
+  }
 
   var text = getCardText(STATE, client, stage);
   var label = target ? target.textContent : '';
