@@ -1260,6 +1260,12 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-note{align-self:stretch;background:var(--amber-soft);border:1px solid var(--amber);
   border-left-width:3px;border-radius:8px;padding:7px 10px;font-size:13px;line-height:1.4;
   white-space:pre-wrap;word-wrap:break-word;}
+.msgx-summary{font-size:12.5px;line-height:1.45;white-space:pre-wrap;}
+/* A stale summary is dimmed as well as labelled. Confident prose that is out
+   of date gets believed, so it must not look as authoritative as a current
+   one. */
+.msgx-summary.stale{opacity:.62;}
+.msgx-queued{border-left:2px solid var(--border);padding-left:7px;margin-bottom:6px;font-size:12px;}
 .msgx-note-head{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
   color:var(--amber);margin-bottom:3px;}
 .msgx-modes{display:flex;gap:4px;margin-bottom:7px;}
@@ -1680,9 +1686,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261015-26bdccf1"></script>
-<script src="data.js?v=20261015-26bdccf1"></script>
-<script src="app.js?v=20261015-26bdccf1"></script>
-<script src="auth.js?v=20261015-26bdccf1"></script>
+<script src="logic.js?v=20261016-674be000"></script>
+<script src="data.js?v=20261016-674be000"></script>
+<script src="app.js?v=20261016-674be000"></script>
+<script src="auth.js?v=20261016-674be000"></script>
 </body>
 </html>

@@ -1827,7 +1827,30 @@ function renderMsgxProfile(){
       }).join('')
     : '';
 
+  /* Where the conversation stands, for somebody picking it up cold.
+
+     A stale summary is labelled as stale rather than quietly shown as
+     current: it is confident prose and it will be believed, so "3 messages
+     since this was written" has to be on screen next to it. */
+  var sum = summaryState(c);
+  var summaryBody;
+  if(sum.state === 'none'){
+    summaryBody = '<button class="btn btn-sm btn-ghost" data-action="msgx-summarise" data-cid="' +
+      escapeHtml(c.id) + '">\u2728 Summarise this conversation</button>';
+  } else {
+    summaryBody = '<div class="msgx-summary' + (sum.state === 'stale' ? ' stale' : '') + '">' +
+      escapeHtml(sum.text) + '</div>' +
+      '<div class="msgx-sub" style="margin-top:4px;">' +
+      (sum.state === 'stale'
+        ? '<span class="msgx-tag wait">' + sum.newSince + ' message' +
+          (sum.newSince === 1 ? '' : 's') + ' since this was written</span> '
+        : 'As of ' + escapeHtml(shortWhen(sum.at)) + ' ago. ') +
+      '<button class="linkish" data-action="msgx-summarise" data-cid="' +
+      escapeHtml(c.id) + '">refresh</button></div>';
+  }
+
   box.innerHTML =
+    field('Where this stands', summaryBody) +
     (queued.length ? field('Queued to send', queuedBody) : '') +
     field('Status', escapeHtml(c.status || '\u2014')) +
     field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
@@ -4124,7 +4147,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-26bdccf1';
+var BUILD_STAMP = '20261016-674be000';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5462,6 +5485,9 @@ document.addEventListener('click', function(ev){
     case 'msgx-schedule':
       doScheduleSend(cid, target);
       break;
+    case 'msgx-summarise':
+      doSummarise(cid, target);
+      break;
     case 'msgx-unschedule':
       doCancelScheduled(target.getAttribute('data-id'));
       break;
@@ -6444,6 +6470,37 @@ function revokeDeviceToken(id){
    Deliberately the same path as the contact screen's reply box -- one way to
    send a free-text message, so the cadence rules, the opt-out check and the
    logging cannot drift between two places that look the same to a user. */
+/* Writing the summary, and recording what it covers.
+
+   conversationSummaryThrough is saved alongside it, because without it the
+   summary has no way of knowing it has gone out of date -- and a confident
+   summary that predates the last three messages is the failure this whole
+   feature has to avoid. */
+function doSummarise(cid, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var label = target ? target.textContent : '';
+  if(target){ target.disabled = true; target.textContent = 'Reading\u2026'; }
+
+  var through = summaryThrough(client);
+  callGemini(conversationSummaryPrompt(STATE, client)).then(function(text){
+    if(target){ target.disabled = false; target.textContent = label; }
+    var summary = String(text || '').trim();
+    if(!summary){ showToast('Nothing came back \u2014 try again.'); return; }
+    client.conversationSummary = summary;
+    client.conversationSummaryAt = nowISO();
+    /* What it covers, captured BEFORE the call rather than after: a message
+       arriving while the model was thinking is not described by this summary,
+       and recording "now" would claim it was. */
+    client.conversationSummaryThrough = through;
+    saveState(STATE);
+    renderThreadsTab();
+  }).catch(function(e){
+    if(target){ target.disabled = false; target.textContent = label; }
+    showToast('Could not summarise that \u2014 ' + (e && e.message ? e.message : 'try again') + '.');
+  });
+}
+
 /* Queueing a message for later.
 
    The composer's text is taken as-is; nothing here decides whether sending is

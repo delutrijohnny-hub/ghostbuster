@@ -671,6 +671,9 @@ async function loadState(){
       smsStatus: row.sms_status || 'ok',
       automationPausedUntil: row.automation_paused_until || null,
       automationPausedNote: row.automation_paused_note || '',
+      conversationSummary: row.conversation_summary || '',
+      conversationSummaryAt: row.conversation_summary_at || null,
+      conversationSummaryThrough: row.conversation_summary_through || null,
       // Filled below from sms_events. Declared here because loadState builds
       // these rows by hand rather than through sanitizeClient, so a default
       // on the sanitizer does not reach them.
@@ -1134,6 +1137,9 @@ function rowClient(c, uid){
        told us. */
     automation_paused_until: c.automationPausedUntil || null,
     automation_paused_note: c.automationPausedNote || null,
+    conversation_summary: c.conversationSummary || null,
+    conversation_summary_at: c.conversationSummaryAt || null,
+    conversation_summary_through: c.conversationSummaryThrough || null,
     name: c.name, phone: c.phone, email: c.email,
     youtube_link: c.youtubeLink, meet_link: c.meetLink,
     call_date_time: c.callDateTime, booked_date: c.bookedDate,

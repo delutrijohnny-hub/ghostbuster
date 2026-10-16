@@ -6768,6 +6768,123 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- conversation summary ---');
+
+{
+  const T = Date.now();
+  const ago = (h) => new Date(T - h*3600000).toISOString();
+  const mk = (o) => GB.sanitizeClient(Object.assign({
+    id:'c1', name:'Sarah Kim', phone:'2135550100', timezone:'America/New_York',
+    status:'Booked', messageLog: [], replies: [], threadNotes: []
+  }, o || {}));
+  const out = (h, t) => ({id:'m'+h, stage:'welcome', variantId:'w1-v2', channel:'sms',
+    text:t, sentAt:ago(h), responded:false, reviewed:false});
+
+  test('no summary yet is its own state, not an empty one', () => {
+    const st = GB.summaryState(mk({messageLog:[out(10,'hi')]}));
+    assert.strictEqual(st.state, 'none');
+    assert.strictEqual(st.text, '');
+  });
+
+  test('a summary covering everything reads as current', () => {
+    const c = mk({messageLog:[out(10,'hi')], replies:[{id:'r1', text:'ok', at:ago(5)}],
+      conversationSummary:'They agreed to Thursday.',
+      conversationSummaryAt: ago(4), conversationSummaryThrough: ago(5)});
+    const st = GB.summaryState(c);
+    assert.strictEqual(st.state, 'fresh');
+    assert.strictEqual(st.newSince, 0);
+  });
+
+  test('a message since makes it stale, and says how many', () => {
+    /* The failure this exists to prevent: somebody reads "waiting on her CFO",
+       misses that she replied yesterday to say the budget cleared, and walks
+       into the call with the wrong belief. Confident prose gets believed. */
+    const c = mk({messageLog:[out(10,'hi')],
+      replies:[{id:'r1', text:'ok', at:ago(5)}, {id:'r2', text:'budget cleared', at:ago(1)}],
+      conversationSummary:'Waiting on her CFO.',
+      conversationSummaryAt: ago(4), conversationSummaryThrough: ago(5)});
+    const st = GB.summaryState(c);
+    assert.strictEqual(st.state, 'stale');
+    assert.strictEqual(st.newSince, 1);
+  });
+
+  test('an internal note does not make a summary stale', () => {
+    /* A note is our own writing, not new information from them. Marking the
+       summary stale for it would cry wolf every time somebody left a note. */
+    const c = mk({messageLog:[out(10,'hi')],
+      threadNotes:[{id:'n1', body:'remember the CFO', author:'J', at:ago(1)}],
+      conversationSummary:'Thin so far.',
+      conversationSummaryAt: ago(5), conversationSummaryThrough: ago(10)});
+    assert.strictEqual(GB.summaryState(c).state, 'fresh');
+  });
+
+  test('a summary with no coverage mark is treated as stale, not current', () => {
+    // The safe direction for missing data: show it as out of date rather than
+    // vouch for something we cannot check.
+    const c = mk({messageLog:[out(10,'hi')],
+      conversationSummary:'Something.', conversationSummaryAt: ago(5),
+      conversationSummaryThrough: null});
+    assert.strictEqual(GB.summaryState(c).state, 'stale');
+  });
+
+  test('summaryThrough marks the newest real message, ignoring notes', () => {
+    const c = mk({messageLog:[out(10,'hi')], replies:[{id:'r1', text:'ok', at:ago(3)}],
+      threadNotes:[{id:'n1', body:'note', author:'J', at:ago(1)}]});
+    const through = Date.parse(GB.summaryThrough(c));
+    assert.ok(Math.abs(through - Date.parse(ago(3))) < 1500,
+      'summaryThrough followed a note instead of the newest message');
+  });
+
+  test('an empty conversation has nothing to cover', () => {
+    assert.strictEqual(GB.summaryThrough(mk({})), null);
+    assert.strictEqual(GB.summaryState(mk({})).state, 'none');
+  });
+
+  test('the prompt forbids calling a discussion an agreement', () => {
+    /* "She agreed to Friday" and "she asked about Friday" are different
+       facts, and blurring them sends somebody into a call with the wrong
+       belief. */
+    const st = GB.buildDefaultState(); st.senderName = 'Johnny';
+    const c = mk({messageLog:[out(10,'Thursday still good?')],
+      replies:[{id:'r1', text:'Friday might be better', at:ago(2)}]});
+    const p = GB.conversationSummaryPrompt(st, c);
+    assert.ok(/Never\s+describe something as agreed/.test(p.replace(/\s+/g,' ')),
+      'nothing stops it reporting a discussion as settled');
+    assert.ok(/asked about/.test(p), 'no guidance on how to phrase an open question');
+    assert.ok(/Do not invent/.test(p), 'nothing stops it inventing');
+    assert.ok(/Friday might be better/.test(p), 'their message is missing from the prompt');
+  });
+
+  test('the prompt asks for the three things somebody actually needs', () => {
+    const st = GB.buildDefaultState();
+    const p = GB.conversationSummaryPrompt(st, mk({messageLog:[out(5,'hi')]}));
+    assert.ok(/what was agreed/.test(p));
+    assert.ok(/asked for or objected to/.test(p));
+    assert.ok(/outstanding/.test(p));
+  });
+
+  test('notes reach the summary, marked as never sent', () => {
+    const st = GB.buildDefaultState();
+    const c = mk({messageLog:[out(5,'hi')],
+      threadNotes:[{id:'n1', body:'Budget sits with her CFO', author:'J', at:ago(4)}]});
+    const p = GB.conversationSummaryPrompt(st, c);
+    assert.ok(/Budget sits with her CFO/.test(p));
+    assert.ok(/internal note, never sent/.test(p));
+  });
+
+  test('what a summary covers is captured before the call, not after', () => {
+    /* A message arriving while the model is thinking is not described by the
+       summary, and stamping "now" afterwards would claim that it was. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function doSummarise'), app.indexOf('/* Queueing a message for later'));
+    const captured = fn.indexOf('var through = summaryThrough(client)');
+    const called = fn.indexOf('callGemini(');
+    assert.ok(captured !== -1 && captured < called,
+      'the coverage mark is taken after the model call, so a message arriving '
+        + 'mid-call would be wrongly counted as summarised');
+  });
+}
+
 console.log('\n--- a scheduled send, decided at send time ---');
 
 {

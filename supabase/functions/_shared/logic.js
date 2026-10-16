@@ -1928,6 +1928,14 @@ function sanitizeClient(raw, fallbackId){
     automationPausedUntil: (typeof raw.automationPausedUntil === 'string' &&
       !isNaN(Date.parse(raw.automationPausedUntil))) ? raw.automationPausedUntil : null,
     automationPausedNote: typeof raw.automationPausedNote === 'string' ? raw.automationPausedNote : '',
+    // A cached read of where the conversation stands, and the newest message
+    // it covers -- see summaryState, which uses the second to tell whether
+    // the first is still true.
+    conversationSummary: typeof raw.conversationSummary === 'string' ? raw.conversationSummary : '',
+    conversationSummaryAt: (typeof raw.conversationSummaryAt === 'string' &&
+      !isNaN(Date.parse(raw.conversationSummaryAt))) ? raw.conversationSummaryAt : null,
+    conversationSummaryThrough: (typeof raw.conversationSummaryThrough === 'string' &&
+      !isNaN(Date.parse(raw.conversationSummaryThrough))) ? raw.conversationSummaryThrough : null,
     /* What they texted back. Written by sms-webhook into sms_events and read
        in by data.js; never written from the browser, because the browser is
        not the thing that received them. */
@@ -3850,6 +3858,78 @@ function scheduledSendCheck(client, now, opts){
   }
 
   return {ok: true, reason: null};
+}
+
+/* Whether the cached summary still describes the conversation.
+
+   A summary that silently predates the last three messages is worse than no
+   summary, because it is confident and it will be believed -- somebody picks
+   up a thread, reads "waiting on her CFO", and misses that she replied
+   yesterday to say the budget cleared.
+
+   So staleness is a first-class state rather than something inferred from a
+   date. `through` holds the newest message the summary covered; anything
+   after it makes the summary old, and says by how much. */
+function summaryState(client){
+  if(!client || !client.conversationSummary){
+    return {state: 'none', text: '', at: null, newSince: 0};
+  }
+  var through = Date.parse(client.conversationSummaryThrough || '');
+  var newer = 0;
+  conversationThread(client).forEach(function(it){
+    if(it.dir === 'note') return;      // a note is not new information from them
+    if(isNaN(through) || it.t > through) newer++;
+  });
+  return {
+    state: newer > 0 ? 'stale' : 'fresh',
+    text: client.conversationSummary,
+    at: client.conversationSummaryAt || null,
+    newSince: newer
+  };
+}
+
+/* The newest moment a summary generated now would cover. Stored alongside the
+   summary so the comparison above has something to compare against. */
+function summaryThrough(client){
+  var newest = null;
+  conversationThread(client).forEach(function(it){
+    if(it.dir === 'note') return;
+    if(newest === null || it.t > newest) newest = it.t;
+  });
+  return newest === null ? null : new Date(newest).toISOString();
+}
+
+/* The prompt for that read.
+
+   Asks for the three things somebody picking a thread up actually needs, and
+   forbids the one thing that would make it dangerous: stating as agreed
+   anything that was only discussed. "She agreed to Friday" and "she asked
+   about Friday" are different facts, and a summary that blurs them sends
+   somebody into a call with the wrong belief. */
+function conversationSummaryPrompt(state, client){
+  var sender = (state && state.senderName) || 'the sender';
+  var thread = conversationThread(client);
+  var transcript = thread.map(function(it){
+    if(it.dir === 'note') return '[internal note, never sent] ' + it.text;
+    return (it.dir === 'in' ? firstName(client.name) : sender) + ': ' + it.text;
+  }).join('\n');
+
+  return [
+    'Summarise where this conversation between ' + sender + ' and ' +
+      firstName(client.name) + ' stands, for a colleague picking it up cold.',
+    'The conversation, oldest first:',
+    transcript || '(nothing yet)',
+    'Cover only these, and only if the conversation actually shows them:\n' +
+      '- what was agreed\n' +
+      '- what they asked for or objected to\n' +
+      '- what is outstanding, and who it is waiting on',
+    'Say "asked about" or "raised" for anything that was only discussed. Never ' +
+      'describe something as agreed, confirmed or booked unless the conversation ' +
+      'plainly says so -- a colleague will walk into a call believing it.',
+    'Do not invent anything that is not above. If the conversation is too thin ' +
+      'to summarise, say so in one line instead of filling the gap.',
+    'Three short bullet points at most. No preamble, no heading, no sign-off.'
+  ].join('\n\n');
 }
 
 function smsKeyword(body){
@@ -7543,6 +7623,9 @@ var __LOGIC_EXPORTS__ = {
   conversationList: conversationList,
   automationState: automationState,
   scheduledSendCheck: scheduledSendCheck,
+  summaryState: summaryState,
+  summaryThrough: summaryThrough,
+  conversationSummaryPrompt: conversationSummaryPrompt,
   setAutomationPause: setAutomationPause,
   replyDraftPrompt: replyDraftPrompt,
   canDraftReply: canDraftReply,
