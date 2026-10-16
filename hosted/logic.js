@@ -1926,6 +1926,19 @@ function sanitizeClient(raw, fallbackId){
     /* What they texted back. Written by sms-webhook into sms_events and read
        in by data.js; never written from the browser, because the browser is
        not the thing that received them. */
+    /* Internal notes. Never sent, never counted, never fed to the learning --
+       they live in their own table for exactly that reason. */
+    threadNotes: Array.isArray(raw.threadNotes) ? raw.threadNotes.filter(function(n){
+      return n && typeof n === 'object' && typeof n.body === 'string' && n.body.trim();
+    }).map(function(n){
+      return {
+        id: (typeof n.id === 'string' && n.id) ? n.id : uuid(),
+        body: n.body,
+        author: typeof n.author === 'string' ? n.author : '',
+        userId: typeof n.userId === 'string' ? n.userId : '',
+        at: (typeof n.at === 'string' && !isNaN(Date.parse(n.at))) ? n.at : nowISO()
+      };
+    }) : [],
     replies: Array.isArray(raw.replies) ? raw.replies.filter(function(r){
       return r && typeof r === 'object' && typeof r.text === 'string';
     }).map(function(r){
@@ -3291,10 +3304,24 @@ function conversationThread(client){
     var t = Date.parse(r.at);
     items.push({dir: 'in', at: r.at, t: isNaN(t) ? 0 : t, text: r.text || '', id: r.id});
   });
+  /* Notes sit in the sequence, because that is the whole point: "he mentioned
+     budget is tight" means something next to the message it followed and very
+     little on a separate screen.
+
+     They carry dir:'note', which nothing else in this file produces -- so any
+     code walking a thread has to decide what to do with them rather than
+     treating them as a message by default. */
+  (client.threadNotes || []).forEach(function(n){
+    var t = Date.parse(n.at);
+    items.push({dir: 'note', at: n.at, t: isNaN(t) ? 0 : t,
+                text: n.body || '', author: n.author || '', id: n.id});
+  });
+  /* Ties: outbound first, then inbound, then notes. A note written in the
+     same second as a message is a note ABOUT it, so it reads underneath. */
+  var rank = {out: 0, in: 1, note: 2};
   items.sort(function(a, b){
     if(a.t !== b.t) return a.t - b.t;
-    if(a.dir === b.dir) return 0;
-    return a.dir === 'out' ? -1 : 1;
+    return (rank[a.dir] || 0) - (rank[b.dir] || 0);
   });
   return items;
 }
@@ -3438,8 +3465,11 @@ function conversationList(state, now){
   Object.keys((state && state.clients) || {}).forEach(function(cid){
     var c = state.clients[cid];
     if(!c || c.ignored) return;
+    /* Notes are excluded here deliberately. A contact you have only written a
+       note about has no conversation, and counting notes as messages would
+       put them in the inbox and in every "messages" total. */
     var thread = conversationThread(c).filter(function(it){
-      return it.dir === 'in' || it.channel === 'sms';
+      return it.dir === 'in' || (it.dir === 'out' && it.channel === 'sms');
     });
     if(!thread.length) return;
     var last = thread[thread.length - 1];

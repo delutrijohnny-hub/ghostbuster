@@ -1693,6 +1693,18 @@ function renderMsgxThread(){
   var win = smsSendWindow(c, new Date());
 
   var bubbles = thread.map(function(it){
+    /* A note must be unmistakable. Full width, its own colour, and the words
+       "Internal note" on it -- not a bubble that merely sits on a different
+       side, because sides are what distinguishes the two PEOPLE in a
+       conversation and a note is neither of them. */
+    if(it.dir === 'note'){
+      return '<div class="msgx-note">' +
+        '<div class="msgx-note-head">Internal note' +
+        (it.author ? ' \u00b7 ' + escapeHtml(it.author) : '') +
+        ' \u00b7 ' + escapeHtml(shortWhen(it.at)) +
+        ' \u00b7 not sent to ' + escapeHtml(firstName(c.name)) + '</div>' +
+        escapeHtml(it.text) + '</div>';
+    }
     var ds = deliveryState(it);
     return '<div class="msgx-b ' + (it.dir === 'in' ? 'in' : 'out') + '">' +
       escapeHtml(it.text) +
@@ -1721,6 +1733,25 @@ function renderMsgxThread(){
       '<span class="msgx-sub">from ' + escapeHtml(STATE.smsNumber.phoneNumber) + '</span></div>';
   }
 
+  /* The note composer is always available, even when texting is not.
+
+     A contact who opted out, or whose number is not textable, is exactly the
+     one somebody needs to leave context on. Tying notes to the ability to
+     send would remove them precisely when they matter most. */
+  var noteMode = UI.msgxNote === true;
+  var modeTabs =
+    '<div class="msgx-modes">' +
+      '<button class="msgx-mode' + (noteMode ? '' : ' on') + '" data-action="msgx-mode" data-mode="reply">Reply</button>' +
+      '<button class="msgx-mode note' + (noteMode ? ' on' : '') + '" data-action="msgx-mode" data-mode="note">Internal note</button>' +
+    '</div>';
+  if(noteMode){
+    composer = '<textarea id="msgx-note" rows="2" placeholder="Note for your team \u2014 ' +
+      escapeHtml(firstName(c.name)) + ' never sees this\u2026"></textarea>' +
+      '<div class="row"><button class="btn btn-sm btn-note" data-action="msgx-add-note" data-cid="' +
+      escapeHtml(c.id) + '">Add note</button>' +
+      '<span class="msgx-sub">Visible to your team only.</span></div>';
+  }
+
   box.innerHTML =
     '<div class="msgx-head">' +
       '<div><button class="btn btn-sm btn-ghost msgx-back" data-action="msgx-back">\u2039 All</button> ' +
@@ -1729,7 +1760,7 @@ function renderMsgxThread(){
       '<button class="btn btn-sm" data-action="open-client" data-cid="' + escapeHtml(c.id) + '">Open contact</button>' +
     '</div>' +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
-    '<div class="msgx-compose">' + composer + '</div>';
+    '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>';
 
   var scroller = el('msgx-msgs');
   if(scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -4046,7 +4077,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-98f1d183';
+var BUILD_STAMP = '20261015-4c05ea7e';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5371,6 +5402,13 @@ document.addEventListener('click', function(ev){
     case 'msgx-send':
       doMsgxSend(cid, target);
       break;
+    case 'msgx-mode':
+      UI.msgxNote = target.getAttribute('data-mode') === 'note';
+      renderMsgxThread();
+      break;
+    case 'msgx-add-note':
+      doAddNote(cid, target);
+      break;
     case 'new-device-token':
       createDeviceToken(target);
       break;
@@ -6333,6 +6371,47 @@ function revokeDeviceToken(id){
    Deliberately the same path as the contact screen's reply box -- one way to
    send a free-text message, so the cadence rules, the opt-out check and the
    logging cannot drift between two places that look the same to a user. */
+/* Adding an internal note.
+
+   It never touches message_log, send-sms, or any provider. Notes live in
+   their own table precisely so "this cannot be sent" is a property of where
+   it is stored, not of remembering to check a flag before sending. */
+function doAddNote(cid, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var box = el('msgx-note');
+  var body = box && box.value.trim();
+  if(!body){ showToast('Nothing to note yet.'); return; }
+  if(!STATE.userId || !STATE.orgId){
+    // org_id is NOT NULL and the insert would be rejected. Saying so beats a
+    // silent failure that looks like the note was saved.
+    showToast('Could not tell which account you are in \u2014 try reloading.');
+    return;
+  }
+
+  if(target){ target.disabled = true; target.textContent = 'Saving\u2026'; }
+  var at = nowISO();
+  window.GB_SUPABASE.from('conversation_notes')
+    .insert({client_id: cid, org_id: STATE.orgId,
+             user_id: STATE.userId, body: body, created_at: at})
+    .then(function(res){
+      if(target){ target.disabled = false; target.textContent = 'Add note'; }
+      if(res && res.error){ showToast('Could not save that note.'); return; }
+      client.threadNotes = client.threadNotes || [];
+      client.threadNotes.push({
+        id: uid(), body: body, userId: STATE.userId,
+        author: (STATE.teamNames && STATE.teamNames[STATE.userId]) || STATE.senderName || '',
+        at: at
+      });
+      if(box) box.value = '';
+      renderMsgxThread();
+      showToast('Note added. ' + firstName(client.name) + ' will not see it.');
+    }, function(){
+      if(target){ target.disabled = false; target.textContent = 'Add note'; }
+      showToast('Could not save that note.');
+    });
+}
+
 function doMsgxSend(cid, target){
   var box = el('msgx-text');
   var text = box && box.value.trim();

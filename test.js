@@ -6768,6 +6768,132 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- internal notes ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (sent, replies, notes) => GB.sanitizeClient({
+    id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+    messageLog: (sent||[]).map((h,i)=>({id:'m'+i, stage:'welcome', variantId:'w1-v2',
+      channel:'sms', text:'sent '+h, sentAt:ago(h), responded:false, reviewed:false})),
+    replies: (replies||[]).map((h,i)=>({id:'r'+i, text:'reply '+h, at:ago(h)})),
+    threadNotes: (notes||[]).map((n,i)=>({id:'n'+i, body:n[1], author:'Johnny', at:ago(n[0])}))
+  });
+
+  test('a note sits in the thread, in time order', () => {
+    /* The point of putting them here: "he mentioned budget is tight" means
+       something next to the message it followed and very little on its own
+       screen. */
+    const c = mk([40, 10], [20], [[15, 'Budget is tight, go gently']]);
+    const t = GB.conversationThread(c);
+    assert.deepStrictEqual(t.map(x => x.dir), ['out','in','note','out']);
+    assert.strictEqual(t[2].text, 'Budget is tight, go gently');
+    assert.strictEqual(t[2].author, 'Johnny');
+  });
+
+  test('a note written in the same second reads under the message', () => {
+    // It is a note ABOUT that message, so it belongs below it.
+    const at = ago(5);
+    const c = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+      messageLog: [{id:'m1', stage:'welcome', variantId:'w1', channel:'sms', text:'out',
+                    sentAt:at, responded:false, reviewed:false}],
+      replies: [{id:'r1', text:'in', at:at}],
+      threadNotes: [{id:'n1', body:'note', author:'J', at:at}]
+    });
+    assert.deepStrictEqual(GB.conversationThread(c).map(x => x.dir), ['out','in','note']);
+  });
+
+  test('a note carries a direction nothing else produces', () => {
+    /* dir:'note' is the guard. Anything walking a thread has to decide what
+       to do with it rather than treating it as a message by default. */
+    const t = GB.conversationThread(mk([10], [], [[5, 'internal']]));
+    const note = t.find(x => x.dir === 'note');
+    assert.ok(note);
+    assert.notStrictEqual(note.dir, 'out');
+    assert.notStrictEqual(note.dir, 'in');
+  });
+
+  test('a note is never counted as a message', () => {
+    /* It must not enter reply rates, the bandit, or any "messages" total.
+       A contact with only a note has no conversation at all. */
+    const st = GB.buildDefaultState();
+    st.clients = {c1: mk([], [], [[2, 'just a note']])};
+    assert.deepStrictEqual(GB.conversationList(st, new Date()), [],
+      'a contact with only a note showed up as a conversation');
+  });
+
+  test('a note does not make a conversation unread', () => {
+    // Unread means THEY said something you have not seen. Your own note is
+    // not news.
+    const st = GB.buildDefaultState();
+    st.clients = {c1: mk([10], [], [[1, 'my note']])};
+    st.reads = {};
+    assert.strictEqual(GB.unreadCount(st.clients.c1, null), 0);
+  });
+
+  test('a note changes who spoke last in neither direction', () => {
+    /* Both ways round, because a note is not a turn in the conversation.
+
+       Writing one after your own send must not make the contact look like
+       they are waiting; writing one after THEIR reply must not hide that
+       they are. My first version of this test only checked one side and
+       asserted the wrong answer for it. */
+    const st = GB.buildDefaultState();
+    st.reads = {};
+
+    // They replied last; a note written since must not mask that.
+    st.clients = {c1: mk([10], [5], [[1, 'wrote this after their reply']])};
+    const theirs = GB.conversationList(st, new Date())[0];
+    assert.strictEqual(theirs.awaitingReply, true, 'a note hid that they are waiting');
+    assert.strictEqual(theirs.lastDir, 'in');
+
+    // We sent last; a note written since must not invent a reply.
+    st.clients = {c1: mk([1], [5], [[0.5, 'wrote this after my send']])};
+    const ours = GB.conversationList(st, new Date())[0];
+    assert.strictEqual(ours.awaitingReply, false, 'a note made it look like they replied');
+    assert.strictEqual(ours.lastDir, 'out');
+  });
+
+  test('malformed and empty notes are dropped', () => {
+    const c = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+      messageLog: [],
+      threadNotes: [{id:'n1', body:'kept', at:ago(1)}, {id:'n2', body:'   '},
+                    {body:123}, null, 'nope', {}]
+    });
+    assert.strictEqual(c.threadNotes.length, 1);
+    assert.strictEqual(c.threadNotes[0].body, 'kept');
+  });
+
+  test('notes live in their own table, never in message_log', () => {
+    /* The structural guarantee. Everything reading message_log treats a row
+       as something sent to a customer -- a note in there would be counted as
+       an unanswered text, enter the learning, and could in principle be
+       handed to a provider. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function doAddNote'), app.indexOf('function doMsgxSend'));
+    assert.ok(/from\('conversation_notes'\)/.test(fn), 'notes are not written to their own table');
+    assert.ok(!/message_log/.test(fn), 'the note path touches message_log');
+    assert.ok(!/send-sms/.test(fn), 'the note path can reach the send function');
+    assert.ok(/not see it|never sees this/.test(app),
+      'nothing tells the user a note is private');
+  });
+
+  test('the note composer stays available when texting is not', () => {
+    /* A contact who opted out is exactly the one somebody needs to leave
+       context on. Tying notes to sendability would remove them when they
+       matter most. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderMsgxThread'), app.indexOf('function renderMsgxProfile'));
+    const modeIdx = fn.indexOf('var noteMode');
+    const blockedIdx = fn.indexOf("route.mode === 'blocked'");
+    assert.ok(modeIdx > blockedIdx,
+      'the note composer is decided before the blocked check, so it may be skipped');
+    assert.ok(/msgx-modes/.test(fn), 'there is no way to switch to a note');
+  });
+}
+
 console.log('\n--- unread ---');
 
 {

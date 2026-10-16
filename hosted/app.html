@@ -1253,6 +1253,22 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-tag.unread{background:var(--green-soft);color:var(--green);}
 .msgx-row.unread .r-name{font-weight:800;}
 .msgx-row.unread .r-last{color:var(--ink);}
+/* An internal note is neither side of the conversation, so it is not a
+   bubble on a side. Full width, amber, and labelled -- because the one thing
+   that must never happen is somebody reading a note as a message the client
+   received. */
+.msgx-note{align-self:stretch;background:var(--amber-soft);border:1px solid var(--amber);
+  border-left-width:3px;border-radius:8px;padding:7px 10px;font-size:13px;line-height:1.4;
+  white-space:pre-wrap;word-wrap:break-word;}
+.msgx-note-head{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--amber);margin-bottom:3px;}
+.msgx-modes{display:flex;gap:4px;margin-bottom:7px;}
+.msgx-mode{background:none;border:1px solid var(--border);border-radius:999px;padding:2px 10px;
+  font:inherit;font-size:11.5px;cursor:pointer;color:var(--ink-faint);}
+.msgx-mode.on{background:var(--red-soft);border-color:var(--red);color:var(--red);font-weight:600;}
+.msgx-mode.note.on{background:var(--amber-soft);border-color:var(--amber);color:var(--amber);}
+.msgx-compose.noting textarea{border-color:var(--amber);background:var(--amber-soft);}
+.btn-note{background:var(--amber);color:#fff;border-color:var(--amber);}
 
 .msgx-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;}
 .msgx-b{max-width:74%;padding:7px 10px;border-radius:12px;font-size:13px;line-height:1.4;
@@ -1664,9 +1680,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261015-98f1d183"></script>
-<script src="data.js?v=20261015-98f1d183"></script>
-<script src="app.js?v=20261015-98f1d183"></script>
-<script src="auth.js?v=20261015-98f1d183"></script>
+<script src="logic.js?v=20261015-4c05ea7e"></script>
+<script src="data.js?v=20261015-4c05ea7e"></script>
+<script src="app.js?v=20261015-4c05ea7e"></script>
+<script src="auth.js?v=20261015-4c05ea7e"></script>
 </body>
 </html>

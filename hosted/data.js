@@ -110,9 +110,13 @@ async function loadOrgRole(sb, uid){
     if(!row) return {canInvite:false, orgName:''};
     return {
       canInvite: row.role === 'owner' || row.role === 'admin',
-      orgName: (row.organizations && row.organizations.name) || ''
+      orgName: (row.organizations && row.organizations.name) || '',
+      // Needed to write anything org-scoped from the browser -- an internal
+      // note carries org_id, and a NOT NULL column is a poor place to find
+      // out it was never loaded.
+      orgId: row.org_id || ''
     };
-  }catch(e){ return {canInvite:false, orgName:''}; }
+  }catch(e){ return {canInvite:false, orgName:'', orgId:''}; }
 }
 
 async function loadPendingInvites(sb){
@@ -669,6 +673,9 @@ async function loadState(){
       // these rows by hand rather than through sanitizeClient, so a default
       // on the sanitizer does not reach them.
       replies: [],
+      // Internal notes, filled below. Never written back by rowClient: they
+      // live in their own table so nothing can send them by accident.
+      threadNotes: [],
       name: row.name, phone: row.phone, email: row.email,
       youtubeLink: row.youtube_link, meetLink: row.meet_link,
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
@@ -1000,12 +1007,46 @@ async function loadState(){
     if(row && row.client_id) state.reads[row.client_id] = row.last_read_at;
   });
 
+  /* Who wrote a note, by name.
+
+     A note is only useful as team context if you can tell whose it is. Names
+     come from app_settings.sender_name, which is what people already sign
+     their messages with. If RLS withholds a teammate's row this degrades to
+     an empty name rather than failing -- an unattributed note is still worth
+     showing. */
+  state.teamNames = {};
+  var namesRes = await sb.from('app_settings').select('user_id, sender_name');
+  ((namesRes && namesRes.data) || []).forEach(function(r){
+    var n = String((r && r.sender_name) || '').trim();
+    if(n && r.user_id) state.teamNames[r.user_id] = n;
+  });
+
+  /* Internal notes, attached to the conversations they belong to.
+
+     Org-scoped by RLS, because a note is team context -- the person covering
+     a colleague's call needs to know what was said. Degrades to none. */
+  var notesRes = await sb.from('conversation_notes')
+    .select('id, client_id, user_id, body, created_at')
+    .order('created_at', {ascending: true})
+    .limit(2000);
+  ((notesRes && notesRes.data) || []).forEach(function(row){
+    if(!row || !row.client_id || !state.clients[row.client_id]) return;
+    state.clients[row.client_id].threadNotes.push({
+      id: row.id ? String(row.id) : null,
+      body: row.body || '',
+      userId: row.user_id || '',
+      author: (state.teamNames && state.teamNames[row.user_id]) || '',
+      at: row.created_at
+    });
+  });
+
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.
   var orgRole = await loadOrgRole(sb, uid);
   state.canInvite = orgRole.canInvite;
   state.orgName = orgRole.orgName;
+  state.orgId = orgRole.orgId || '';
   state.pendingInvites = await loadPendingInvites(sb);
   state.sentInvites = state.canInvite ? await loadSentInvites(sb, uid) : [];
 
