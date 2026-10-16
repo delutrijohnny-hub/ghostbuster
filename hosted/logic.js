@@ -3632,6 +3632,106 @@ function messagingSetup(state, now){
   };
 }
 
+/* The prompt for drafting a reply to what somebody actually said.
+
+   Different job from buildAIPrompt, which writes the next cadence touch from
+   a template and some notes. This one answers a message. The conversation is
+   the input, so it has to carry the conversation -- a draft written without
+   reading what they said is a template with extra steps.
+
+   Three things it is built to avoid, each taken from a real failure in this
+   product:
+
+   It does not INTERPRET. A model that decides "she agreed to Friday" from
+   "Friday might work" hands the salesperson a confirmed decision the customer
+   never made. It drafts a reply; it does not report what the customer meant.
+
+   It does not INVENT. "I am assuming this is with an organization within your
+   town" went out to a real customer, built from a one-line note. A guess
+   stated as fact reads to them as a claim.
+
+   It does not COMMIT. Times, prices and promises are the salesperson's to
+   make. A draft that offers Tuesday at 3 has committed them to a slot nobody
+   checked.
+
+   Internal notes ARE included. "Budget sign-off sits with her CFO" is exactly
+   the context that should shape a reply, and leaving it out makes the feature
+   weak enough not to be worth having. Worth knowing that this means notes
+   travel to the model along with the conversation. */
+var REPLY_DRAFT_TURNS = 10;
+
+function replyDraftPrompt(state, client, opts){
+  opts = opts || {};
+  var sender = (state && state.senderName) || 'the sender';
+  var thread = conversationThread(client);
+  var recent = thread.slice(-REPLY_DRAFT_TURNS);
+
+  var transcript = recent.map(function(it){
+    if(it.dir === 'note') return '[internal note, never sent] ' + it.text;
+    return (it.dir === 'in' ? firstName(client.name) : sender) + ': ' + it.text;
+  }).join('\n');
+
+  /* The last thing THEY said is the thing being answered. Without naming it
+     the model tends to answer the whole thread, or the most recent thing of
+     any kind -- which is often our own last message. */
+  var lastIn = null;
+  for(var i = thread.length - 1; i >= 0; i--){
+    if(thread[i].dir === 'in'){ lastIn = thread[i]; break; }
+  }
+
+  var voice = voiceExamples(state, 'welcome', client, sender);
+  var lines = [];
+
+  lines.push('You are drafting ONE text message for ' + sender + ' to send to ' +
+    firstName(client.name) + ', replying to what they just said.');
+
+  lines.push('The conversation so far, oldest first:');
+  lines.push(transcript || '(nothing yet)');
+
+  if(lastIn){
+    lines.push('The message you are replying to is: "' + lastIn.text + '"');
+  } else {
+    lines.push('They have not replied yet, so write a light follow-up rather than an answer.');
+  }
+
+  if(voice.own){
+    lines.push('Match ' + sender + '\'s own writing, shown here. Copy the rhythm, ' +
+      'punctuation and level of formality:');
+    lines.push(voice.examples.filter(function(e){ return e.mine; })
+      .map(function(e){ return '- "' + e.text + '"'; }).join('\n'));
+  } else {
+    lines.push('Match the voice of these messages ' + sender + ' sends:');
+    lines.push(voice.examples.slice(0, 3)
+      .map(function(e){ return '- "' + e.text + '"'; }).join('\n'));
+  }
+
+  lines.push('Answer only what they actually asked or said. Do not decide what they meant, ' +
+    'do not restate their position back to them as settled, and never begin a sentence ' +
+    '"I am assuming" or "it sounds like".');
+  lines.push('Do not offer, confirm or imply any specific time, date, price or commitment ' +
+    'unless it appears verbatim above. If they asked for something that needs checking, ' +
+    'say it will be checked.');
+  lines.push('Complete sentences with full stops and apostrophes. Not "id" or "ill" or "wont".');
+  lines.push('Under 40 words. It is read on a lock screen.');
+  lines.push('Output ONLY the message text. No quotes, no preamble, no explanation.');
+
+  return lines.join('\n\n');
+}
+
+/* Whether a reply is worth offering to draft.
+
+   Only when they spoke last and nothing has gone back. Offering to draft a
+   reply to a conversation you already answered is noise, and offering one
+   where they never wrote is just the cadence template under another name. */
+function canDraftReply(client){
+  if(!client) return false;
+  var thread = conversationThread(client).filter(function(it){
+    return it.dir === 'in' || (it.dir === 'out' && it.channel === 'sms');
+  });
+  if(!thread.length) return false;
+  return thread[thread.length - 1].dir === 'in';
+}
+
 function smsKeyword(body){
   /* Lowercase, then drop leading and trailing non-alphanumerics so "STOP.",
      "'stop'" and "  stop  " all count, while leaving the interior alone --
@@ -7321,6 +7421,9 @@ var __LOGIC_EXPORTS__ = {
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,
+  replyDraftPrompt: replyDraftPrompt,
+  canDraftReply: canDraftReply,
+  REPLY_DRAFT_TURNS: REPLY_DRAFT_TURNS,
   unreadCount: unreadCount,
   totalUnread: totalUnread,
   deliveryState: deliveryState,

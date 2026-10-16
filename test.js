@@ -6768,6 +6768,142 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- drafting a reply ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (sent, replies, notes) => {
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    st.clients = {};
+    st.clients.c1 = GB.sanitizeClient({
+      id:'c1', name:'Sarah Kim', phone:'2135550100', timezone:'America/New_York', status:'Booked',
+      messageLog: (sent||[]).map((x,i)=>({id:'m'+i, stage:'welcome', variantId:'w1-v2',
+        channel:'sms', text:x[1], sentAt:ago(x[0]), responded:false, reviewed:false})),
+      replies: (replies||[]).map((x,i)=>({id:'r'+i, text:x[1], at:ago(x[0])})),
+      threadNotes: (notes||[]).map((x,i)=>({id:'n'+i, body:x[1], author:'Johnny', at:ago(x[0])}))
+    });
+    return st;
+  };
+
+  test('it is only offered when they spoke last', () => {
+    /* Offering to draft a reply to a conversation you already answered is
+       noise; offering one where they never wrote is the cadence template
+       under another name. */
+    const theirs = mk([[30,'Hi']], [[4,'Can we move it?']]);
+    assert.strictEqual(GB.canDraftReply(theirs.clients.c1), true);
+    const ours = mk([[30,'Hi'],[1,'Any thoughts?']], [[4,'Can we move it?']]);
+    assert.strictEqual(GB.canDraftReply(ours.clients.c1), false);
+    const silent = mk([[30,'Hi']], []);
+    assert.strictEqual(GB.canDraftReply(silent.clients.c1), false);
+    assert.strictEqual(GB.canDraftReply(null), false);
+  });
+
+  test('a note does not count as having answered them', () => {
+    // Writing yourself a note is not replying to the customer.
+    const st = mk([[30,'Hi']], [[4,'Can we move it?']], [[1,'check Colin first']]);
+    assert.strictEqual(GB.canDraftReply(st.clients.c1), true);
+  });
+
+  test('the prompt carries the conversation, not just the last line', () => {
+    const st = mk([[30,'Hey Sarah, locked in for Thursday.']], [[4,'Can we push to Friday?']]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/locked in for Thursday/.test(p), 'the earlier message is missing');
+    assert.ok(/Can we push to Friday\?/.test(p), 'their message is missing');
+    assert.ok(/Johnny: /.test(p) && /Sarah: /.test(p), 'the transcript does not say who said what');
+  });
+
+  test('it names the message being answered', () => {
+    /* Without this the model answers the whole thread, or the most recent
+       thing of any kind -- which is often our own last message. */
+    const st = mk([[30,'First'],[20,'Second']], [[4,'The actual question?']]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/The message you are replying to is: "The actual question\?"/.test(p), p.slice(0,400));
+  });
+
+  test('internal notes reach the draft, labelled as never sent', () => {
+    /* They are the context that should shape a reply. Labelled so the model
+       does not quote one back to the customer. */
+    const st = mk([[30,'Hi']], [[4,'What is the price?']], [[3,'Budget sits with her CFO']]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/Budget sits with her CFO/.test(p), 'the note is missing');
+    assert.ok(/internal note, never sent/.test(p), 'the note is not marked as internal');
+  });
+
+  test('it is told not to interpret, invent or commit', () => {
+    /* Each of these came from a real failure. A model that decides "she
+       agreed to Friday" from "Friday might work" hands over a decision the
+       customer never made. */
+    const st = mk([[30,'Hi']], [[4,'Friday might work']]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/Do not decide what they meant/.test(p), 'nothing stops it interpreting');
+    assert.ok(/I am assuming/.test(p), 'the speculation guard is gone');
+    assert.ok(/time, date, price or commitment/.test(p), 'nothing stops it committing to a slot');
+    assert.ok(/Under 40 words/.test(p), 'no length limit');
+  });
+
+  test('it prefers their own wording over stock copy', () => {
+    const st = mk([[30,'Hi']], [[4,'Question?']]);
+    st.variants.welcome = st.variants.welcome.concat(
+      [{id:'welcome_custom_0', text:'Yo {name} - shout if anything changes.', builtin:false}]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/own writing/.test(p), 'it does not say the examples are theirs');
+    assert.ok(/Yo Sarah - shout if anything changes\./.test(p), 'their wording is not in the prompt');
+  });
+
+  test('a brand new account still gets a usable prompt', () => {
+    const st = mk([[30,'Hi']], [[4,'Question?']]);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(p.length > 200);
+    assert.ok(!/own writing/.test(p), 'it claimed stock copy was theirs');
+  });
+
+  test('a long conversation is trimmed rather than sent whole', () => {
+    const sent = [], replies = [];
+    for (let i = 30; i > 0; i--) sent.push([i, 'message ' + i]);
+    replies.push([0.5, 'the latest thing they said']);
+    const st = mk(sent, replies);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/the latest thing they said/.test(p), 'the newest turn was trimmed away');
+    assert.ok(!/message 30/.test(p), 'the whole history is being sent');
+  });
+
+  test('a suggestion can never reach a customer without a person reading it', () => {
+    /* The guarantee that makes this safe to ship. There is no "draft and
+       send" path: the draft lands in the composer and stops. An uncertain
+       interpretation treated as a confirmed decision is the failure this
+       guards against, and a human reading it is the only reliable
+       enforcement. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function doDraftReply'), app.indexOf('/* Adding an internal note'));
+    assert.ok(/callGemini\(replyDraftPrompt/.test(fn), 'the draft does not use the reply prompt');
+    assert.ok(/b\.value = draft/.test(fn), 'the draft does not land in the composer');
+    assert.ok(!/doMsgxSend|send-sms|doSendReply/.test(fn),
+      'the draft path can reach the send path');
+  });
+
+  test('a half-typed message is not silently replaced', () => {
+    // A draft merged into something half-written produces a message nobody
+    // wrote; overwriting without asking loses what they were saying.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function doDraftReply'), app.indexOf('/* Adding an internal note'));
+    assert.ok(/confirm\(/.test(fn), 'it overwrites whatever was already typed without asking');
+  });
+
+  test('the draft button is hidden when there is nothing to answer', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderMsgxThread'), app.indexOf('function renderMsgxProfile'));
+    assert.ok(/canDraftReply\(c\)/.test(fn),
+      'the draft button shows regardless of whether they said anything');
+  });
+
+  test('a contact with no conversation does not throw', () => {
+    const st = mk([], []);
+    const p = GB.replyDraftPrompt(st, st.clients.c1);
+    assert.ok(/have not replied yet/.test(p), p.slice(0,300));
+  });
+}
+
 console.log('\n--- internal notes ---');
 
 {

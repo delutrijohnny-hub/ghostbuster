@@ -1726,10 +1726,21 @@ function renderMsgxThread(){
     composer = '<div class="msgx-sub">Too late to text them \u2014 ' + escapeHtml(win.reason) +
       '. Texting runs 8am\u20139pm their time.</div>';
   } else {
+    /* The draft button only appears when they spoke last.
+
+       Offering to draft a reply to a conversation you already answered is
+       noise, and the draft itself always lands in this box for editing --
+       there is no path from a suggestion to a sent message that does not go
+       through a person reading it and pressing Send. */
     composer = '<textarea id="msgx-text" rows="2" placeholder="Write back to ' +
       escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
       '<div class="row"><button class="btn btn-sm btn-primary" data-action="msgx-send" data-cid="' +
       escapeHtml(c.id) + '">Send</button>' +
+      (canDraftReply(c)
+        ? '<button class="btn btn-sm btn-ghost" data-action="msgx-draft" data-cid="' +
+          escapeHtml(c.id) + '" title="Writes a suggested reply into the box for you to edit. ' +
+          'Nothing is sent.">\u2728 Draft a reply</button>'
+        : '') +
       '<span class="msgx-sub">from ' + escapeHtml(STATE.smsNumber.phoneNumber) + '</span></div>';
   }
 
@@ -4077,7 +4088,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-4c05ea7e';
+var BUILD_STAMP = '20261015-b254f2bd';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5409,6 +5420,9 @@ document.addEventListener('click', function(ev){
     case 'msgx-add-note':
       doAddNote(cid, target);
       break;
+    case 'msgx-draft':
+      doDraftReply(cid, target);
+      break;
     case 'new-device-token':
       createDeviceToken(target);
       break;
@@ -6371,6 +6385,39 @@ function revokeDeviceToken(id){
    Deliberately the same path as the contact screen's reply box -- one way to
    send a free-text message, so the cadence rules, the opt-out check and the
    logging cannot drift between two places that look the same to a user. */
+/* Drafting a suggested reply.
+
+   It writes into the composer and stops. There is deliberately no "draft and
+   send" path: a suggestion the model produced has to be read by the person
+   whose name is on the message before it goes anywhere. The spec for this
+   says an uncertain interpretation must never be treated as a confirmed
+   customer decision, and the only reliable enforcement is a human reading it.
+
+   The existing box is replaced rather than appended to -- a draft merged into
+   something half-typed produces a message nobody wrote. */
+function doDraftReply(cid, target){
+  var client = STATE.clients[cid];
+  if(!client) return;
+  var box = el('msgx-text');
+  if(!box) return;
+  if(box.value.trim() && !confirm('Replace what you have typed with a suggested reply?')) return;
+
+  var label = target ? target.textContent : '';
+  if(target){ target.disabled = true; target.textContent = 'Thinking\u2026'; }
+
+  callGemini(replyDraftPrompt(STATE, client)).then(function(text){
+    if(target){ target.disabled = false; target.textContent = label; }
+    var draft = String(text || '').trim().replace(/^["\u201c]|["\u201d]$/g, '');
+    if(!draft){ showToast('Nothing came back \u2014 try again.'); return; }
+    var b = el('msgx-text');
+    if(b){ b.value = draft; b.focus(); }
+    showToast('Draft ready \u2014 read it before sending.');
+  }).catch(function(e){
+    if(target){ target.disabled = false; target.textContent = label; }
+    showToast('Could not write a draft \u2014 ' + (e && e.message ? e.message : 'try again') + '.');
+  });
+}
+
 /* Adding an internal note.
 
    It never touches message_log, send-sms, or any provider. Notes live in
