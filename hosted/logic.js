@@ -1923,6 +1923,11 @@ function sanitizeClient(raw, fallbackId){
        see rowClient in data.js, which deliberately omits it -- because a save
        carrying a stale 'ok' would silently un-opt-out somebody. */
     smsStatus: typeof raw.smsStatus === 'string' ? raw.smsStatus : 'ok',
+    // An explicit hold on follow-ups for this contact. Null means automation
+    // runs; a timestamp means it is held until then.
+    automationPausedUntil: (typeof raw.automationPausedUntil === 'string' &&
+      !isNaN(Date.parse(raw.automationPausedUntil))) ? raw.automationPausedUntil : null,
+    automationPausedNote: typeof raw.automationPausedNote === 'string' ? raw.automationPausedNote : '',
     /* What they texted back. Written by sms-webhook into sms_events and read
        in by data.js; never written from the browser, because the browser is
        not the thing that received them. */
@@ -2569,6 +2574,14 @@ function computeDue(client, now){
   if(pauseUntil !== null && now.getTime() < pauseUntil){
     due = due.filter(function(stage){ return !!PAUSE_EXEMPT_STAGES[stage]; });
   }
+
+  /* Somebody said stop. Nothing is exempt, deliberately -- the reply hold
+     infers engagement and lets reminders through, but this is an instruction,
+     and a system that keeps texting after being told to stop is worse than
+     one that never offered the control. Last, so it cannot be undone by any
+     rule above it. */
+  var held = Date.parse(client.automationPausedUntil || '');
+  if(!isNaN(held) && now.getTime() < held) return [];
 
   return due;
 }
@@ -3730,6 +3743,52 @@ function canDraftReply(client){
   });
   if(!thread.length) return false;
   return thread[thread.length - 1].dir === 'in';
+}
+
+/* Why follow-ups are or are not running for this contact.
+
+   Four different things can hold a cadence, and before this they were only
+   visible as an absence: the contact simply did not appear in today's list
+   and nobody could say why. "Why am I not being told to text her" is a
+   question somebody asks out loud.
+
+   Ordered by what actually decides it, most final first. A contact who is
+   archived is not merely paused, and saying "paused until Friday" about
+   somebody whose status already ended the sequence would be wrong. */
+function automationState(client, now){
+  now = now || new Date();
+  if(!client) return {running: false, reason: 'none', label: 'No contact', until: null};
+
+  if(client.ignored){
+    return {running: false, reason: 'archived', until: null,
+            label: 'Archived \u2014 no follow-ups at all'};
+  }
+  if(stopsCadence(client.status)){
+    return {running: false, reason: 'status', until: null,
+            label: 'Sequence finished \u2014 status is ' + (client.status || 'set')};
+  }
+  var held = Date.parse(client.automationPausedUntil || '');
+  if(!isNaN(held) && now.getTime() < held){
+    return {running: false, reason: 'manual', until: held,
+            label: 'Paused by you until ' + fmtDate(new Date(held), client.timezone),
+            note: client.automationPausedNote || ''};
+  }
+  var replied = replyPauseUntil(client);
+  if(replied !== null && now.getTime() < replied){
+    return {running: false, reason: 'reply', until: replied,
+            label: 'Holding until ' + fmtDate(new Date(replied), client.timezone) +
+                   ' \u2014 they replied. Appointment reminders still go.'};
+  }
+  return {running: true, reason: null, until: null, label: 'Follow-ups are running'};
+}
+
+/* Pause or resume. Setting until to null resumes. */
+function setAutomationPause(state, clientId, until, note){
+  var client = state && state.clients && state.clients[clientId];
+  if(!client) return null;
+  client.automationPausedUntil = until || null;
+  client.automationPausedNote = until ? (note || '') : '';
+  return client;
 }
 
 function smsKeyword(body){
@@ -7421,6 +7480,8 @@ var __LOGIC_EXPORTS__ = {
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,
+  automationState: automationState,
+  setAutomationPause: setAutomationPause,
   replyDraftPrompt: replyDraftPrompt,
   canDraftReply: canDraftReply,
   REPLY_DRAFT_TURNS: REPLY_DRAFT_TURNS,

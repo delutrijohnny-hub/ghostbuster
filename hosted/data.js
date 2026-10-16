@@ -669,6 +669,8 @@ async function loadState(){
       // below, so a browser save cannot carry a stale 'ok' over the top of
       // an opt-out the webhook recorded while this tab was open.
       smsStatus: row.sms_status || 'ok',
+      automationPausedUntil: row.automation_paused_until || null,
+      automationPausedNote: row.automation_paused_note || '',
       // Filled below from sms_events. Declared here because loadState builds
       // these rows by hand rather than through sanitizeClient, so a default
       // on the sanitizer does not reach them.
@@ -1116,6 +1118,11 @@ function rowClient(c, uid){
     // distinguishable from an event genuinely titled nothing.
     event_title: c.eventTitle || null,
     email_status: c.emailStatus || 'ok',
+    /* Written back, unlike sms_status: a pause is the browser's to set. It is
+       an instruction from the person using the app, not something a provider
+       told us. */
+    automation_paused_until: c.automationPausedUntil || null,
+    automation_paused_note: c.automationPausedNote || null,
     name: c.name, phone: c.phone, email: c.email,
     youtube_link: c.youtubeLink, meet_link: c.meetLink,
     call_date_time: c.callDateTime, booked_date: c.bookedDate,

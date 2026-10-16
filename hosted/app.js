@@ -1784,19 +1784,35 @@ function renderMsgxProfile(){
   var now = new Date();
   var prog = cadenceProgress(c, now);
   var tz = tzChipInfo(c, now);
-  var pause = replyPauseUntil(c);
+  var auto = automationState(c, now);
 
   function field(label, value){
     return '<div class="msgx-pfield"><label>' + escapeHtml(label) + '</label>' +
       '<div class="v">' + value + '</div></div>';
   }
+  /* Automation says what is happening and offers the one control that
+     changes it. "Why am I not being told to text her" was previously
+     answerable only by inference from an empty list. */
+  var autoBody = '<span class="msgx-tag ' + (auto.running ? '' : 'wait') + '">' +
+    escapeHtml(auto.label) + '</span>' +
+    (auto.note ? '<div class="msgx-sub" style="margin-top:3px;">' + escapeHtml(auto.note) + '</div>' : '') +
+    '<div class="row" style="margin-top:6px;gap:6px;">' +
+    (auto.reason === 'manual'
+      ? '<button class="btn btn-sm" data-action="msgx-resume" data-cid="' + escapeHtml(c.id) +
+        '">Resume follow-ups</button>'
+      : (auto.reason === 'archived' || auto.reason === 'status'
+          ? ''
+          : '<button class="btn btn-sm btn-ghost" data-action="msgx-pause" data-cid="' + escapeHtml(c.id) +
+            '" data-days="7">Pause 7 days</button>' +
+            '<button class="btn btn-sm btn-ghost" data-action="msgx-pause" data-cid="' + escapeHtml(c.id) +
+            '" data-days="30">30 days</button>')) +
+    '</div>';
+
   box.innerHTML =
     field('Status', escapeHtml(c.status || '\u2014')) +
     field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
     field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
-    (pause && pause > now.getTime()
-      ? field('Automation', '<span class="msgx-tag wait">paused \u2014 they replied</span>')
-      : '') +
+    field('Automation', autoBody) +
     (c.callDateTime ? field('Call', escapeHtml(fmtDate(safeDate(c.callDateTime), c.timezone) + ' ' +
         fmtTime(safeDate(c.callDateTime), c.timezone))) : '') +
     (c.email ? field('Email', escapeHtml(c.email)) : '') +
@@ -4088,7 +4104,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-b254f2bd';
+var BUILD_STAMP = '20261015-d3ed357a';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5422,6 +5438,23 @@ document.addEventListener('click', function(ev){
       break;
     case 'msgx-draft':
       doDraftReply(cid, target);
+      break;
+    case 'msgx-pause': {
+      var days = parseInt(target.getAttribute('data-days'), 10) || 7;
+      var until = new Date(Date.now() + days * 86400000).toISOString();
+      lastSnapshot = snapshot();
+      setAutomationPause(STATE, cid, until, '');
+      saveState(STATE);
+      renderAll();
+      showToast('Follow-ups paused for ' + days + ' days.', lastSnapshot);
+      break;
+    }
+    case 'msgx-resume':
+      lastSnapshot = snapshot();
+      setAutomationPause(STATE, cid, null, '');
+      saveState(STATE);
+      renderAll();
+      showToast('Follow-ups running again.', lastSnapshot);
       break;
     case 'new-device-token':
       createDeviceToken(target);

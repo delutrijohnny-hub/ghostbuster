@@ -6768,6 +6768,142 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- automation controls ---');
+
+{
+  const hrs = (n) => new Date(Date.now() + n*3600000).toISOString();
+  const mk = (o) => {
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    st.clients.c1 = GB.sanitizeClient(Object.assign({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
+      status:'Booked', callDateTime: hrs(48),
+      bookedDate: new Date(Date.now() - 5*86400000).toISOString(),
+      messageLog: []
+    }, o || {}));
+    return st;
+  };
+
+  test('a paused contact is dropped from the daily list entirely', () => {
+    /* Absolute on purpose. The reply hold lets appointment reminders through
+       because somebody who just wrote back still wants to know when the call
+       is. A manual pause is an instruction, and a system that keeps texting
+       after being told to stop is worse than one with no control at all. */
+    const running = mk({});
+    const dueBefore = GB.computeDue(running.clients.c1, new Date());
+    assert.ok(dueBefore.length > 0, 'nothing was due to begin with, so this proves nothing');
+
+    const paused = mk({automationPausedUntil: hrs(72)});
+    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, new Date()), [],
+      'a paused contact still had touches due');
+  });
+
+  test('an expired pause lets the cadence resume by itself', () => {
+    const st = mk({automationPausedUntil: hrs(-1)});
+    assert.ok(GB.computeDue(st.clients.c1, new Date()).length > 0,
+      'a pause that has run out is still holding the cadence');
+  });
+
+  test('resuming clears the pause and the note with it', () => {
+    const st = mk({automationPausedUntil: hrs(72), automationPausedNote: 'waiting on their CFO'});
+    GB.setAutomationPause(st, 'c1', null);
+    assert.strictEqual(st.clients.c1.automationPausedUntil, null);
+    assert.strictEqual(st.clients.c1.automationPausedNote, '',
+      'a stale reason survived the resume and would be shown next time');
+
+    /* And a note passed in on a resume is discarded rather than stored.
+       Without this the only thing tested is that the caller happened to omit
+       it, which is the caller's behaviour rather than this function's. */
+    GB.setAutomationPause(st, 'c1', hrs(24), 'their CFO is away');
+    GB.setAutomationPause(st, 'c1', null, 'leftover reason');
+    assert.strictEqual(st.clients.c1.automationPausedNote, '',
+      'a reason given alongside a resume was kept');
+  });
+
+  test('it says WHY, and the most final reason wins', () => {
+    /* "Why am I not being told to text her" was answerable only by inferring
+       it from an empty list. Archived is not merely paused, and a finished
+       sequence is not a pause either. */
+    const now = new Date();
+    assert.strictEqual(GB.automationState(mk({ignored:true}).clients.c1, now).reason, 'archived');
+    assert.strictEqual(GB.automationState(mk({status:'Completed'}).clients.c1, now).reason, 'status');
+    assert.strictEqual(GB.automationState(mk({automationPausedUntil: hrs(48)}).clients.c1, now).reason, 'manual');
+    assert.strictEqual(GB.automationState(mk({}).clients.c1, now).running, true);
+  });
+
+  test('an archived contact outranks a pause, not the other way round', () => {
+    const st = mk({ignored:true, automationPausedUntil: hrs(48)});
+    assert.strictEqual(GB.automationState(st.clients.c1, new Date()).reason, 'archived',
+      'a pause masked the fact that the contact is archived');
+  });
+
+  test('a reply hold is reported as a hold, and says reminders still go', () => {
+    const st = mk({messageLog: [{id:'m1', stage:'welcome', variantId:'w1', channel:'sms',
+      text:'hi', sentAt:hrs(-20), responded:true, respondedAt:hrs(-2), reviewed:true}]});
+    const a = GB.automationState(st.clients.c1, new Date());
+    assert.strictEqual(a.reason, 'reply');
+    assert.ok(/reminders still go/i.test(a.label), a.label);
+  });
+
+  test('a manual pause beats a reply hold, because it is absolute', () => {
+    /* Both apply; the manual one is the stricter instruction and has to be
+       what the screen reports, or somebody reads "reminders still go" about a
+       contact they explicitly silenced. */
+    const st = mk({automationPausedUntil: hrs(48),
+      messageLog: [{id:'m1', stage:'welcome', variantId:'w1', channel:'sms',
+        text:'hi', sentAt:hrs(-20), responded:true, respondedAt:hrs(-2), reviewed:true}]});
+    assert.strictEqual(GB.automationState(st.clients.c1, new Date()).reason, 'manual');
+    assert.deepStrictEqual(GB.computeDue(st.clients.c1, new Date()), []);
+  });
+
+  test('a pause silences even the appointment reminders', () => {
+    /* The case that makes "absolute" mean something. With the call a few
+       hours away an exempt reminder IS due, so a pause that merely reused the
+       reply-hold filter would let it through -- and my first test could not
+       tell, because nothing exempt was due in it. */
+    const soon = {callDateTime: hrs(3),
+      bookedDate: new Date(Date.now() - 5*86400000).toISOString()};
+    const running = mk(soon);
+    const dueNow = GB.computeDue(running.clients.c1, new Date());
+    assert.ok(dueNow.some(s2 => GB.PAUSE_EXEMPT_STAGES[s2]),
+      'no appointment-critical touch was due, so this proves nothing');
+
+    const paused = mk(Object.assign({automationPausedUntil: hrs(48)}, soon));
+    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, new Date()), [],
+      'a paused contact still got an appointment reminder');
+  });
+
+  test('a pause survives a save and load round trip', () => {
+    const st = mk({automationPausedUntil: hrs(48), automationPausedNote: 'their CFO is away'});
+    const again = GB.sanitizeClient(JSON.parse(JSON.stringify(st.clients.c1)));
+    assert.strictEqual(again.automationPausedUntil, st.clients.c1.automationPausedUntil);
+    assert.strictEqual(again.automationPausedNote, 'their CFO is away');
+  });
+
+  test('a corrupt pause value is ignored rather than holding forever', () => {
+    // The safe direction: a bad timestamp must not silently stop every
+    // follow-up to that contact with no way to see why.
+    const st = mk({automationPausedUntil: 'not-a-date'});
+    assert.strictEqual(st.clients.c1.automationPausedUntil, null);
+    assert.ok(GB.computeDue(st.clients.c1, new Date()).length > 0);
+  });
+
+  test('the browser writes the pause back, or it is lost on reload', () => {
+    const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+    const fn = data.slice(data.indexOf('function rowClient'), data.indexOf('function rowMessage'));
+    assert.ok(/automation_paused_until: c\.automationPausedUntil/.test(fn),
+      'rowClient drops the pause, so it never survives a save');
+  });
+
+  test('a finished or archived contact is offered no pause button', () => {
+    // Pausing something that already stopped is a control that does nothing.
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderMsgxProfile'));
+    assert.ok(/auto\.reason === 'archived' \|\| auto\.reason === 'status'/.test(fn),
+      'a finished contact still offers a pause control');
+  });
+}
+
 console.log('\n--- drafting a reply ---');
 
 {
