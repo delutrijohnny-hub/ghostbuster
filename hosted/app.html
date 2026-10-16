@@ -1247,6 +1247,12 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
   padding:1px 6px;border-radius:999px;background:var(--bg);color:var(--ink-faint);}
 .msgx-tag.wait{background:var(--red-soft);color:var(--red);}
+/* Unread reads as new mail, not as a warning: an unseen message is
+   information, a contact waiting on you is a task. Different jobs, different
+   weight. */
+.msgx-tag.unread{background:var(--green-soft);color:var(--green);}
+.msgx-row.unread .r-name{font-weight:800;}
+.msgx-row.unread .r-last{color:var(--ink);}
 
 .msgx-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;}
 .msgx-b{max-width:74%;padding:7px 10px;border-radius:12px;font-size:13px;line-height:1.4;
@@ -1658,9 +1664,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261015-92b917e6"></script>
-<script src="data.js?v=20261015-92b917e6"></script>
-<script src="app.js?v=20261015-92b917e6"></script>
-<script src="auth.js?v=20261015-92b917e6"></script>
+<script src="logic.js?v=20261015-98f1d183"></script>
+<script src="data.js?v=20261015-98f1d183"></script>
+<script src="app.js?v=20261015-98f1d183"></script>
+<script src="auth.js?v=20261015-98f1d183"></script>
 </body>
 </html>

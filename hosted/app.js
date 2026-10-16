@@ -1581,8 +1581,12 @@ function renderThreadsTab(){
   var rows = conversationList(STATE, new Date());
   var waiting = rows.filter(function(r){ return r.awaitingReply; }).length;
 
+  /* The badge counts UNREAD, not waiting. A contact waiting on a reply you
+     have already read and decided to answer later is not a notification; a
+     message you have never seen is. */
+  var unread = rows.reduce(function(n, r){ return n + r.unread; }, 0);
   var countEl = el('threads-count');
-  if(countEl) countEl.textContent = waiting ? '(' + waiting + ')' : '';
+  if(countEl) countEl.textContent = unread ? '(' + unread + ')' : '';
 
   /* The selected conversation survives a re-render, and falls back to the
      top of the list rather than to nothing -- a workspace that empties itself
@@ -1598,6 +1602,51 @@ function renderThreadsTab(){
   renderMsgxList(rows, waiting);
   renderMsgxThread();
   renderMsgxProfile();
+
+  /* Read means somebody actually looked at it.
+
+     This used to mark the auto-selected conversation read inside the
+     selection itself, which fires on every renderAll -- so opening the app on
+     the Today tab silently cleared the newest thread's unread flag without
+     the Texts tab ever being on screen. The badge said 2 while the count was
+     0, which is how it was caught.
+
+     Marking only when this tab is the one in front means a conversation is
+     read when it has been displayed to a person, and not before. */
+  if(UI.tab === 'threads' && UI.threadCid){
+    markConversationRead(UI.threadCid);
+    var r2 = conversationList(STATE, new Date());
+    var u2 = r2.reduce(function(n, r){ return n + r.unread; }, 0);
+    var badge = el('threads-count');
+    if(badge) badge.textContent = u2 ? '(' + u2 + ')' : '';
+    // Redraw the row so its unread pill clears with the badge, rather than
+    // the two disagreeing until the next render.
+    renderMsgxList(r2, r2.filter(function(r){ return r.awaitingReply; }).length);
+  }
+}
+
+/* Opening a conversation marks it read.
+
+   Written straight to conversation_reads rather than through a save: it is
+   this person's own view state, RLS scopes it to them, and routing it
+   through saveState would push the whole account on every click.
+
+   Local state moves first so the badge responds immediately -- a count that
+   waits for a round trip reads as broken. If the write fails the marker is
+   simply stale, which shows a reply again rather than hiding one. */
+function markConversationRead(cid){
+  if(!cid || !STATE) return;
+  var at = new Date().toISOString();
+  STATE.reads = STATE.reads || {};
+  if(STATE.reads[cid] && Date.parse(STATE.reads[cid]) >= Date.parse(at)) return;
+  STATE.reads[cid] = at;
+  if(!STATE.userId || !window.GB_SUPABASE) return;
+  try{
+    window.GB_SUPABASE.from('conversation_reads')
+      .upsert({user_id: STATE.userId, client_id: cid, last_read_at: at},
+              {onConflict: 'user_id,client_id'})
+      .then(function(){}, function(){});
+  }catch(e){ /* a read marker is never worth breaking the page for */ }
 }
 
 function renderMsgxList(rows, waiting){
@@ -1617,10 +1666,12 @@ function renderMsgxList(rows, waiting){
     '<span class="msgx-sub">' + (waiting ? waiting + ' waiting' : rows.length + ' total') + '</span></div>' +
     '<div class="msgx-rows">' + rows.map(function(r){
       var tags = [];
+      if(r.unread) tags.push('<span class="msgx-tag unread">' + r.unread + ' unread</span>');
       if(r.awaitingReply) tags.push('<span class="msgx-tag wait">waiting on you</span>');
       if(r.status) tags.push('<span class="msgx-tag">' + escapeHtml(r.status) + '</span>');
       if(r.smsStatus === 'opted_out') tags.push('<span class="msgx-tag wait">opted out</span>');
-      return '<button class="msgx-row' + (r.clientId === UI.threadCid ? ' active' : '') +
+      return '<button class="msgx-row' + (r.unread ? ' unread' : '') +
+        (r.clientId === UI.threadCid ? ' active' : '') +
         '" data-action="msgx-open" data-cid="' + escapeHtml(r.clientId) + '">' +
         '<span class="r-top"><span class="r-name">' + escapeHtml(r.name) + '</span>' +
         '<span class="r-when">' + escapeHtml(shortWhen(r.lastAt)) + '</span></span>' +
@@ -3995,7 +4046,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261015-92b917e6';
+var BUILD_STAMP = '20261015-98f1d183';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5310,6 +5361,7 @@ document.addEventListener('click', function(ev){
       break;
     case 'msgx-open':
       UI.threadCid = cid;
+      markConversationRead(cid);
       renderThreadsTab();
       break;
     case 'msgx-back':

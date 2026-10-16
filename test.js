@@ -6768,6 +6768,117 @@ console.log('\n--- what may be claimed about a message ---');
   });
 }
 
+console.log('\n--- unread ---');
+
+{
+  const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
+  const mk = (defs, reads) => {
+    const st = GB.buildDefaultState();
+    st.clients = {}; st.reads = reads || {};
+    defs.forEach(d => {
+      st.clients[d.id] = GB.sanitizeClient({
+        id:d.id, name:d.name, phone:'213555010'+d.id.slice(-1),
+        timezone:'America/New_York', status:'Booked', ignored: !!d.ignored,
+        messageLog: (d.sent||[]).map((h,i)=>({id:d.id+'m'+i, stage:'welcome', variantId:'w1-v2',
+          channel:'sms', text:'sent', sentAt:ago(h), responded:false, reviewed:false})),
+        replies: (d.got||[]).map((h,i)=>({id:d.id+'r'+i, text:'reply', at:ago(h)}))
+      });
+    });
+    return st;
+  };
+
+  test('never opened means every reply is unread', () => {
+    /* The right starting point for an account that just imported months of
+       history: show it all rather than silently marking it seen. */
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[5,3,1]}]);
+    assert.strictEqual(GB.conversationList(st, new Date())[0].unread, 3);
+  });
+
+  test('reading it clears what came before, and only that', () => {
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[5,3,1]}], {c1: ago(2)});
+    assert.strictEqual(GB.conversationList(st, new Date())[0].unread, 1);
+  });
+
+  test('your own sends never make a conversation unread', () => {
+    /* Counting outbound would light up every thread you touched as if it
+       needed attention -- the opposite of what the badge is for. */
+    const st = mk([{id:'c1', name:'Sarah', sent:[5,3,1], got:[]}], {c1: ago(10)});
+    assert.strictEqual(GB.conversationList(st, new Date())[0].unread, 0);
+  });
+
+  test('unread and waiting-on-you are different questions', () => {
+    /* A contact can be waiting on a reply you have already read and decided
+       to answer later. Collapsing the two would lose the distinction the
+       read marker exists to make. */
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[5]}], {c1: ago(1)});
+    const row = GB.conversationList(st, new Date())[0];
+    assert.strictEqual(row.unread, 0, 'still unread after being read');
+    assert.strictEqual(row.awaitingReply, true, 'they still spoke last');
+  });
+
+  test('the badge counts every unread message, not every thread', () => {
+    const st = mk([
+      {id:'c1', name:'A', sent:[10], got:[5,4]},
+      {id:'c2', name:'B', sent:[10], got:[3]}
+    ]);
+    assert.strictEqual(GB.totalUnread(st, new Date()), 3);
+  });
+
+  test('an archived contact contributes no unread', () => {
+    const st = mk([{id:'c1', name:'Junk', ignored:true, sent:[10], got:[1,2]}]);
+    assert.strictEqual(GB.totalUnread(st, new Date()), 0);
+  });
+
+  test('a read marker in the future does not go negative or throw', () => {
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[5]}],
+                  {c1: new Date(Date.now()+86400000).toISOString()});
+    assert.strictEqual(GB.conversationList(st, new Date())[0].unread, 0);
+  });
+
+  test('an unreadable read marker shows the messages rather than hiding them', () => {
+    /* The safe direction. A corrupt marker that hid replies would lose the
+       exact thing this is for. */
+    const st = mk([{id:'c1', name:'Sarah', sent:[10], got:[5,3]}], {c1: 'not-a-date'});
+    assert.strictEqual(GB.conversationList(st, new Date())[0].unread, 2);
+  });
+
+  test('a reply stamped at exactly the read moment counts as read', () => {
+    /* Pins the comparison rather than leaving it to chance.
+
+       It only matters on an exact collision, which is why no other test
+       reaches it -- and an unpinned boundary is one somebody flips during a
+       refactor without noticing. Read-at-T means everything up to and
+       including T has been seen; a marker written when the thread was opened
+       is always later than the reply it covers, so this is the consistent
+       reading. */
+    const at = new Date(Date.now() - 3*3600000).toISOString();
+    const st = GB.buildDefaultState();
+    st.clients = {}; st.reads = {c1: at};
+    st.clients.c1 = GB.sanitizeClient({
+      id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
+      status:'Booked', messageLog: [], replies: [{id:'r1', text:'hi', at: at}]
+    });
+    assert.strictEqual(GB.unreadCount(st.clients.c1, at), 0,
+      'a reply at exactly the read moment is being counted as unread');
+  });
+
+  test('unreadCount handles a missing contact and missing state', () => {
+    assert.strictEqual(GB.unreadCount(null, null), 0);
+    assert.strictEqual(GB.totalUnread({}, new Date()), 0);
+    assert.strictEqual(GB.totalUnread(null, new Date()), 0);
+  });
+
+  test('opening a conversation is what marks it read', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const start = app.indexOf("case 'msgx-open':");
+    const block = app.slice(start, start + 220);
+    assert.ok(/markConversationRead\(cid\)/.test(block),
+      'opening a thread does not mark it read, so the badge never clears');
+    assert.ok(/user_id: STATE\.userId/.test(app),
+      'the read marker is written without a user, so it belongs to nobody');
+  });
+}
+
 console.log('\n--- the text inbox ---');
 
 {

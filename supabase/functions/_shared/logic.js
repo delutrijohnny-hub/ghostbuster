@@ -3410,6 +3410,28 @@ function recentReplies(state, now, days){
    thing in the thread and nobody has answered. That is a person actively
    waiting, which is a different and more urgent thing than a contact who has
    simply gone quiet. */
+/* How many of their messages you have not seen.
+
+   Counted from INBOUND messages only. A conversation is not unread because
+   you sent something; it is unread because they said something you have not
+   read. Counting your own sends would make every thread you touched light up
+   as if it needed attention.
+
+   Never read at all means every reply is unread, which is the correct
+   starting point for an account that has just imported months of history --
+   and the reason this takes the read marker rather than a boolean. */
+function unreadCount(client, lastReadAt){
+  if(!client) return 0;
+  var since = lastReadAt ? Date.parse(lastReadAt) : 0;
+  if(isNaN(since)) since = 0;
+  var n = 0;
+  (client.replies || []).forEach(function(r){
+    var t = Date.parse(r.at);
+    if(!isNaN(t) && t > since) n++;
+  });
+  return n;
+}
+
 function conversationList(state, now){
   now = now || new Date();
   var rows = [];
@@ -3425,6 +3447,7 @@ function conversationList(state, now){
     thread.forEach(function(it){ if(it.dir === 'in') inbound++; });
     rows.push({
       clientId: c.id,
+      unread: unreadCount(c, ((state && state.reads) || {})[c.id]),
       name: c.name,
       phone: c.phone || '',
       status: c.status,
@@ -3441,6 +3464,19 @@ function conversationList(state, now){
   });
   rows.sort(function(a, b){ return b.lastT - a.lastT; });
   return rows;
+}
+
+/* Unread across the whole book, for the tab badge.
+
+   Deliberately NOT the same number as "waiting on you". A contact can be
+   waiting on a reply you have already read and chosen to answer later; a
+   message you have never seen is a different and more urgent thing. Showing
+   one number for both would collapse the distinction the read marker exists
+   to make. */
+function totalUnread(state, now){
+  var n = 0;
+  conversationList(state, now).forEach(function(r){ n += r.unread; });
+  return n;
 }
 
 /* What is actually known about a message, and what may be said about it.
@@ -7255,6 +7291,8 @@ var __LOGIC_EXPORTS__ = {
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,
+  unreadCount: unreadCount,
+  totalUnread: totalUnread,
   deliveryState: deliveryState,
   messagingSetup: messagingSetup,
   AGENT_STALE_MINUTES: AGENT_STALE_MINUTES,

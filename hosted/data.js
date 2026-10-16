@@ -988,6 +988,18 @@ async function loadState(){
     ? {label: agentRow.label || '', lastSeenAt: agentRow.last_seen_at || null}
     : null;
 
+  /* When this person last read each conversation. Theirs alone -- RLS scopes
+     it to auth.uid() -- because two people sharing a contact have read
+     different things, and a shared marker would hide a reply from whoever
+     did not open it. Degrades to empty, which reads as "nothing read yet"
+     and so shows every reply rather than hiding any. */
+  var readsRes = await sb.from('conversation_reads')
+    .select('client_id, last_read_at');
+  state.reads = {};
+  ((readsRes && readsRes.data) || []).forEach(function(row){
+    if(row && row.client_id) state.reads[row.client_id] = row.last_read_at;
+  });
+
   state.platform = state.team;
   // An invite waiting for you, and the ones you have sent that nobody has
   // taken up. Both degrade to empty rather than failing the load.
