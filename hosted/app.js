@@ -1798,6 +1798,33 @@ function msgxTemplateSelect(c){
     '<option value="">Start from a template\u2026</option>' + opts + '</select>';
 }
 
+/* The email library, as a picker.
+
+   Same contract as the text template picker: it fills the subject and body
+   and nothing else. Sending still goes through the Gmail handoff and is
+   logged 'custom', so choosing the post-call recap does not advance any
+   cadence.
+
+   whenToSend rides along as the option's tooltip. The library is written
+   with lines like "once their payment clears", and that is the part that
+   tells somebody which of eleven to pick -- a list of titles alone makes
+   them open three to find out.
+
+   Returns '' when the library is empty, so an account that has never written
+   one gets no dropdown rather than an empty one. */
+function msgxEmailTemplateSelect(c){
+  var docs = emailLibrary(STATE);
+  if(!docs.length) return '';
+  var opts = docs.map(function(d){
+    return '<option value="' + escapeHtml(d.id) + '"' +
+      (d.whenToSend ? ' title="' + escapeHtml(d.whenToSend) + '"' : '') + '>' +
+      escapeHtml(d.title) + '</option>';
+  }).join('');
+  return '<select class="msgx-tpl" data-action="msgx-email-template" data-cid="' +
+    escapeHtml(c.id) + '">' +
+    '<option value="">Start from a template\u2026</option>' + opts + '</select>';
+}
+
 function msgxTouchPanel(c, now){
   var touch = threadTouch(STATE, c, now);
   if(!touch) return '';
@@ -1994,7 +2021,7 @@ function renderMsgxThread(){
        folder, and the reply arrives where they already look. Which is also
        the limitation -- that reply arrives in Gmail and nothing here sees
        it, so this thread will show what you sent and never the answer. */
-    composer =
+    composer = msgxEmailTemplateSelect(c) +
       '<input type="text" id="msgx-subj" class="lib-input" placeholder="Subject">' +
       '<textarea id="msgx-email" rows="3" placeholder="Email to ' +
         escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
@@ -4425,7 +4452,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-6395f7ee';
+var BUILD_STAMP = '20261021-15e9e5f3';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6203,6 +6230,26 @@ document.addEventListener('change', function(ev){
      && !billingAllowsWrite(billingState())){
     showBillingWall();
     renderAll();   // put the control back to what the state actually says
+    return;
+  }
+  if(t.getAttribute && t.getAttribute('data-action') === 'msgx-email-template'){
+    var etpCid = t.getAttribute('data-cid'), etpId = t.value;
+    var etpClient = STATE.clients[etpCid];
+    if(etpId && etpClient){
+      var doc = renderEmailDoc(STATE, etpId, etpClient, STATE.senderName);
+      /* A library row can be deleted in another tab between this list being
+         drawn and somebody picking from it. renderEmailDoc answers null for
+         that, and blanking the composer would read as the app losing what
+         they had typed. */
+      if(doc){
+        var sj = el('msgx-subj'), bd = el('msgx-email');
+        if(sj) sj.value = doc.subject || '';
+        if(bd){ bd.value = doc.text || ''; bd.focus(); }
+      } else {
+        showToast('That template is no longer in your library.');
+      }
+    }
+    t.value = '';
     return;
   }
   if(t.getAttribute && t.getAttribute('data-action') === 'msgx-template'){
