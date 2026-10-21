@@ -3368,7 +3368,12 @@ function conversationThread(client){
       dir: 'out', at: m.sentAt, t: isNaN(t) ? 0 : t, idx: i,
       text: m.text || '', stage: m.stage || '', variantId: m.variantId || '',
       channel: m.channel || 'sms', responded: !!m.responded, reviewed: !!m.reviewed,
-      deliveryStatus: m.deliveryStatus || null, id: m.id
+      deliveryStatus: m.deliveryStatus || null, id: m.id,
+      /* Carried through, because sendMode reads it. Without it every item in
+         a thread looks like a handoff -- so a message a provider confirmed
+         was described as having left from somebody's own app, which is the
+         mode/state confusion the model exists to prevent, running backwards. */
+      providerId: m.providerId || null
     });
   });
   (client.replies || []).forEach(function(r){
@@ -3639,6 +3644,46 @@ function conversationList(state, now){
     return b.lastT - a.lastT;
   });
   return rows;
+}
+
+/* What this conversation is waiting for, in one short phrase.
+
+   The header says where a contact stands; this says what to do about it.
+   Derived from the same functions the rest of the workspace uses rather than
+   written out again, so the header cannot claim a touch is due while the
+   panel below it says the sequence is finished.
+
+   Ordered by what overrides what. An opt-out is absolute. Somebody who spoke
+   last is owed an answer before any script resumes -- the same rule
+   threadTouch uses to decide whether to pre-fill. A paused sequence is
+   reported as paused rather than as nothing to do, because "nothing" invites
+   somebody to conclude the contact is finished with. */
+function nextActionLabel(state, client, now){
+  now = now || new Date();
+  if(!client) return '';
+  if((client.smsStatus || 'ok') === 'opted_out') return 'Do not text \u2014 they opted out';
+
+  var thread = conversationThread(client).filter(function(it){ return it.dir !== 'note'; });
+  var last = thread.length ? thread[thread.length - 1] : null;
+  if(last && last.dir === 'in') return 'Reply to them';
+
+  var touch = threadTouch(state, client, now);
+  if(touch) return 'Send ' + touchLabel(touch.stage).toLowerCase();
+
+  var auto = automationState(client, now);
+  if(auto && !auto.running){
+    /* automationState already works out WHY, and its reason is written for a
+       person. Repeating that judgement here would be a second opinion that
+       could disagree with the panel three inches away. */
+    return auto.reason === 'reply' ? 'Waiting on them'
+         : auto.reason === 'manual' ? 'Follow-ups paused'
+         : 'Sequence finished';
+  }
+
+  var prog = cadenceProgress(client, now);
+  if(prog.complete) return 'Sequence finished';
+  if(prog.nextStage) return 'Next: ' + touchLabel(prog.nextStage).toLowerCase();
+  return 'Nothing due';
 }
 
 /* The ONE thing a row should say about itself.
@@ -8072,6 +8117,7 @@ var __LOGIC_EXPORTS__ = {
   filterConversationsBy: filterConversationsBy,
   conversationCounts: conversationCounts,
   conversationSignal: conversationSignal, initialsFor: initialsFor, dueSplit: dueSplit,
+  nextActionLabel: nextActionLabel,
   conversationMatchesFilter: conversationMatchesFilter,
   CONVERSATION_FILTERS: CONVERSATION_FILTERS,
   automationState: automationState,

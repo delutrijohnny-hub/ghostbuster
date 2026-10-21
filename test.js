@@ -15461,6 +15461,96 @@ console.log('\n--- per-contact wording ---');
   });
 }
 
+console.log('\n--- a thread item knows where it came from ---');
+{
+  test('conversationThread carries providerId, so sendMode can read it', () => {
+    /* Without this every item in a thread looks external, and a message a
+       provider confirmed gets described as having left from somebody's own
+       app -- the mode/state confusion the model exists to prevent, running
+       backwards. Caught in a browser: a 'delivered' message said "sent from
+       your own app, which does not report back". */
+    const c = GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+      {id:'p', stage:'welcome', channel:'sms', text:'a',
+       sentAt:'2026-10-20T10:00:00Z', providerId:'imsg:abc', deliveryStatus:'delivered'},
+      {id:'h', stage:'monday', channel:'sms', text:'b', sentAt:'2026-10-20T11:00:00Z'}
+    ]});
+    const thread = GB.conversationThread(c);
+    assert.strictEqual(thread[0].providerId, 'imsg:abc');
+    assert.strictEqual(thread[1].providerId, null);
+    assert.strictEqual(GB.sendMode(thread[0]), 'integrated',
+      'a provider-confirmed message read as a handoff');
+    assert.strictEqual(GB.sendMode(thread[1]), 'external');
+  });
+}
+
+console.log('\n--- what this conversation is waiting for ---');
+{
+  const now = new Date();
+  const far = new Date(now.getTime() + 21 * 86400000).toISOString();
+  const st = () => { const x = GB.buildDefaultState(); x.senderName = 'J'; return x; };
+  const mk = (o) => GB.sanitizeClient(Object.assign(
+    {id:'c', name:'T', phone:'2015550001', status:'Booked', timezone:'America/New_York'}, o));
+
+  test('an opt-out overrides everything, including a due touch', () => {
+    const c = mk({smsStatus:'opted_out', bookedDate:now.toISOString(), callDateTime:far});
+    assert.ok(/opted out/i.test(GB.nextActionLabel(st(), c, now)));
+    assert.ok(!/send/i.test(GB.nextActionLabel(st(), c, now)),
+      'a contact who opted out was told to send something');
+  });
+
+  test('somebody who spoke last is owed an answer before any script', () => {
+    /* The same rule threadTouch uses when it refuses to pre-fill. If these
+       two disagreed, the header would say "send the day-of text" while the
+       panel below it left the box deliberately empty. */
+    const c = mk({bookedDate:now.toISOString(), callDateTime:far,
+      replies:[{id:'r', at:new Date(now.getTime()-60000).toISOString(), text:'Can we move it?'}]});
+    assert.strictEqual(GB.nextActionLabel(st(), c, now), 'Reply to them');
+  });
+
+  test('a due touch is named, not just reported as due', () => {
+    // "Send the day of the call" tells somebody what to do; "1 due" does not.
+    const c = mk({bookedDate:now.toISOString(), callDateTime:far});
+    assert.strictEqual(GB.nextActionLabel(st(), c, now), 'Send welcome');
+  });
+
+  test('a finished sequence says so rather than saying nothing', () => {
+    /* "Nothing due" on a finished contact invites somebody to conclude the
+       system lost track of them. */
+    assert.strictEqual(GB.nextActionLabel(st(), mk({status:'Completed'}), now),
+                       'Sequence finished');
+  });
+
+  test('a paused sequence is reported as paused, not as nothing to do', () => {
+    const c = mk({bookedDate:now.toISOString(), callDateTime:far,
+      automationPausedUntil: new Date(now.getTime() + 7 * 86400000).toISOString()});
+    assert.strictEqual(GB.nextActionLabel(st(), c, now), 'Follow-ups paused');
+  });
+
+  test('a missing contact returns a string, never undefined', () => {
+    // This goes straight into a header; undefined would render as the word.
+    assert.strictEqual(GB.nextActionLabel(st(), null, now), '');
+    assert.strictEqual(typeof GB.nextActionLabel(st(), mk({}), now), 'string');
+  });
+
+  test('a note after their reply does not cancel that they are owed one', () => {
+    /* The case a weaker fixture misses. With a note as the ONLY item,
+       last.dir is 'note' either way and the answer is unchanged -- so the
+       filter looks tested while nothing exercises it.
+
+       Ordered after an inbound reply, removing the filter flips the answer
+       from "Reply to them" to "Send welcome": a colleague's note would make
+       a contact who asked a question look answered, and the header would
+       send somebody into a script over the top of it. */
+    const c = mk({bookedDate:now.toISOString(), callDateTime:far,
+      replies:[{id:'r', at:new Date(now.getTime()-30*86400000).toISOString(),
+                text:'Can we move it?'}],
+      threadNotes:[{id:'n', body:'budget tight', author:'E',
+                    at:new Date(now.getTime()-60000).toISOString()}]});
+    assert.strictEqual(GB.nextActionLabel(st(), c, now), 'Reply to them',
+      'a colleague\'s note was read as the contact having been answered');
+  });
+}
+
 console.log('\n--- one signal per row ---');
 {
   test('an opt-out outranks everything, including work that looks due', () => {

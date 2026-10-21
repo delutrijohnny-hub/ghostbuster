@@ -91,7 +91,9 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // desktop layout auto-selected. Only the former counts as read.
   msgxOpened:null,
   // The Today card list, folded away by default now the workspace exists.
-  textTodayOpen:false};
+  textTodayOpen:false,
+  // Which message has its delivery detail open. One at a time.
+  dlvOpen:null};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1881,6 +1883,40 @@ function renderMsgxList(rows, waiting, total){
 
    Rendered for THIS contact, so the preview is the real message with their
    name and time in it rather than a template full of placeholders. */
+/* What happened to one message, opened on demand.
+
+   Says the state in plain words, when it happened, and -- where nothing can
+   know -- offers the only two answers that exist. Confirming from inside the
+   conversation matters: somebody reading a thread is already looking at the
+   message, and sending them to a list on another tab to answer a question
+   about it is how the question goes unanswered. */
+function deliveryDetail(c, it, ds, ev){
+  var mode = sendMode(it);
+  var lines = [
+    ['State', ds.label || 'nothing recorded'],
+    ['Sent from', mode === 'integrated' ? 'a provider, which reports back'
+                                        : 'your own app, which does not'],
+    ['Logged', fmtDate(safeDate(it.at), c.timezone) + ' ' + fmtTime(safeDate(it.at), c.timezone)]
+  ];
+  if(it.providerId) lines.push(['Provider reference', it.providerId]);
+
+  var ask = '';
+  if(ev === 'awaiting' && mode === 'external'){
+    ask = '<div class="dlv-ask"><span class="msgx-sub">Only you can know this one.</span>' +
+      '<button class="btn btn-sm btn-primary" data-action="confirm-send" data-cid="' +
+        escapeHtml(c.id) + '" data-mid="' + escapeHtml(it.id || '') + '">I sent it</button>' +
+      '<button class="btn btn-sm btn-ghost" data-action="unsend-message" data-cid="' +
+        escapeHtml(c.id) + '" data-mid="' + escapeHtml(it.id || '') +
+        '" title="Puts the touch back on the list as though the draft had never been opened.">Not sent</button>' +
+      '</div>';
+  }
+  return '<div class="dlv-detail">' +
+    lines.map(function(l){
+      return '<div class="dlv-line"><span>' + escapeHtml(l[0]) + '</span><b>' +
+        escapeHtml(String(l[1])) + '</b></div>';
+    }).join('') + ask + '</div>';
+}
+
 function msgxTemplateSelect(c){
   var opts = cadenceTouches().map(function(stage, i){
     return '<option value="' + escapeHtml(stage) + '">Touch ' + (i + 1) + ' \u00b7 ' +
@@ -2021,12 +2057,28 @@ function renderMsgxThread(){
        now carries both, and an email that reads as a text is how somebody
        answers in a medium the contact never used. */
     var isEmail = it.dir === 'out' && it.channel === 'email';
+    /* The delivery line is a control, not a caption.
+
+       Subtle by default -- the spec is right that a permanent legend of
+       every possible state across the page is noise -- and it opens on
+       demand to say what the state means and when it happened. The
+       explanation belongs next to the message it is about, not in a key
+       somebody has to hold in their head. */
+    var ev = it.dir === 'out' ? sendEvidence(it) : null;
+    var open = UI.dlvOpen === it.id;
     return '<div class="msgx-b ' + (it.dir === 'in' ? 'in' : 'out') +
-      (isEmail ? ' email' : '') + '">' +
+      (isEmail ? ' email' : '') + (ev === 'failed' ? ' failed' : '') + '">' +
       (isEmail ? '<div class="msgx-chan">Email</div>' : '') +
       escapeHtml(it.text) +
       '<div class="msgx-meta">' + escapeHtml(shortWhen(it.at)) +
-      (it.dir === 'out' && ds.label ? ' \u00b7 ' + escapeHtml(ds.label) : '') + '</div></div>';
+        (it.dir === 'out' && ds.label
+          ? ' \u00b7 <button class="dlv ' + ev + '" data-action="dlv-detail" data-mid="' +
+            escapeHtml(it.id || '') + '" title="What happened to this message">' +
+            escapeHtml(ds.label) + '</button>'
+          : '') +
+      '</div>' +
+      (open ? deliveryDetail(c, it, ds, ev) : '') +
+      '</div>';
   }).join('') || '<div class="msgx-empty">Nothing yet.</div>';
 
   /* The composer states the same truth the contact screen does, rather than
@@ -2131,11 +2183,30 @@ function renderMsgxThread(){
       '<span class="msgx-sub">Visible to your team only.</span></div>';
   }
 
+  var hprog = cadenceProgress(c, new Date());
+
   box.innerHTML =
+    /* Who, where they stand, and what to do about it -- in that order, on
+       one line each. The status control lives HERE rather than in the right
+       column: it is the thing most likely to change while reading a
+       conversation, and a second copy of the same control three inches away
+       is two ways to set one value. */
     '<div class="msgx-head">' +
-      '<div><button class="btn btn-sm btn-ghost msgx-back" data-action="msgx-back">\u2039 All</button> ' +
-      '<strong>' + escapeHtml(c.name) + '</strong>' +
-      '<div class="msgx-sub">' + escapeHtml(c.phone || 'no phone on file') + '</div></div>' +
+      '<button class="btn btn-sm btn-ghost msgx-back" data-action="msgx-back">\u2039</button>' +
+      '<span class="mh-av">' + escapeHtml(initialsFor(c.name)) + '</span>' +
+      '<div class="mh-id">' +
+        '<div class="mh-top">' +
+          '<strong>' + escapeHtml(c.name) + '</strong>' +
+          '<select class="msgx-status" data-action="msgx-status" data-cid="' + escapeHtml(c.id) + '">' +
+            VALID_STATUSES.map(function(st){
+              return '<option value="' + escapeHtml(st) + '"' +
+                (st === c.status ? ' selected' : '') + '>' + escapeHtml(st) + '</option>';
+            }).join('') + '</select>' +
+        '</div>' +
+        '<div class="msgx-sub">' + escapeHtml(c.phone || 'no phone on file') + '</div>' +
+        '<div class="mh-next">Touch ' + (hprog.done + 1) + ' of ' + hprog.total +
+          ' \u00b7 ' + escapeHtml(nextActionLabel(STATE, c, new Date())) + '</div>' +
+      '</div>' +
       '<button class="btn btn-sm" data-action="open-client" data-cid="' + escapeHtml(c.id) + '">Open contact</button>' +
     '</div>' +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
@@ -2229,22 +2300,11 @@ function renderMsgxProfile(){
   box.innerHTML =
     field('Where this stands', summaryBody) +
     (queued.length ? field('Queued to send', queuedBody) : '') +
-    /* Status is EDITABLE here, not just displayed.
-
-       It is the field most likely to change while reading a conversation --
-       they said no, they rescheduled, they went quiet -- and it decides
-       whether the sequence keeps running at all. Sending somebody to the
-       contact modal to change it is how a thread gets read, understood, and
-       then left in a state the cadence disagrees with.
-
-       Goes through setOutcome, the same path End of day uses, so one status
-       change means the same thing wherever it is made. */
-    field('Status',
-      '<select class="msgx-status" data-action="msgx-status" data-cid="' + escapeHtml(c.id) + '">' +
-      VALID_STATUSES.map(function(st){
-        return '<option value="' + escapeHtml(st) + '"' +
-          (st === c.status ? ' selected' : '') + '>' + escapeHtml(st) + '</option>';
-      }).join('') + '</select>') +
+    /* Read-only here. The control moved to the conversation header, beside
+       the name, where somebody is already looking when they decide a contact
+       has gone cold. Two selects for one value is two ways to set it and one
+       more thing to keep in step. */
+    field('Status', escapeHtml(c.status || '\u2014')) +
     field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
     field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
     field('Automation', autoBody) +
@@ -4587,7 +4647,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-22aedbde';
+var BUILD_STAMP = '20261021-c3a83f98';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6042,6 +6102,12 @@ document.addEventListener('click', function(ev){
       var msName = STATE.clients[cid] ? firstName(STATE.clients[cid].name) : 'them';
       doMarkSent(cid, stage);
       showToast('Marked sent for ' + msName + '.', lastSnapshot);
+      break;
+    }
+    case 'dlv-detail': {
+      var dmid = target.getAttribute('data-mid');
+      UI.dlvOpen = (UI.dlvOpen === dmid) ? null : dmid;
+      renderMsgxThread();
       break;
     }
     case 'msgx-filter':
