@@ -81,7 +81,10 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   threadCid:null,
   // What is typed in the conversation search. Held here rather than read
   // off the input so a re-render cannot silently drop it.
-  msgxQuery:''};
+  msgxQuery:'',
+  // Which contact+touch the composer has already been seeded with, so a
+  // re-render never retypes over somebody mid-sentence.
+  msgxPrefilled:null};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1397,6 +1400,14 @@ function buildTouchCard(client, stage, now){
     actions.appendChild(dead);
   }
   actions.appendChild(h('button',{class:'btn btn-sm','data-action':'copy-text','data-cid':client.id,'data-stage':stage},['Copy text']));
+  /* Into the conversation, rather than only acting from here.
+
+     The card shows what to send; the thread shows what was already said.
+     Somebody about to send touch 3 to a contact who replied last week needs
+     the second, and until now reaching it meant finding them by hand on
+     another tab. */
+  actions.appendChild(h('button',{class:'btn btn-sm','data-action':'open-thread','data-cid':client.id,
+    title:'Opens this conversation, with the touch ready to send in it.'},['Open chat']));
   /* Gmail rather than the in-app composer. It needs no provider account, it
      sends from the salesperson's own mailbox so it lands in their Sent folder,
      and the reply arrives where they already look. Offered whenever there is a
@@ -1594,7 +1605,17 @@ function renderThreadsTab(){
   /* The selected conversation survives a re-render, and falls back to the
      top of the list rather than to nothing -- a workspace that empties itself
      every time a message arrives is a workspace nobody can work in. */
-  if(UI.threadCid && !rows.some(function(r){ return r.clientId === UI.threadCid; })){
+  /* Only a contact that no longer EXISTS is deselected.
+
+     This used to drop anyone absent from the conversation list, which sounds
+     equivalent and is not: the list holds contacts who have said or been
+     sent something, and roughly 560 of 790 have neither yet. Opening one of
+     those from Today set the selection and this immediately threw it away
+     and auto-selected whoever was at the top -- so clicking "Open chat" on
+     Teresa landed you in Sam's thread, silently, with Sam's history on
+     screen. The list is a list of conversations; the thread pane can show
+     any real contact, which is the whole point of arriving from Today. */
+  if(UI.threadCid && !(STATE.clients && STATE.clients[UI.threadCid])){
     UI.threadCid = null;
   }
   if(!UI.threadCid && rows.length && window.innerWidth > 860){
@@ -1689,17 +1710,89 @@ function renderMsgxList(rows, waiting, total){
       var tags = [];
       if(r.unread) tags.push('<span class="msgx-tag unread">' + r.unread + ' unread</span>');
       if(r.awaitingReply) tags.push('<span class="msgx-tag wait">waiting on you</span>');
+      /* A contact in the queue because a touch is due, not because anything
+         was said. Tagged rather than left to look like a conversation: the
+         preview underneath is copy that has NOT gone out, and a row that
+         reads identically to a sent message is how somebody concludes they
+         already texted them. */
+      if(r.dueStage) tags.push('<span class="msgx-tag due">touch due</span>');
+      if(r.lastChannel === 'email') tags.push('<span class="msgx-tag chan">email</span>');
       if(r.status) tags.push('<span class="msgx-tag">' + escapeHtml(r.status) + '</span>');
       if(r.smsStatus === 'opted_out') tags.push('<span class="msgx-tag wait">opted out</span>');
       return '<button class="msgx-row' + (r.unread ? ' unread' : '') +
         (r.clientId === UI.threadCid ? ' active' : '') +
         '" data-action="msgx-open" data-cid="' + escapeHtml(r.clientId) + '">' +
         '<span class="r-top"><span class="r-name">' + escapeHtml(r.name) + '</span>' +
-        '<span class="r-when">' + escapeHtml(shortWhen(r.lastAt)) + '</span></span>' +
-        '<div class="r-last">' + (r.lastDir === 'out' ? 'You: ' : '') + escapeHtml(r.lastText) + '</div>' +
+        '<span class="r-when">' +
+          escapeHtml(r.dueStage ? 'due today' : shortWhen(r.lastAt)) + '</span></span>' +
+        '<div class="r-last' + (r.dueStage ? ' unsent' : '') + '">' +
+          (r.lastDir === 'out' ? 'You: ' : '') + escapeHtml(r.lastText) + '</div>' +
         (tags.length ? '<div class="r-tags">' + tags.join('') + '</div>' : '') +
         '</button>';
     }).join('') + '</div>';
+}
+
+/* The sequence touch, shown inside the conversation.
+
+   This is what joins the two halves of the product. Today tells you a touch
+   is due; the thread tells you what was already said. Keeping them on
+   separate tabs meant the person sending the touch could not see the
+   conversation it lands in, which is how "just checking in" goes out to
+   somebody who asked a direct question yesterday.
+
+   The send control mirrors the one on a Today card rather than reusing the
+   composer, because the composer only exists on the provider route. On the
+   Messages handoff -- which is the live route today -- there is no composer
+   at all, so without this the panel would be a reminder you could not act
+   on. One rule for whether a text may go out (smsSendMode), two places that
+   ask it. */
+function msgxTouchPanel(c, now){
+  var touch = threadTouch(STATE, c, now);
+  if(!touch) return '';
+  var route = smsSendMode(STATE, c);
+  var win = smsSendWindow(c, now);
+
+  var action = '';
+  if(route.mode === 'provider' && win.ok){
+    action = '<button class="btn btn-sm ' +
+      ((STATE.smsNumber && STATE.smsNumber.sandbox) ? 'btn-sandbox' : 'btn-primary') +
+      '" data-action="send-text" data-cid="' + escapeHtml(c.id) +
+      '" data-stage="' + escapeHtml(touch.stage) + '">' +
+      ((STATE.smsNumber && STATE.smsNumber.sandbox) ? 'Send test text' : 'Send this touch') +
+      '</button>';
+  } else if(route.mode === 'provider' && !win.ok){
+    action = '<span class="msgx-sub">too late there \u2014 ' + escapeHtml(win.reason) + '</span>';
+  } else if(route.mode === 'handoff'){
+    var digits = String(c.phone || '').replace(/\D/g, '');
+    var href = digits
+      ? ('sms:' + (digits.length === 10 ? '+1' + digits : '+' + digits) +
+         '&body=' + encodeURIComponent(touch.text))
+      : '#';
+    action = '<a class="btn btn-sm btn-primary" href="' + escapeHtml(href) +
+      '" data-action="open-sms" data-cid="' + escapeHtml(c.id) +
+      '" data-stage="' + escapeHtml(touch.stage) +
+      '" title="Opens your Messages app. ' + escapeHtml(route.reason) +
+      ' \u2014 so their reply comes to your phone and has to be logged by hand.">' +
+      'Open in Messages</a>';
+  } else if(route.mode === 'blocked'){
+    action = '<span class="msgx-sub">opted out of texts</span>';
+  } else {
+    action = '<span class="msgx-sub">' + escapeHtml(route.reason || 'cannot text this contact') + '</span>';
+  }
+
+  return '<div class="msgx-touch' + (touch.replyFirst ? ' owed' : '') + '">' +
+    '<div class="msgx-touch-head"><strong>' + escapeHtml(touch.label) + '</strong>' +
+      '<span class="msgx-sub"> \u00b7 due today</span></div>' +
+    (touch.replyFirst
+      ? '<div class="msgx-touch-warn">' + escapeHtml(firstName(c.name)) +
+        ' spoke last \u2014 answer them before sending this.</div>'
+      : '') +
+    '<div class="msgx-touch-text">' + escapeHtml(touch.text) + '</div>' +
+    '<div class="row">' + action +
+      '<button class="btn btn-sm btn-ghost" data-action="open-client" data-cid="' +
+      escapeHtml(c.id) + '" title="Opens the contact, where this touch can be reworded for ' +
+      escapeHtml(firstName(c.name)) + ' only.">Reword</button>' +
+    '</div></div>';
 }
 
 function renderMsgxThread(){
@@ -1727,7 +1820,13 @@ function renderMsgxThread(){
         escapeHtml(it.text) + '</div>';
     }
     var ds = deliveryState(it);
-    return '<div class="msgx-b ' + (it.dir === 'in' ? 'in' : 'out') + '">' +
+    /* The channel is on the bubble, not inferred from how it looks. A thread
+       now carries both, and an email that reads as a text is how somebody
+       answers in a medium the contact never used. */
+    var isEmail = it.dir === 'out' && it.channel === 'email';
+    return '<div class="msgx-b ' + (it.dir === 'in' ? 'in' : 'out') +
+      (isEmail ? ' email' : '') + '">' +
+      (isEmail ? '<div class="msgx-chan">Email</div>' : '') +
       escapeHtml(it.text) +
       '<div class="msgx-meta">' + escapeHtml(shortWhen(it.at)) +
       (it.dir === 'out' && ds.label ? ' \u00b7 ' + escapeHtml(ds.label) : '') + '</div></div>';
@@ -1774,13 +1873,42 @@ function renderMsgxThread(){
      A contact who opted out, or whose number is not textable, is exactly the
      one somebody needs to leave context on. Tying notes to the ability to
      send would remove them precisely when they matter most. */
-  var noteMode = UI.msgxNote === true;
+  var mode = UI.msgxMode || (UI.msgxNote === true ? 'note' : 'reply');
+  var noteMode = mode === 'note';
+  var emailMode = mode === 'email';
+  /* Email is offered only where there is an address to use. A tab that opens
+     a composer addressed to nobody is a tab that wastes the click. */
+  var emailable = !!(c.email && canEmail(c));
   var modeTabs =
     '<div class="msgx-modes">' +
-      '<button class="msgx-mode' + (noteMode ? '' : ' on') + '" data-action="msgx-mode" data-mode="reply">Reply</button>' +
+      '<button class="msgx-mode' + (mode === 'reply' ? ' on' : '') + '" data-action="msgx-mode" data-mode="reply">Reply</button>' +
+      (emailable
+        ? '<button class="msgx-mode' + (emailMode ? ' on' : '') +
+          '" data-action="msgx-mode" data-mode="email">Email</button>'
+        : '') +
       '<button class="msgx-mode note' + (noteMode ? ' on' : '') + '" data-action="msgx-mode" data-mode="note">Internal note</button>' +
     '</div>';
-  if(noteMode){
+  if(emailMode){
+    /* The Gmail handoff, same shape as the Messages one and labelled with
+       the same honesty: the link opens a draft and sends nothing, so it is
+       logged as unconfirmed rather than as delivered.
+
+       Gmail rather than an in-app send: it needs no provider account, it
+       goes from the salesperson's own mailbox so it lands in their Sent
+       folder, and the reply arrives where they already look. Which is also
+       the limitation -- that reply arrives in Gmail and nothing here sees
+       it, so this thread will show what you sent and never the answer. */
+    composer =
+      '<input type="text" id="msgx-subj" class="lib-input" placeholder="Subject">' +
+      '<textarea id="msgx-email" rows="3" placeholder="Email to ' +
+        escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
+      '<div class="row">' +
+        '<button class="btn btn-sm btn-primary" data-action="msgx-email-open" data-cid="' +
+          escapeHtml(c.id) + '">Open in Gmail</button>' +
+        '<span class="msgx-sub">Opens a draft to ' + escapeHtml(c.email) +
+          '. Their reply goes to your inbox, not here.</span>' +
+      '</div>';
+  } else if(noteMode){
     composer = '<textarea id="msgx-note" rows="2" placeholder="Note for your team \u2014 ' +
       escapeHtml(firstName(c.name)) + ' never sees this\u2026"></textarea>' +
       '<div class="row"><button class="btn btn-sm btn-note" data-action="msgx-add-note" data-cid="' +
@@ -1796,7 +1924,20 @@ function renderMsgxThread(){
       '<button class="btn btn-sm" data-action="open-client" data-cid="' + escapeHtml(c.id) + '">Open contact</button>' +
     '</div>' +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
+    msgxTouchPanel(c, new Date()) +
     '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>';
+
+  /* Pre-fill the box with the due touch, ONCE per contact and touch.
+
+     Doing it on every render would retype over somebody mid-sentence, since
+     this function re-runs whenever anything in the workspace changes. The
+     marker is what makes it a starting point rather than a correction. */
+  var ptouch = threadTouch(STATE, c, new Date());
+  var pkey = ptouch ? (c.id + '|' + ptouch.stage) : null;
+  if(ptouch && ptouch.prefill && UI.msgxPrefilled !== pkey){
+    var tbox = el('msgx-text');
+    if(tbox && !tbox.value){ tbox.value = ptouch.prefill; UI.msgxPrefilled = pkey; }
+  }
 
   var scroller = el('msgx-msgs');
   if(scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -4168,7 +4309,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-8d149452';
+var BUILD_STAMP = '20261021-2670c2fb';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5023,6 +5164,28 @@ document.addEventListener('click', function(ev){
       // wizard never reappears.
       finishOnboarding(true);
       break;
+    case 'msgx-email-open': {
+      /* The Gmail handoff from inside a conversation.
+
+         Same contract as the Messages one: the link opens a draft, this
+         records that it was opened, and nothing claims the email was sent.
+         markSentOnChannel logs channel 'email' with no providerId, which is
+         exactly what deliveryState reads as "opened in Gmail -- not
+         confirmed". */
+      var mec = STATE.clients[cid];
+      if(!mec) break;
+      var subjEl = el('msgx-subj'), bodyEl = el('msgx-email');
+      var msubj = (subjEl && subjEl.value.trim()) || '';
+      var mbody = (bodyEl && bodyEl.value.trim()) || '';
+      if(!msubj && !mbody){ showToast('Nothing to send yet.'); break; }
+      window.open(gmailComposeUrl(mec.email, msubj, mbody, businessEmailAccount(STATE)), '_blank');
+      markSentOnChannel(cid, 'email', (msubj ? msubj + '\n\n' : '') + mbody, 'email');
+      if(subjEl) subjEl.value = '';
+      if(bodyEl) bodyEl.value = '';
+      renderThreadsTab();
+      showToast('Draft opened in Gmail \u2014 logged as unconfirmed until you send it.');
+      break;
+    }
     case 'sent-by-email': {
       // The link opens Gmail by itself; this records it. Optimistic, like the
       // sms: path — Ghost Recall cannot see whether Send was actually pressed,
@@ -5463,10 +5626,21 @@ document.addEventListener('click', function(ev){
       showToast('Copied.');
       break;
     }
-    case 'reset-text':
+    case 'reset-text': {
       delete editedTextCache[cid + '|' + stage];
+      /* Reset means back to the shared template, so the SAVED row has to go
+         as well. Clearing only the in-memory cache would appear to work and
+         then bring the old wording back on the next reload. */
+      var rtClient = STATE.clients[cid];
+      if(rtClient && rtClient.messageTexts && rtClient.messageTexts[stage] != null){
+        delete rtClient.messageTexts[stage];
+        clearClientMessageText(cid, stage).then(function(r){
+          if(!r.ok) showToast('Could not reset that wording: ' + r.error);
+        });
+      }
       renderCallsBoard();
       break;
+    }
     case 'generate-ai':
       generateAIMessage(cid, stage, target);
       break;
@@ -5481,6 +5655,19 @@ document.addEventListener('click', function(ev){
     case 'send-reply':
       doSendReply(cid, target);
       break;
+    case 'open-thread': {
+      /* Switch tab AND select, which 'msgx-open' alone does not do: it is
+         fired from inside the workspace, where the tab is already showing. */
+      UI.tab = 'threads';
+      UI.threadCid = cid;
+      UI.msgxPrefilled = null;   // a freshly opened thread gets its touch seeded
+      document.querySelectorAll('.tab-btn').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-tab') === 'threads'); });
+      document.querySelectorAll('.tab-panel').forEach(function(pnl){
+        pnl.classList.toggle('active', pnl.id === 'tab-threads'); });
+      renderThreadsTab();
+      break;
+    }
     case 'msgx-open':
       UI.threadCid = cid;
       markConversationRead(cid);
@@ -5494,7 +5681,9 @@ document.addEventListener('click', function(ev){
       doMsgxSend(cid, target);
       break;
     case 'msgx-mode':
-      UI.msgxNote = target.getAttribute('data-mode') === 'note';
+      UI.msgxMode = target.getAttribute('data-mode');
+      // Kept in step so anything still reading the old flag stays correct.
+      UI.msgxNote = UI.msgxMode === 'note';
       renderMsgxThread();
       break;
     case 'msgx-add-note':
@@ -5845,6 +6034,41 @@ document.addEventListener('change', function(ev){
      && !billingAllowsWrite(billingState())){
     showBillingWall();
     renderAll();   // put the control back to what the state actually says
+    return;
+  }
+  /* Tailored wording, saved when the box loses focus rather than on every
+     keystroke -- one row per contact per touch, not one write per letter.
+
+     editedTextCache is cleared on the way through. It is checked FIRST by
+     getCardText, so leaving the typed value in it would shadow the saved
+     row and the two could drift apart without anything showing it. */
+  if(t.getAttribute && t.getAttribute('data-action') === 'edit-text'){
+    var etCid = t.getAttribute('data-cid'), etStage = t.getAttribute('data-stage');
+    var etClient = STATE.clients[etCid];
+    if(etClient && OVERRIDABLE_STAGES.indexOf(etStage) !== -1){
+      var etOriginal = getOriginalText(STATE, etClient, etStage);
+      var etValue = t.value;
+      etClient.messageTexts = etClient.messageTexts || {};
+      delete editedTextCache[etCid + '|' + etStage];
+      if(!etValue.trim() || etValue === etOriginal){
+        /* Back to the template. The row is removed rather than stored as a
+           copy of the template -- an override that happens to equal the
+           template would freeze this contact out of future template edits
+           and out of the A/B learning, silently. */
+        delete etClient.messageTexts[etStage];
+        clearClientMessageText(etCid, etStage).then(function(r){
+          if(!r.ok) showToast('Could not reset that wording: ' + r.error);
+        });
+      } else {
+        etClient.messageTexts[etStage] = etValue;
+        saveClientMessageText(etCid, etStage, etValue).then(function(r){
+          showToast(r.ok
+            ? 'Saved \u2014 ' + firstName(etClient.name) + ' only.'
+            : 'Could not save that wording: ' + r.error);
+        });
+      }
+      renderCallsBoard();
+    }
     return;
   }
   if(SETTINGS_DRAFT && t.getAttribute && t.getAttribute('data-action') === 'set-step-stage'){

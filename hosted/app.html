@@ -1289,6 +1289,28 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-b.in{align-self:flex-start;background:var(--bg);border:1px solid var(--border);border-bottom-left-radius:3px;}
 .msgx-meta{font-size:10px;color:var(--ink-faint);margin-top:3px;}
 .msgx-b.out .msgx-meta{color:rgba(255,255,255,.75);}
+/* The due sequence touch, sitting between the conversation and the box you
+   reply in -- the place where "what is due" and "what was said" meet. */
+/* A queued touch, not a message. Italic and faint so the preview cannot be
+   mistaken for something already sent. */
+.msgx-tag.due{background:var(--amber-soft);color:var(--amber);}
+/* An email in a thread of texts. Marked, never left to be inferred from
+   shape -- answering in the wrong medium is the failure this prevents. */
+.msgx-tag.chan{background:var(--border);color:var(--ink-soft);}
+.msgx-b.email{border-left:3px solid var(--ink-faint);}
+.msgx-chan{font-size:10px;text-transform:uppercase;letter-spacing:.06em;
+  opacity:.75;margin-bottom:3px;font-weight:700;}
+.msgx-compose .lib-input{width:100%;box-sizing:border-box;margin-bottom:6px;
+  padding:7px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  font:inherit;background:var(--card);color:var(--ink);}
+.r-last.unsent{font-style:italic;color:var(--ink-faint);}
+.msgx-touch{border-top:1px solid var(--border);padding:9px 12px;background:var(--bg);}
+.msgx-touch.owed{background:var(--amber-soft);}
+.msgx-touch-head{font-size:12px;margin-bottom:4px;}
+.msgx-touch-warn{font-size:12px;color:var(--amber);font-weight:700;margin-bottom:4px;}
+.msgx-touch-text{font-size:13px;color:var(--ink-soft);margin-bottom:7px;
+  max-height:72px;overflow-y:auto;}
+.msgx-touch .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .msgx-compose{border-top:1px solid var(--border);padding:9px 12px;}
 .msgx-compose textarea{width:100%;resize:vertical;min-height:54px;font:inherit;font-size:13px;}
 .msgx-compose .row{display:flex;gap:8px;align-items:center;margin-top:7px;flex-wrap:wrap;}
@@ -1707,9 +1729,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-8d149452"></script>
-<script src="data.js?v=20261021-8d149452"></script>
-<script src="app.js?v=20261021-8d149452"></script>
-<script src="auth.js?v=20261021-8d149452"></script>
+<script src="logic.js?v=20261021-2670c2fb"></script>
+<script src="data.js?v=20261021-2670c2fb"></script>
+<script src="app.js?v=20261021-2670c2fb"></script>
+<script src="auth.js?v=20261021-2670c2fb"></script>
 </body>
 </html>

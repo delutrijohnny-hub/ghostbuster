@@ -6727,13 +6727,19 @@ console.log('\n--- what may be claimed about a message ---');
     assert.strictEqual(d.confirmed, true);
   });
 
-  test('an old email row with nothing recorded claims nothing', () => {
-    /* The unverified reading is specific to the sms: handoff. On email there
-       was no handoff, so an empty status means the delivery webhook never ran
-       -- and inventing a state for it would be the same mistake in reverse. */
-    const d = GB.deliveryState({channel:'email'});
+  test('an email handed to a provider claims nothing until the webhook reports', () => {
+    /* This test used to cover ALL email, on the reasoning that email has no
+       handoff. That was wrong about this product: every email actually goes
+       out through a Gmail compose link, which is exactly a handoff. The
+       distinction is the providerId.
+
+       With one, the send really did go through Resend and an empty status
+       means the delivery webhook has not reported yet -- naming Gmail there
+       would describe a mechanism that was not used. */
+    const d = GB.deliveryState({dir: 'out', channel: 'email', providerId: 'resend_abc'});
     assert.strictEqual(d.state, 'unknown');
     assert.strictEqual(d.label, '');
+    assert.strictEqual(d.confirmed, false);
   });
 
   test('every state has a phrase, and no phrase overstates', () => {
@@ -7310,11 +7316,19 @@ console.log('\n--- internal notes ---');
 
   test('a note is never counted as a message', () => {
     /* It must not enter reply rates, the bandit, or any "messages" total.
-       A contact with only a note has no conversation at all. */
+
+       The contact may still be LISTED, because the list is now the day's
+       queue and a due touch puts them there -- but they must be listed as
+       due with nothing said, never as a conversation. The note is not what
+       put them there, and it is not counted. */
     const st = GB.buildDefaultState();
     st.clients = {c1: mk([], [], [[2, 'just a note']])};
-    assert.deepStrictEqual(GB.conversationList(st, new Date()), [],
-      'a contact with only a note showed up as a conversation');
+    const rows = GB.conversationList(st, new Date());
+    rows.forEach(r => {
+      assert.strictEqual(r.messages, 0, 'a note was counted as a message');
+      assert.strictEqual(r.replies, 0, 'a note was counted as a reply');
+      assert.notStrictEqual(r.lastDir, 'note', 'a note became the last thing said');
+    });
   });
 
   test('a note does not make a conversation unread', () => {
@@ -7544,10 +7558,43 @@ console.log('\n--- the text inbox ---');
     assert.strictEqual(rows.find(r => r.name === 'Answered').awaitingReply, false);
   });
 
-  test('contacts with no texts at all are not in the inbox', () => {
-    // An inbox of people you have never messaged is a contact list.
+  test('a contact with nothing said AND nothing due stays out of the list', () => {
+    /* The list is the day's queue, so a contact with a due touch belongs in
+       it even in silence. One with neither a word nor a touch does not --
+       otherwise this is just the contact list again.
+
+       'Never' here has a due welcome, so the honest assertion is about the
+       contact who has genuinely nothing: the sequence finished. */
     const st = mk([{id:'c1', name:'Never', sent:[]}, {id:'c2', name:'Did', sent:[3]}]);
-    assert.deepStrictEqual(GB.conversationList(st, new Date()).map(r => r.name), ['Did']);
+    st.clients.c1.status = 'Completed';     // a status that genuinely stops the cadence
+    const names = GB.conversationList(st, new Date()).map(r => r.name);
+    assert.deepStrictEqual(names, ['Did'],
+      'a contact with nothing said and nothing due was listed anyway');
+  });
+
+  test('a contact with a due touch is listed even though nothing was said', () => {
+    const st = mk([{id:'c1', name:'Silent', sent:[]}]);
+    const rows = GB.conversationList(st, new Date());
+    assert.strictEqual(rows.length, 1, 'the due contact was left out of the queue');
+    assert.strictEqual(rows[0].name, 'Silent');
+    assert.ok(rows[0].dueStage, 'listed without saying which touch is due');
+    assert.strictEqual(rows[0].messages, 0);
+    assert.strictEqual(rows[0].lastAt, null,
+      'a timestamp was invented for a contact nothing has happened to');
+  });
+
+  test('what needs you is ordered above what is merely recent', () => {
+    /* Waiting on you, then due, then the rest. Pure recency buried every due
+       touch below the whole back catalogue, which is the bug this ordering
+       exists to prevent. */
+    const st = mk([
+      {id: 'a', name: 'Recent',  sent: [1]},
+      {id: 'b', name: 'Waiting', sent: [5], got: [2]},
+      {id: 'c', name: 'DueOnly', sent: []}
+    ]);
+    st.clients.a.status = 'Completed';   // recent conversation, nothing due
+    const names = GB.conversationList(st, new Date()).map(r => r.name);
+    assert.deepStrictEqual(names, ['Waiting', 'DueOnly', 'Recent']);
   });
 
   test('an archived contact is not in the inbox', () => {
@@ -7555,11 +7602,27 @@ console.log('\n--- the text inbox ---');
     assert.deepStrictEqual(GB.conversationList(st, new Date()), []);
   });
 
-  test('an email-only contact does not appear as a text thread', () => {
-    /* This is the Texts tab. An emailed contact showing here would make the
-       list claim conversations that never happened on this channel. */
+  test('an emailed contact appears, and is never presented as a text', () => {
+    /* This used to assert the opposite, and that was right while texts and
+       emails lived on separate tabs. Now that one thread is where a contact
+       is handled, hiding half a follow-up sequence is how the same thing
+       gets sent twice.
+
+       What still must hold is that the channel is never erased: a row that
+       does not say "email" lets somebody answer in a medium the contact
+       never used. */
     const st = mk([{id:'c1', name:'Emailed', sent:[3], channel:'email'}]);
-    assert.deepStrictEqual(GB.conversationList(st, new Date()), []);
+    const rows = GB.conversationList(st, new Date());
+    assert.strictEqual(rows.length, 1, 'the emailed contact was hidden');
+    assert.strictEqual(rows[0].lastChannel, 'email',
+      'the row did not say which channel it was, so it reads as a text');
+  });
+
+  test('a texted contact still reports its channel as text', () => {
+    // The control: if lastChannel were hard-coded to 'email' the test above
+    // would pass while saying nothing.
+    const st = mk([{id:'c1', name:'Texted', sent:[3]}]);
+    assert.strictEqual(GB.conversationList(st, new Date())[0].lastChannel, 'sms');
   });
 
   test('an inbound reply alone is enough to make a thread', () => {
@@ -14965,6 +15028,292 @@ test('an empty calendar is told apart from a quiet one', () => {
     'the first-run wording leaked into the routine sync message, where it '
       + 'would alarm somebody whose calendar is simply quiet today');
 });
+
+console.log('\n--- email in the conversation ---');
+{
+  test('logging an email send does not throw, and never credits a template', () => {
+    /* This threw for the entire life of the "Open in Gmail" button.
+       buildDefaultVariants() covers only the cadence stages, so asking for
+       'email' handed undefined to .filter() inside eligibleVariants. Every
+       click died there, inside a handler, silently -- which is why
+       message_log contained zero emails while the feature looked shipped.
+
+       An unlogged email is worse than a cosmetic gap: the automated side
+       cannot see it, so a text can go out on top of it the same afternoon. */
+    const st = GB.buildDefaultState();
+    const c = GB.sanitizeClient({id: 'c1', name: 'T', email: 'a@b.com', phone: '2019237135'});
+    st.clients = {c1: c};
+    assert.doesNotThrow(() => GB.markSent(st, 'c1', 'email', 'Recap\n\nbody'));
+    assert.strictEqual(c.messageLog.length, 1, 'the email send was not logged');
+    const m = c.messageLog[0];
+    assert.strictEqual(m.stage, 'email');
+    assert.strictEqual(m.variantId, 'custom',
+      'an email credited a text template, which would corrupt its reply rate');
+  });
+
+  test('an unknown stage yields no variants rather than exploding', () => {
+    // The general case. A future channel must not be able to take a click
+    // handler down by not having a template bucket.
+    const st = GB.buildDefaultState();
+    const c = GB.sanitizeClient({id: 'c1', name: 'T'});
+    st.clients = {c1: c};
+    assert.doesNotThrow(() => GB.pickVariant(st, 'no_such_stage', c));
+    assert.strictEqual(GB.pickVariant(st, 'no_such_stage', c).id, 'fallback');
+  });
+
+  test('a real cadence stage still gets its real variants', () => {
+    // The control: if the fix had replaced every lookup with [], this fails.
+    const st = GB.buildDefaultState();
+    const c = GB.sanitizeClient({id: 'c1', name: 'T', phone: '2019237135'});
+    assert.notStrictEqual(GB.pickVariant(st, 'welcome', c).id, 'fallback',
+      'the cadence stages lost their templates');
+  });
+
+  test('an unconfirmed email says which app the draft was opened in', () => {
+    /* It previously fell through to an EMPTY label, so a Gmail handoff
+       rendered with no state at all, sitting next to texts that honestly
+       said they were unconfirmed. A blank reads as "fine". */
+    const d = GB.deliveryState({dir: 'out', channel: 'email'});   // no providerId: a Gmail draft
+    assert.strictEqual(d.state, 'unverified');
+    assert.ok(/Gmail/.test(d.label), 'the label did not name Gmail: ' + JSON.stringify(d.label));
+    assert.strictEqual(d.confirmed, false,
+      'opening a draft was treated as proof the email went out');
+  });
+
+  test('the two channels do not borrow each other\'s wording', () => {
+    // A text claiming it was "opened in Gmail" sends somebody to the wrong
+    // app looking for proof.
+    assert.ok(/Messages/.test(GB.deliveryState({dir: 'out', channel: 'sms'}).label));
+    assert.ok(!/Gmail/.test(GB.deliveryState({dir: 'out', channel: 'sms'}).label));
+    assert.ok(!/Messages/.test(GB.deliveryState({dir: 'out', channel: 'email'}).label));
+  });
+
+  test('a real provider event still outranks the handoff wording', () => {
+    const d = GB.deliveryState({dir: 'out', channel: 'email', deliveryStatus: 'delivered'});
+    assert.strictEqual(d.label, 'delivered');
+    assert.strictEqual(d.confirmed, true);
+    const b = GB.deliveryState({dir: 'out', channel: 'email', deliveryStatus: 'bounced'});
+    assert.strictEqual(b.confirmed, true, 'a bounce is a real event and must be trusted');
+  });
+
+  test('an email and a text to the same contact share one thread, in order', () => {
+    /* The point of combining: a sequence that alternates channels reads as
+       one conversation. Shown out of order, or with half missing, is how the
+       same thing gets sent twice. */
+    const c = GB.sanitizeClient({id: 'c1', name: 'T', messageLog: [
+      {id: 'm1', stage: 'welcome', text: 'texted first', sentAt: '2026-10-01T10:00:00Z', channel: 'sms'},
+      {id: 'm2', stage: 'monday', text: 'emailed second', sentAt: '2026-10-02T10:00:00Z', channel: 'email'}
+    ]});
+    const thread = GB.conversationThread(c);
+    assert.deepStrictEqual(thread.map(i => i.text), ['texted first', 'emailed second']);
+    assert.deepStrictEqual(thread.map(i => i.channel), ['sms', 'email']);
+  });
+}
+
+console.log('\n--- the due touch inside the conversation ---');
+{
+  const due = () => {
+    const now = new Date();
+    const c = freshClient({bookedDate: now.toISOString(), callDateTime: isoDaysFromNow(21)});
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    st.clients = {[c.id]: c};
+    return {st, c, now};
+  };
+
+  test('a due touch is offered, labelled by its place in the sequence', () => {
+    const {st, c, now} = due();
+    const t = GB.threadTouch(st, c, now);
+    assert.ok(t, 'nothing was offered for a contact with a due touch');
+    assert.strictEqual(t.stage, 'welcome');
+    assert.strictEqual(t.position, 1);
+    assert.strictEqual(t.label, 'Touch 1 of ' + t.total);
+    assert.ok(t.total >= 5, 'the sequence lost its touches: ' + t.total);
+  });
+
+  test('the offered text is the contact\'s own wording when they have one', () => {
+    /* The two features meet here: a touch tailored for one contact must be
+       what the thread offers, not the template it replaced. */
+    const {st, c, now} = due();
+    c.messageTexts = {welcome: 'Teresa — Friday still good for the CFO?'};
+    assert.strictEqual(GB.threadTouch(st, c, now).text,
+                       'Teresa — Friday still good for the CFO?');
+  });
+
+  test('nothing is offered when no touch is due', () => {
+    /* The normal state between touches, and not an error -- the panel simply
+       does not appear. A bare contact does NOT test this: 'welcome' fires on
+       creation, so one always has a touch due. The real quiet state is a
+       touch already sent with the next one not yet reached. */
+    const {st, c, now} = due();
+    GB.markSent(st, c.id, 'welcome', 'hi');
+    assert.deepStrictEqual(GB.computeDue(st.clients[c.id], now), [],
+      'the fixture still had a due touch, so this proved nothing');
+    assert.strictEqual(GB.threadTouch(st, st.clients[c.id], now), null);
+  });
+
+  test('an ignored contact is never offered a touch', () => {
+    const {st, c, now} = due();
+    c.ignored = true;
+    assert.strictEqual(GB.threadTouch(st, c, now), null);
+  });
+
+  test('a missing contact does not throw', () => {
+    const st = GB.buildDefaultState();
+    assert.strictEqual(GB.threadTouch(st, null, new Date()), null);
+    assert.doesNotThrow(() => GB.threadTouch(st, undefined, new Date()));
+  });
+
+  test('when they spoke last the box is left empty, but the touch still shows', () => {
+    /* A script must never be one click from going out to somebody who asked
+       a direct question. The reminder stays; the pre-fill does not. */
+    const {st, c, now} = due();
+    c.replies = [{id: 'r1', at: new Date(now.getTime() - 60000).toISOString(),
+                  text: 'Can you do Friday instead?'}];
+    const t = GB.threadTouch(st, c, now);
+    // Asserted, not guarded with an if: a test that quietly does nothing
+    // when the branch stops being reachable is worse than no test.
+    assert.ok(t, 'no touch was offered, so the reply branch was never exercised');
+    assert.strictEqual(t.replyFirst, true, 'their reply was not noticed');
+    assert.strictEqual(t.prefill, '', 'a template was pre-filled over their question');
+    assert.ok(t.text.length > 0, 'the touch stopped being shown as a reminder');
+  });
+
+  test('when you spoke last the touch is pre-filled ready to send', () => {
+    const {st, c, now} = due();
+    const t = GB.threadTouch(st, c, now);
+    assert.strictEqual(t.replyFirst, false);
+    assert.strictEqual(t.prefill, t.text);
+  });
+
+  test('a note written after their reply does not cancel that they are owed one', () => {
+    /* The case that matters, and the one a weaker test misses: a colleague
+       leaves "he mentioned budget" AFTER the contact asked a question. The
+       note is the newest item in the thread, so counting it as a turn would
+       make the contact look answered and pre-fill a script over their
+       question. Ordering the fixture this way is what makes the filter in
+       threadTouch falsifiable at all. */
+    const {st, c, now} = due();
+    c.replies = [{id: 'r1', at: new Date(now.getTime() - 30 * 86400000).toISOString(),
+                  text: 'Can you do Friday instead?'}];
+    c.threadNotes = [{id: 'n1', body: 'budget is tight', author: 'Ethan',
+                      at: new Date(now.getTime() - 60000).toISOString()}];
+    const t = GB.threadTouch(st, c, now);
+    assert.ok(t, 'no touch was offered, so nothing was exercised');
+    assert.strictEqual(t.replyFirst, true,
+      'a colleague\'s note was counted as the contact speaking, so they look answered');
+    assert.strictEqual(t.prefill, '', 'a script was pre-filled over their unanswered question');
+  });
+}
+
+console.log('\n--- per-contact wording ---');
+{
+  const mkClient = (overrides) => {
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    const c = GB.sanitizeClient({
+      id: 'c1', name: 'Teresa Dinapoli', phone: '2019237135',
+      status: 'No-show', timezone: 'America/New_York',
+      messageTexts: overrides || {}
+    });
+    st.clients = {c1: c};
+    return st;
+  };
+
+  test('with no override, the shared template is used exactly as before', () => {
+    const st = mkClient(null);
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'),
+                       GB.getOriginalText(st, st.clients.c1, 'welcome'));
+  });
+
+  test('a saved override replaces the template for that contact', () => {
+    const st = mkClient({welcome: 'Teresa — the CFO thing, Friday still good?'});
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'),
+                       'Teresa — the CFO thing, Friday still good?');
+  });
+
+  test('an override on one touch leaves the others on the template', () => {
+    /* The point of the feature: personalise a touch, not the sequence. */
+    const st = mkClient({dayof: 'See you at 1, Teresa.'});
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'dayof'), 'See you at 1, Teresa.');
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'),
+                       GB.getOriginalText(st, st.clients.c1, 'welcome'));
+  });
+
+  test('one contact\'s wording never reaches another', () => {
+    const st = mkClient({welcome: 'Just for Teresa.'});
+    st.clients.c2 = GB.sanitizeClient({id: 'c2', name: 'Sam Badovinac', phone: '5551112222'});
+    assert.strictEqual(GB.getCardText(st, st.clients.c2, 'welcome'),
+                       GB.getOriginalText(st, st.clients.c2, 'welcome'));
+  });
+
+  test('only cadence stages can carry an override', () => {
+    /* The same list the database check constraint enforces, so a stage it
+       would reject never gets as far as a failing write. */
+    const c = GB.sanitizeClient({id: 'c1', name: 'T', messageTexts:
+      {welcome: 'kept', custom: 'dropped', email: 'dropped', nonsense: 'dropped'}});
+    assert.deepStrictEqual(Object.keys(c.messageTexts), ['welcome']);
+  });
+
+  test('a blank override is dropped rather than stored', () => {
+    // '' would read as "override to an empty message" and send nothing.
+    const c = GB.sanitizeClient({id: 'c1', name: 'T',
+      messageTexts: {welcome: '   ', dayof: '', monday: 'real'}});
+    assert.deepStrictEqual(Object.keys(c.messageTexts), ['monday']);
+  });
+
+  test('clientMessageText reports absence as null, not as empty text', () => {
+    assert.strictEqual(GB.clientMessageText(null, 'welcome'), null);
+    assert.strictEqual(GB.clientMessageText({}, 'welcome'), null);
+    assert.strictEqual(GB.clientMessageText({messageTexts: {}}, 'welcome'), null);
+    assert.strictEqual(GB.clientMessageText({messageTexts: {welcome: '  '}}, 'welcome'), null);
+    assert.strictEqual(GB.clientMessageText({messageTexts: {welcome: 'x'}}, 'welcome'), 'x');
+  });
+
+  test('a tailored send is logged as custom, so it never moves template stats', () => {
+    /* An override is by definition not the template's copy. Crediting the
+       template's bandit with its reply rate would teach the learning from
+       words that template never contained. */
+    const st = mkClient({welcome: 'Teresa — Friday still good?'});
+    GB.markSent(st, 'c1', 'welcome', GB.getCardText(st, st.clients.c1, 'welcome'));
+    assert.strictEqual(st.clients.c1.messageLog[0].variantId, 'custom');
+  });
+
+  test('an override does not change WHEN the five touches fire', () => {
+    /* The whole requirement: personalise the words, keep the cadence. The
+       same contact is run through computeDue with and without tailored
+       wording, and the due touches must be identical. */
+    const now = new Date();
+    const base = {bookedDate: now.toISOString(), callDateTime: isoDaysFromNow(21)};
+    const plain = freshClient(base);
+    const tailored = freshClient(base);
+    tailored.messageTexts = {welcome: 'Totally different words for Teresa.'};
+
+    const plainDue = GB.computeDue(plain, now);
+    assert.ok(plainDue.length > 0,
+      'the fixture produced no due touches, so the comparison proved nothing');
+    assert.deepStrictEqual(GB.computeDue(tailored, now), plainDue);
+  });
+
+  test('what you are typing beats what was saved, which beats the template', () => {
+    /* The ordering in getCardText. If the saved wording won, the card would
+       snap back to the old text while somebody was still editing it. */
+    const st = mkClient({welcome: 'saved wording'});
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'), 'saved wording');
+    GB._setEditedText('c1', 'welcome', 'still typing this');
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'), 'still typing this');
+    GB._resetCaches();
+    assert.strictEqual(GB.getCardText(st, st.clients.c1, 'welcome'), 'saved wording');
+  });
+
+  test('an override survives the state round trip', () => {
+    // sanitizeClient runs on every load; dropping the field there would
+    // lose the wording exactly the way editedTextCache did.
+    const c = GB.sanitizeClient(GB.sanitizeClient(
+      {id: 'c1', name: 'T', messageTexts: {monday: 'kept across reloads'}}));
+    assert.strictEqual(c.messageTexts.monday, 'kept across reloads');
+  });
+}
 
 console.log('\n--- inbox search ---');
 {

@@ -1952,6 +1952,18 @@ function sanitizeClient(raw, fallbackId){
         at: (typeof n.at === 'string' && !isNaN(Date.parse(n.at))) ? n.at : nowISO()
       };
     }) : [],
+    /* Per-contact wording for a cadence touch, {stage: text}. Only the
+       cadence stages are kept: an override for a one-off send would be a
+       template for something that by definition has none. Empty strings are
+       dropped rather than stored, because "" would read as an override to a
+       blank message and would silently send nothing. */
+    messageTexts: (raw.messageTexts && typeof raw.messageTexts === 'object')
+      ? Object.keys(raw.messageTexts).reduce(function(acc, k){
+          var v = raw.messageTexts[k];
+          if(OVERRIDABLE_STAGES.indexOf(k) !== -1 && typeof v === 'string' && v.trim()) acc[k] = v;
+          return acc;
+        }, {})
+      : {},
     replies: Array.isArray(raw.replies) ? raw.replies.filter(function(r){
       return r && typeof r === 'object' && typeof r.text === 'string';
     }).map(function(r){
@@ -2623,7 +2635,23 @@ function variantNeedsLink(v){
 }
 
 function eligibleVariants(state, stage, client){
-  var list = (state.variants && Array.isArray(state.variants[stage]) && state.variants[stage].length) ? state.variants[stage] : buildDefaultVariants()[stage];
+  /* A stage with no template bucket yields [], not undefined.
+
+     buildDefaultVariants() only covers the cadence stages, so asking for a
+     non-cadence one -- 'email', or anything a future channel introduces --
+     handed `undefined` straight to .filter() below and threw. That is not
+     theoretical: every "Open in Gmail" click called markSent(state, cid,
+     'email', ...) and died here, which is why message_log contains zero
+     emails despite the button having shipped. Nothing reported it, because
+     the throw happened inside a click handler.
+
+     An empty list is the honest answer -- there are no email templates --
+     and pickVariant already turns that into its fallback, so the send is
+     logged as 'custom'. Which is correct: copy with no template behind it
+     cannot credit one. */
+  var list = (state.variants && Array.isArray(state.variants[stage]) && state.variants[stage].length)
+    ? state.variants[stage]
+    : (buildDefaultVariants()[stage] || []);
   var hasChannel = !!extractChannelHandle(client.youtubeLink);
   /* A message built around a room link is not sendable without one.
 
@@ -2943,9 +2971,31 @@ function tidyTemplate(text){
 }
 
 
+/* Which touches may carry per-contact wording. The cadence stages only --
+   'custom' and 'email' are absent deliberately, and this is the same list the
+   client_message_texts check constraint enforces, so a stage the database
+   would reject never reaches it. */
+var OVERRIDABLE_STAGES = ['welcome','monday','midcheckin','dayof','hourbefore',
+                          'recovery','noshow','revival','rebooked','followup'];
+
+function clientMessageText(client, stage){
+  var saved = client && client.messageTexts && client.messageTexts[stage];
+  return (typeof saved === 'string' && saved.trim()) ? saved : null;
+}
+
 function getCardText(state, client, stage){
   var key = client.id + '|' + stage;
+  /* Three sources, most recent first. What is being typed right now beats
+     what was saved earlier, which beats the shared template.
+
+     The saved layer is new. editedTextCache was previously the ONLY layer,
+     and it is a plain in-memory object -- so every hand-tailored touch and
+     every AI draft was discarded on the next reload while getCardText quietly
+     fell back to the template. The copy was not being overridden; it was
+     being forgotten. */
   if(Object.prototype.hasOwnProperty.call(editedTextCache, key)) return editedTextCache[key];
+  var saved = clientMessageText(client, stage);
+  if(saved !== null) return saved;
   var variant = pickVariant(state, stage, client);
   return renderTemplate(variant.text, client, state.senderName);
 }
@@ -3489,10 +3539,49 @@ function conversationList(state, now){
     /* Notes are excluded here deliberately. A contact you have only written a
        note about has no conversation, and counting notes as messages would
        put them in the inbox and in every "messages" total. */
+    /* Both channels. This used to be texts only, on the reasoning that a
+       Texts tab claiming email conversations describes something that never
+       happened here -- true while the two lived on separate tabs, and wrong
+       once this became the one place a contact is handled. A follow-up
+       sequence alternates text and email, and a thread showing half of it
+       invites sending the same thing twice.
+
+       Notes stay out: a contact somebody only wrote a note about still has
+       no conversation. */
     var thread = conversationThread(c).filter(function(it){
-      return it.dir === 'in' || (it.dir === 'out' && it.channel === 'sms');
+      return it.dir === 'in' ||
+             (it.dir === 'out' && (it.channel === 'sms' || it.channel === 'email'));
     });
-    if(!thread.length) return;
+    /* A contact with a due touch belongs here even if nothing has been said
+       yet, which is what turns this list from an inbox into the day's queue.
+       Roughly 560 of 790 contacts have no conversation, so without this the
+       chat tab could only ever show the minority who had already replied --
+       and the work that needs doing would be the part you could not see. */
+    var dueStages = thread.length ? [] : computeDue(c, now);
+    if(!thread.length && !dueStages.length) return;
+
+    if(!thread.length){
+      rows.push({
+        clientId: c.id,
+        unread: 0,
+        name: c.name,
+        phone: c.phone || '',
+        status: c.status,
+        smsStatus: c.smsStatus || 'ok',
+        /* No time, because nothing has happened. A fabricated timestamp would
+           sort this row among real messages and read as activity. */
+        lastAt: null,
+        lastT: 0,
+        lastDir: 'due',
+        lastText: getCardText(state, c, dueStages[0]),
+        messages: 0,
+        replies: 0,
+        awaitingReply: false,
+        dueStage: dueStages[0]
+      });
+      return;
+    }
+
     var last = thread[thread.length - 1];
     var inbound = 0;
     thread.forEach(function(it){ if(it.dir === 'in') inbound++; });
@@ -3506,6 +3595,10 @@ function conversationList(state, now){
       lastAt: last.at,
       lastT: last.t,
       lastDir: last.dir,
+      /* Which channel the last thing happened on. The list carries both now,
+         so a row that does not say which one lets an email read as a text --
+         and somebody then "replies" to it in a medium the contact never used. */
+      lastChannel: last.channel || (last.dir === 'in' ? 'sms' : 'sms'),
       lastText: last.text,
       messages: thread.length,
       replies: inbound,
@@ -3513,7 +3606,27 @@ function conversationList(state, now){
       awaitingReply: last.dir === 'in'
     });
   });
-  rows.sort(function(a, b){ return b.lastT - a.lastT; });
+  /* Ordered by what needs you, then by recency inside that.
+
+     Pure recency was right while this was only an inbox. As the day's queue
+     it buries the work: a due touch has no timestamp, so every one of them
+     would sit below 229 older conversations and never be seen. The bands are
+     the question the pane exists to answer -- the layout comment calls it
+     "who needs me" -- and recency only breaks ties within a band.
+
+     Awaiting a reply outranks a due touch deliberately. A person who asked
+     something and is waiting is a commitment already made; a scheduled touch
+     is one you are about to make. */
+  function band(r){
+    if(r.awaitingReply) return 0;
+    if(r.dueStage) return 1;
+    return 2;
+  }
+  rows.sort(function(a, b){
+    var ba = band(a), bb = band(b);
+    if(ba !== bb) return ba - bb;
+    return b.lastT - a.lastT;
+  });
   return rows;
 }
 
@@ -3587,7 +3700,10 @@ var DELIVERY_STATES = {
   bounced:    'not delivered',
   complained: 'marked as junk',
   failed:     'failed to send',
-  unverified: 'opened in Messages \u2014 not confirmed'
+  unverified: 'opened in Messages \u2014 not confirmed',
+  // Same honesty on the other channel: a Gmail draft was opened and
+  // nothing came back to say Send was ever pressed.
+  unverified_email: 'opened in Gmail \u2014 not confirmed'
 };
 
 function deliveryState(m){
@@ -3603,11 +3719,34 @@ function deliveryState(m){
                  raw === 'complained' || raw === 'failed'
     };
   }
-  /* Nothing recorded. On the text channel that means the sms: handoff, where
-     a draft was opened and nothing came back -- which is unverified, not
-     sent. Older rows predate the distinction and land here too, correctly. */
-  if((m.channel || 'sms') === 'sms'){
+  /* Nothing recorded. On either channel that means a handoff -- a draft was
+     opened in another app and nothing came back -- which is unverified, not
+     sent. Older rows predate the distinction and land here too, correctly.
+
+     The label names the app the draft was opened in, because "not confirmed"
+     on its own leaves somebody looking in the wrong place for the proof. The
+     email case previously fell through to an EMPTY label, so a Gmail handoff
+     rendered with no state at all next to texts that honestly said they were
+     unconfirmed -- which reads as a send that went fine. */
+  var ch = m.channel || 'sms';
+  if(ch === 'sms'){
     return {state: 'unverified', label: DELIVERY_STATES.unverified, confirmed: false};
+  }
+  if(ch === 'email'){
+    /* Two different silences on this channel, and they mean opposite things.
+
+       No providerId means nobody handed this to a provider: it is the Gmail
+       compose handoff, where a draft was opened and nothing came back. That
+       is unverified, exactly like the sms: link, and it is what every email
+       in this product actually is today.
+
+       WITH a providerId the send did go through Resend and the delivery
+       webhook simply has not reported yet. Calling that "opened in Gmail"
+       would name a mechanism that was not used, so it stays unknown. */
+    if(m.providerId){
+      return {state: 'unknown', label: '', confirmed: false};
+    }
+    return {state: 'unverified', label: DELIVERY_STATES.unverified_email, confirmed: false};
   }
   return {state: 'unknown', label: '', confirmed: false};
 }
@@ -6831,6 +6970,52 @@ function cadenceTouches(){
   }).map(function(step){ return step.stage; });
 }
 
+/* The sequence touch to surface inside a conversation.
+
+   The point of putting it here rather than only on Today: a scripted touch
+   written without the conversation in front of you is how somebody sends
+   "just checking in" to a person who asked a direct question yesterday.
+   The thread is where the context is, so the touch belongs in it.
+
+   Returns null when nothing is due, which is the normal state and not an
+   error -- the panel simply does not appear.
+
+   replyFirst is the interesting case. A reply pauses the sequence, so while
+   the pause holds nothing is due and this returns null anyway. Once it
+   expires the touch comes back while they are STILL the last to have spoken,
+   and at that moment the right thing is to answer them, not to resume the
+   script. The touch stays visible as a reminder; it just stops being what
+   the box is pre-filled with. */
+function threadTouch(state, client, now){
+  now = now || new Date();
+  if(!client) return null;
+  var prog = cadenceProgress(client, now);
+  if(!prog.nextStage || !prog.nextIsDue) return null;
+
+  var stage = prog.nextStage;
+  var position = prog.touches.indexOf(stage) + 1;
+
+  /* Notes are excluded when deciding who spoke last. A note is written by
+     the team about the contact; treating it as a turn would make somebody
+     look answered because a colleague left a reminder. */
+  var thread = conversationThread(client).filter(function(it){ return it.dir !== 'note'; });
+  var last = thread.length ? thread[thread.length - 1] : null;
+  var replyFirst = !!(last && last.dir === 'in');
+
+  var text = getCardText(state, client, stage);
+  return {
+    stage: stage,
+    position: position,
+    total: prog.touches.length,
+    label: 'Touch ' + position + ' of ' + prog.touches.length,
+    text: text,
+    replyFirst: replyFirst,
+    // What the composer should start with. Empty when they are owed an
+    // answer, so a script is never one click from going out to a question.
+    prefill: replyFirst ? '' : text
+  };
+}
+
 function cadenceProgress(client, now){
   now = now || new Date();
   var touches = cadenceTouches();
@@ -7649,6 +7834,8 @@ var __LOGIC_EXPORTS__ = {
   extractChannelHandle: extractChannelHandle, variantNeedsLink: variantNeedsLink,
   eligibleVariants: eligibleVariants, pickVariant: pickVariant,
   firstName: firstName, renderTemplate: renderTemplate, getCardText: getCardText, getOriginalText: getOriginalText,
+  clientMessageText: clientMessageText, OVERRIDABLE_STAGES: OVERRIDABLE_STAGES,
+  threadTouch: threadTouch,
   markSent: markSent, snoozeTouch: snoozeTouch, skipTouch: skipTouch, unskipTouch: unskipTouch,
   sanitizeSkipped: sanitizeSkipped, toggleReplied: toggleReplied, recordReschedule: recordReschedule,
   uuid: uuid, recordEvent: recordEvent,
@@ -7744,7 +7931,14 @@ var __LOGIC_EXPORTS__ = {
   weekRangeLabel: weekRangeLabel,
   computeEndOfDayItems: computeEndOfDayItems, buildWeeklyDigest: buildWeeklyDigest,
   csvField: csvField, buildClientsCsv: buildClientsCsv,
-  _resetCaches: function(){ stickyVariantCache = {}; editedTextCache = {}; }
+  _resetCaches: function(){ stickyVariantCache = {}; editedTextCache = {}; },
+  /* Test hook, alongside _resetCaches. editedTextCache is written only by
+     app.js as somebody types, so without this the ordering in getCardText
+     -- typed beats saved beats template -- cannot be asserted from node,
+     and mutation testing showed it was the one guard no test could
+     falsify. It is load-bearing, not redundant: if saved text won, the
+     box would snap back to the old wording mid-edit. */
+  _setEditedText: function(clientId, stage, text){ editedTextCache[clientId + '|' + stage] = text; }
 };
 if(typeof module !== 'undefined' && module.exports){ module.exports = __LOGIC_EXPORTS__; }
 if(typeof window !== 'undefined'){ window.GBLogic = __LOGIC_EXPORTS__; }

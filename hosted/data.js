@@ -1045,6 +1045,21 @@ async function loadState(){
     });
   });
 
+  /* Per-contact wording for a cadence touch.
+
+     Degrades to no overrides rather than failing the load: a missing table
+     means this account has simply never tailored a touch, which is the
+     normal state and not an error. Everything then renders from the shared
+     templates exactly as it did before this existed. */
+  var textsRes = await sb.from('client_message_texts')
+    .select('client_id, stage, text')
+    .limit(5000);
+  ((textsRes && textsRes.data) || []).forEach(function(row){
+    if(!row || !row.client_id || !state.clients[row.client_id]) return;
+    if(typeof row.text !== 'string' || !row.text.trim()) return;
+    state.clients[row.client_id].messageTexts[row.stage] = row.text;
+  });
+
   /* What is queued to go out. Pending only: a resolved row is history, and
      the question this answers is "what is about to happen". */
   var schedRes = await sb.from('scheduled_messages')
@@ -1267,6 +1282,42 @@ function diff(prev, next){
 // append-only and grows without bound, and the only place it is read is one
 // contact's timeline. Keeping it out of the in-memory state is what stops
 // memory and every save's diff from growing with history.
+/* Save, or clear, the wording for one contact at one touch.
+
+   Written straight to its own table rather than through saveState: this is
+   one small row, and routing it through the whole-account save would push
+   every contact on every edit. The same reason conversation_reads is
+   written directly.
+
+   Reports failure to the caller rather than swallowing it. Copy somebody
+   spent a minute writing must not look saved when it is not -- that is the
+   bug this whole table exists to fix. */
+async function saveClientMessageText(clientId, stage, text){
+  var sb = window.GB_SUPABASE;
+  if(!sb || !clientId || !stage) return {ok: false, error: 'not ready'};
+  var body = String(text == null ? '' : text);
+  if(!body.trim()) return clearClientMessageText(clientId, stage);
+  var userRes = await sb.auth.getUser();
+  var uid = userRes && userRes.data && userRes.data.user && userRes.data.user.id;
+  var orgId = (window.STATE && window.STATE.orgId) || (typeof STATE !== 'undefined' && STATE.orgId);
+  if(!orgId) return {ok: false, error: 'no organisation'};
+  var res = await sb.from('client_message_texts').upsert({
+    client_id: clientId, stage: stage, org_id: orgId,
+    user_id: uid || null, text: body, updated_at: new Date().toISOString()
+  }, {onConflict: 'client_id,stage'});
+  if(res && res.error) return {ok: false, error: res.error.message || 'save failed'};
+  return {ok: true};
+}
+
+async function clearClientMessageText(clientId, stage){
+  var sb = window.GB_SUPABASE;
+  if(!sb || !clientId || !stage) return {ok: false, error: 'not ready'};
+  var res = await sb.from('client_message_texts').delete()
+    .eq('client_id', clientId).eq('stage', stage);
+  if(res && res.error) return {ok: false, error: res.error.message || 'could not reset'};
+  return {ok: true};
+}
+
 async function fetchClientEvents(clientId){
   var sb = window.GB_SUPABASE;
   try{
