@@ -3641,6 +3641,61 @@ function conversationList(state, now){
   return rows;
 }
 
+/* The ONE thing a row should say about itself.
+
+   The list currently stacks up to five badges -- unread, waiting, touch due,
+   status, opted out -- and a row wearing all of them communicates nothing:
+   every row looks urgent, so none of them do. This picks the single most
+   actionable fact and lets the rest go.
+
+   Ordered by what changes what you do next. An opt-out is a hard stop and
+   outranks everything, including work that looks due. Somebody waiting on a
+   reply outranks a scheduled touch, because a promise already made outranks
+   one about to be. Status is the fallback: it describes the contact rather
+   than asking anything of you.
+
+   Unread is deliberately NOT here. It is a count, shown as a number beside
+   the row, and collapsing it into the badge would lose how many. */
+function conversationSignal(row){
+  if(!row) return null;
+  if(row.smsStatus === 'opted_out') return {key: 'opted_out', label: 'opted out', tone: 'stop'};
+  if(row.awaitingReply)             return {key: 'waiting',   label: 'waiting on you', tone: 'urgent'};
+  if(row.dueStage)                  return {key: 'due',       label: 'touch due', tone: 'due'};
+  if(row.status)                    return {key: 'status',    label: row.status, tone: 'plain'};
+  return null;
+}
+
+/* Initials for the avatar circle.
+
+   Two letters at most, from the first and last word of the name. Falls back
+   to one, and to nothing at all rather than throwing: a contact imported
+   with an empty name still has to render a row. */
+function initialsFor(name){
+  var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if(!parts.length) return '';
+  if(parts.length === 1) return parts[0].charAt(0).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+
+/* What can be acted on right now, and what has to wait.
+
+   "12 due" is one number answering two different questions. A touch for
+   somebody it is 6am for cannot be sent whatever anybody does about it, and
+   showing it alongside the ones that can is how a list stops being a list of
+   work. The TCPA window is the same rule send-sms enforces, so these counts
+   cannot disagree with what the server will allow. */
+function dueSplit(state, rows, now){
+  now = now || new Date();
+  var nowCount = 0, later = 0;
+  (rows || []).forEach(function(r){
+    if(!r.dueStage) return;
+    var c = (state && state.clients && state.clients[r.clientId]) || null;
+    var win = c ? smsSendWindow(c, now) : {ok: true};
+    if(win.ok) nowCount++; else later++;
+  });
+  return {now: nowCount, later: later};
+}
+
 /* The four questions somebody actually arrives with.
 
    Derived from the SAME rows the list renders, never recounted from the
@@ -8016,6 +8071,7 @@ var __LOGIC_EXPORTS__ = {
   filterConversations: filterConversations,
   filterConversationsBy: filterConversationsBy,
   conversationCounts: conversationCounts,
+  conversationSignal: conversationSignal, initialsFor: initialsFor, dueSplit: dueSplit,
   conversationMatchesFilter: conversationMatchesFilter,
   CONVERSATION_FILTERS: CONVERSATION_FILTERS,
   automationState: automationState,

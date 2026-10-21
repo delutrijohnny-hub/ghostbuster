@@ -15461,6 +15461,91 @@ console.log('\n--- per-contact wording ---');
   });
 }
 
+console.log('\n--- one signal per row ---');
+{
+  test('an opt-out outranks everything, including work that looks due', () => {
+    /* A hard stop has to win. A row that says "touch due" for somebody who
+       replied STOP invites the one send that cannot be undone. */
+    const sig = GB.conversationSignal({smsStatus:'opted_out', awaitingReply:true,
+                                       dueStage:'welcome', status:'Booked'});
+    assert.strictEqual(sig.key, 'opted_out');
+  });
+
+  test('a promise already made outranks one about to be', () => {
+    // They spoke and are waiting; a scheduled touch can wait behind that.
+    assert.strictEqual(
+      GB.conversationSignal({awaitingReply:true, dueStage:'welcome', status:'Booked'}).key,
+      'waiting');
+  });
+
+  test('a due touch outranks a status, which only describes them', () => {
+    assert.strictEqual(GB.conversationSignal({dueStage:'dayof', status:'Booked'}).key, 'due');
+    assert.strictEqual(GB.conversationSignal({status:'No-show'}).key, 'status');
+    assert.strictEqual(GB.conversationSignal({status:'No-show'}).label, 'No-show');
+  });
+
+  test('exactly one signal comes back, never a list', () => {
+    /* The point of the whole function. Five badges on a row means every row
+       looks urgent, which is the same as none of them doing. */
+    const sig = GB.conversationSignal({smsStatus:'ok', awaitingReply:true,
+                                       dueStage:'welcome', status:'Booked', unread:4});
+    assert.ok(sig && typeof sig.key === 'string', 'expected a single signal object');
+    assert.ok(!Array.isArray(sig));
+  });
+
+  test('unread is not folded into the signal, because it is a count', () => {
+    // Collapsing it to a badge would lose how many, which is the useful part.
+    const sig = GB.conversationSignal({unread: 7, status: 'Booked'});
+    assert.strictEqual(sig.key, 'status');
+    assert.ok(!/7/.test(sig.label));
+  });
+
+  test('a row with nothing to say says nothing', () => {
+    assert.strictEqual(GB.conversationSignal({}), null);
+    assert.strictEqual(GB.conversationSignal(null), null);
+  });
+
+  test('initials take the first and last word, and never throw', () => {
+    assert.strictEqual(GB.initialsFor('Teresa Dinapoli'), 'TD');
+    assert.strictEqual(GB.initialsFor('mary jane watson'), 'MW', 'middle names should not win');
+    assert.strictEqual(GB.initialsFor('Cher'), 'C');
+    assert.strictEqual(GB.initialsFor('  '), '');
+    assert.strictEqual(GB.initialsFor(null), '');
+    assert.strictEqual(GB.initialsFor(undefined), '');
+  });
+
+  test('due now and due later are split by the sending window, not guessed', () => {
+    /* "12 due" answers two questions at once. A touch for somebody it is 6am
+       for cannot be sent whatever anybody does, and listing it beside the
+       ones that can is how a work list stops being one.
+
+       Uses smsSendWindow, the same rule send-sms enforces, so the dashboard
+       cannot promise something the server will refuse. */
+    const st = GB.buildDefaultState();
+    st.clients = {
+      open:   GB.sanitizeClient({id:'open',   name:'A', timezone:'America/New_York'}),
+      closed: GB.sanitizeClient({id:'closed', name:'B', timezone:'Pacific/Kiritimati'})
+    };
+    const noon = new Date('2026-10-21T16:00:00Z');   // midday in New York
+    assert.strictEqual(GB.smsSendWindow(st.clients.open, noon).ok, true,
+      'the fixture is wrong: New York should be inside the window at midday');
+    assert.strictEqual(GB.smsSendWindow(st.clients.closed, noon).ok, false,
+      'the fixture is wrong: Kiritimati should be outside it');
+
+    const rows = [{clientId:'open', dueStage:'welcome'}, {clientId:'closed', dueStage:'welcome'}];
+    assert.deepStrictEqual(GB.dueSplit(st, rows, noon), {now: 1, later: 1});
+  });
+
+  test('rows with nothing due are counted in neither', () => {
+    const st = GB.buildDefaultState();
+    st.clients = {a: GB.sanitizeClient({id:'a', name:'A', timezone:'America/New_York'})};
+    assert.deepStrictEqual(
+      GB.dueSplit(st, [{clientId:'a'}], new Date('2026-10-21T16:00:00Z')), {now:0, later:0});
+    assert.deepStrictEqual(GB.dueSplit(st, [], new Date()), {now:0, later:0});
+    assert.deepStrictEqual(GB.dueSplit(st, null, new Date()), {now:0, later:0});
+  });
+}
+
 console.log('\n--- inbox filters ---');
 {
   const rows = [

@@ -1221,7 +1221,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .setup-off{background:var(--bg);color:var(--ink-faint);}
 
 /* ---- messaging workspace ---------------------------------------------- */
-.msgx{display:grid;grid-template-columns:290px minmax(0,1fr) 260px;gap:0;
+.msgx{display:grid;grid-template-columns:320px minmax(0,1fr) 260px;gap:0;
   border:1px solid var(--border);border-radius:10px;overflow:hidden;
   height:calc(100vh - 210px);min-height:420px;}
 .msgx-list{border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;}
@@ -1229,6 +1229,28 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-scroll{overflow-y:auto;flex:1;min-height:0;}
 /* The four questions somebody arrives with, with the count beside each so
    the chip answers "how much" before it is clicked. */
+/* The label, the bar and the percentage share a line when there is room and
+   wrap when there is not. At 375px they do not fit, and the percentage was
+   being clipped by the card edge -- a number cut in half is worse than one
+   on its own line. */
+.pw-main{display:flex;align-items:center;gap:10px;flex:1 1 100%;min-width:0;flex-wrap:wrap;}
+.pw-main .progress-label{flex:0 1 auto;min-width:0;}
+@media (max-width: 560px){
+  .pw-main .progress-track{flex:1 1 100%;order:3;}
+  .pw-pct{order:2;}
+}
+.pw-pct{font-size:12px;color:var(--ink-faint);font-variant-numeric:tabular-nums;flex:0 0 auto;}
+.pw-stats{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto;}
+.pw-stat{display:flex;flex-direction:column;align-items:flex-start;gap:0;
+  padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--card);cursor:pointer;font:inherit;min-width:62px;}
+.pw-stat:hover{background:var(--bg);}
+.pw-stat .n{font-size:15px;font-weight:800;line-height:1.1;}
+.pw-stat .k{font-size:10px;color:var(--ink-faint);white-space:nowrap;}
+.pw-stat.now .n{color:var(--red);}
+.pw-stat.later .n{color:var(--amber);}
+.pw-stat.waiting .n{color:var(--chart-1);}
+.pw-stat.unread .n{color:var(--green);}
 #confirm-sends:not(:empty){background:var(--card);border:1px solid var(--border);
   border-left:3px solid var(--amber);border-radius:var(--radius);
   box-shadow:var(--shadow);margin-bottom:16px;overflow:hidden;}
@@ -1247,9 +1269,12 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .tt-urgent{color:var(--amber);font-weight:700;}
 .tt-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
 .msgx-filters{display:flex;gap:4px;padding:8px 10px 0;flex-wrap:wrap;}
-.msgx-filters button{flex:1 1 auto;padding:5px 8px;border:1px solid var(--border);
+/* Packed, not stretched. flex:1 made four chips share the width and pushed
+   the last one onto a line of its own, full width, reading as a heading
+   rather than a filter. */
+.msgx-filters button{flex:0 1 auto;padding:4px 9px;border:1px solid var(--border);
   border-radius:99px;background:var(--card);color:var(--ink-soft);
-  font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;}
 .msgx-filters button.on{background:var(--ink);color:var(--card);border-color:var(--ink);}
 .msgx-filters button .n{opacity:.75;font-weight:600;}
 .msgx-find{padding:8px 10px;border-bottom:1px solid var(--border);}
@@ -1265,16 +1290,43 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-sub{color:var(--ink-faint);font-size:11.5px;}
 
 .msgx-rows{padding:0;}
-.msgx-row{display:block;width:100%;text-align:left;background:none;border:0;
-  border-bottom:1px solid var(--border);padding:9px 12px;cursor:pointer;font:inherit;color:inherit;}
+/* A row is an avatar and a body. The separator is faint rather than a full
+   rule: 172 hard lines down a column is a table, and this is a list of
+   people. */
+.msgx-row{display:flex;gap:10px;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--border);padding:10px 12px;cursor:pointer;
+  font:inherit;color:inherit;align-items:flex-start;}
 .msgx-row:hover{background:var(--bg);}
-.msgx-row.active{background:var(--red-soft);box-shadow:inset 3px 0 0 var(--red);}
+/* A soft tint, not a slab of brand colour. The selected row should be
+   findable without shouting over the 171 others. */
+.msgx-row.active{background:var(--bg);box-shadow:inset 3px 0 0 var(--red);}
+.msgx-row .r-av{flex:0 0 auto;width:34px;height:34px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11.5px;font-weight:800;letter-spacing:.02em;
+  background:var(--border);color:var(--ink-soft);}
+/* The avatar carries the row's tone, so urgency is visible before any text
+   is read. One quiet signal rather than a badge shouting next to four others. */
+.msgx-row .r-av.urgent{background:var(--red-soft);color:var(--red);}
+.msgx-row .r-av.due{background:var(--amber-soft);color:var(--amber);}
+.msgx-row .r-av.stop{background:var(--ink-faint);color:var(--card);}
+.msgx-row .r-body{flex:1 1 auto;min-width:0;}
 .msgx-row .r-top{display:flex;justify-content:space-between;gap:6px;align-items:baseline;}
-.msgx-row .r-name{font-weight:600;font-size:13px;}
-.msgx-row .r-when{color:var(--ink-faint);font-size:10.5px;white-space:nowrap;}
-.msgx-row .r-last{color:var(--ink-faint);font-size:12px;margin-top:2px;
+.msgx-row .r-name{font-weight:600;font-size:13px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.msgx-row .r-when{color:var(--ink-faint);font-size:10.5px;white-space:nowrap;flex:0 0 auto;}
+.msgx-row .r-mid{display:flex;gap:8px;align-items:center;margin-top:1px;}
+.msgx-row .r-last{color:var(--ink-faint);font-size:12px;flex:1 1 auto;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.msgx-row .r-tags{margin-top:4px;display:flex;gap:5px;flex-wrap:wrap;}
+/* A number, not a badge. "7" says how many; "unread" does not. */
+.msgx-row .r-unread{flex:0 0 auto;min-width:18px;height:18px;padding:0 5px;
+  border-radius:999px;background:var(--green);color:#fff;
+  font-size:10.5px;font-weight:800;line-height:18px;text-align:center;}
+.msgx-row .r-sig{display:inline-block;margin-top:5px;font-size:9.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.03em;padding:1px 6px;border-radius:999px;
+  background:var(--bg);color:var(--ink-faint);}
+.msgx-row .r-sig.urgent{background:var(--red-soft);color:var(--red);}
+.msgx-row .r-sig.due{background:var(--amber-soft);color:var(--amber);}
+.msgx-row .r-sig.stop{background:var(--ink-faint);color:var(--card);}
 .msgx-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
   padding:1px 6px;border-radius:999px;background:var(--bg);color:var(--ink-faint);}
 .msgx-tag.wait{background:var(--red-soft);color:var(--red);}
@@ -1564,8 +1616,15 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   </details>
 
   <div class="progress-bar-wrap">
-    <span class="progress-label" id="progress-label">0 of 0 touches sent today</span>
-    <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <div class="pw-main">
+      <span class="progress-label" id="progress-label">0 of 0 confirmed today</span>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <span class="pw-pct" id="progress-pct"></span>
+    </div>
+    <!-- The counts are the navigation. A number somebody has to then go
+         hunting for is a number that wasted their time, and a second button
+         saying "Work the list" would duplicate the one on the summary below. -->
+    <div class="pw-stats" id="pw-stats"></div>
     <button class="btn btn-sm" data-action="copy-remaining">Copy all <span id="remaining-count">0</span> remaining</button>
   </div>
 
@@ -1772,9 +1831,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-c4cb8075"></script>
-<script src="data.js?v=20261021-c4cb8075"></script>
-<script src="app.js?v=20261021-c4cb8075"></script>
-<script src="auth.js?v=20261021-c4cb8075"></script>
+<script src="logic.js?v=20261021-22aedbde"></script>
+<script src="data.js?v=20261021-22aedbde"></script>
+<script src="app.js?v=20261021-22aedbde"></script>
+<script src="auth.js?v=20261021-22aedbde"></script>
 </body>
 </html>

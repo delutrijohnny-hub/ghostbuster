@@ -1214,7 +1214,33 @@ function renderProgressBar(){
     fill.style.width = pctDone + '%';
     fill.classList.toggle('full', total > 0 && prog.confirmed === total);
   }
+  var pct = el('progress-pct'); if(pct) pct.textContent = total > 0 ? pctDone + '%' : '';
   var rc = el('remaining-count'); if(rc) rc.textContent = due.length;
+
+  /* The four counts, which are also the way in.
+
+     Built from conversationList, the same derivation the workspace renders,
+     so a card and the list it opens can never disagree. Due now and due
+     later are split by the TCPA window that send-sms actually enforces --
+     a touch for somebody it is 6am for is not work anybody can do now, and
+     counting it as though it were makes the number a lie by omission. */
+  var statBox = el('pw-stats');
+  if(statBox){
+    var crows = conversationList(STATE, now);
+    var ccounts = conversationCounts(crows);
+    var split = dueSplit(STATE, crows, now);
+    var cards = [
+      {cls: 'now',     n: split.now,        k: 'Due now',   filter: 'needs'},
+      {cls: 'later',   n: split.later,      k: 'Due later', filter: 'needs'},
+      {cls: 'waiting', n: ccounts.waiting,  k: 'Waiting',   filter: 'waiting'},
+      {cls: 'unread',  n: ccounts.unread,   k: 'Unread',    filter: 'unread'}
+    ];
+    statBox.innerHTML = cards.map(function(c){
+      return '<button class="pw-stat ' + c.cls + '" data-action="pw-stat" data-filter="' +
+        c.filter + '" title="Opens the messaging workspace showing these."><span class="n">' +
+        c.n + '</span><span class="k">' + escapeHtml(c.k) + '</span></button>';
+    }).join('');
+  }
 }
 
 
@@ -1762,7 +1788,7 @@ function markConversationRead(cid){
 
 function renderMsgxFilters(counts){
   var box = el('msgx-filters'); if(!box) return;
-  var labels = {needs: 'Needs text', waiting: 'Waiting', unread: 'Unread', all: 'All'};
+  var labels = {needs: 'Needs', waiting: 'Waiting', unread: 'Unread', all: 'All'};
   var cur = UI.msgxFilter || 'all';
   box.innerHTML = CONVERSATION_FILTERS.map(function(f){
     return '<button data-action="msgx-filter" data-filter="' + f + '"' +
@@ -1801,27 +1827,32 @@ function renderMsgxList(rows, waiting, total){
 
   box.innerHTML =
     '<div class="msgx-rows">' + rows.map(function(r){
-      var tags = [];
-      if(r.unread) tags.push('<span class="msgx-tag unread">' + r.unread + ' unread</span>');
-      if(r.awaitingReply) tags.push('<span class="msgx-tag wait">waiting on you</span>');
-      /* A contact in the queue because a touch is due, not because anything
-         was said. Tagged rather than left to look like a conversation: the
-         preview underneath is copy that has NOT gone out, and a row that
-         reads identically to a sent message is how somebody concludes they
-         already texted them. */
-      if(r.dueStage) tags.push('<span class="msgx-tag due">touch due</span>');
-      if(r.lastChannel === 'email') tags.push('<span class="msgx-tag chan">email</span>');
-      if(r.status) tags.push('<span class="msgx-tag">' + escapeHtml(r.status) + '</span>');
-      if(r.smsStatus === 'opted_out') tags.push('<span class="msgx-tag wait">opted out</span>');
+      /* ONE signal, chosen by conversationSignal. This stacked up to five
+         badges per row -- unread, waiting, due, status, opted out -- and a
+         list where every row looks urgent is a list where none of them do.
+
+         Unread stays separate because it is a count: folding it into the
+         badge would lose how many. */
+      var sig = conversationSignal(r);
+      var queued = r.dueStage && !r.messages;
       return '<button class="msgx-row' + (r.unread ? ' unread' : '') +
         (r.clientId === UI.threadCid ? ' active' : '') +
         '" data-action="msgx-open" data-cid="' + escapeHtml(r.clientId) + '">' +
-        '<span class="r-top"><span class="r-name">' + escapeHtml(r.name) + '</span>' +
-        '<span class="r-when">' +
-          escapeHtml(r.dueStage ? 'due today' : shortWhen(r.lastAt)) + '</span></span>' +
-        '<div class="r-last' + (r.dueStage ? ' unsent' : '') + '">' +
-          (r.lastDir === 'out' ? 'You: ' : '') + escapeHtml(r.lastText) + '</div>' +
-        (tags.length ? '<div class="r-tags">' + tags.join('') + '</div>' : '') +
+        '<span class="r-av' + (sig ? ' ' + sig.tone : '') + '">' +
+          escapeHtml(initialsFor(r.name)) + '</span>' +
+        '<span class="r-body">' +
+          '<span class="r-top">' +
+            '<span class="r-name">' + escapeHtml(r.name) + '</span>' +
+            '<span class="r-when">' +
+              escapeHtml(queued ? 'due today' : shortWhen(r.lastAt)) + '</span>' +
+          '</span>' +
+          '<span class="r-mid">' +
+            '<span class="r-last' + (queued ? ' unsent' : '') + '">' +
+              (r.lastDir === 'out' ? 'You: ' : '') + escapeHtml(r.lastText) + '</span>' +
+            (r.unread ? '<span class="r-unread">' + r.unread + '</span>' : '') +
+          '</span>' +
+          (sig ? '<span class="r-sig ' + sig.tone + '">' + escapeHtml(sig.label) + '</span>' : '') +
+        '</span>' +
         '</button>';
     }).join('') + '</div>';
 }
@@ -4556,7 +4587,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-c4cb8075';
+var BUILD_STAMP = '20261021-22aedbde';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5951,6 +5982,20 @@ document.addEventListener('click', function(ev){
     case 'toggle-text-today':
       UI.textTodayOpen = !UI.textTodayOpen;
       renderCallsBoard();
+      break;
+    case 'pw-stat':
+      /* A count that cannot be clicked is a number somebody then has to go
+         find. Same destination as Work the list, with the filter already
+         matching whichever number was pressed. */
+      UI.msgxFilter = target.getAttribute('data-filter') || 'all';
+      UI.msgxQuery = '';
+      var pwBox = el('msgx-search'); if(pwBox) pwBox.value = '';
+      UI.tab = 'threads';
+      document.querySelectorAll('.tab-btn').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-tab') === 'threads'); });
+      document.querySelectorAll('.tab-panel').forEach(function(pnl){
+        pnl.classList.toggle('active', pnl.id === 'tab-threads'); });
+      renderThreadsTab();
       break;
     case 'work-the-list': {
       /* Today -> the workspace, with the day's queue already selected.
