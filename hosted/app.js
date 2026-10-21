@@ -89,7 +89,9 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   msgxFilter:'all',
   // The conversation somebody actually chose, as opposed to one the
   // desktop layout auto-selected. Only the former counts as read.
-  msgxOpened:null};
+  msgxOpened:null,
+  // The Today card list, folded away by default now the workspace exists.
+  textTodayOpen:false};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -2290,14 +2292,66 @@ function renderCallsBoard(){
   // the count so the size of the job is visible before committing to it.
   var todayHead = document.querySelector('#tab-calls .board-col h3');
   if(todayHead && !todayHead.querySelector('[data-action=focus-start]')){
-    var btn = h('button',{class:'btn btn-sm btn-primary focus-start','data-action':'focus-start'},['Work the list']);
+    /* Called "Focus mode", not "Work the list". That phrase now belongs to
+       the button that opens the messaging workspace, and two controls with
+       the same label doing different things is worse than either name. */
+    var btn = h('button',{class:'btn btn-sm focus-start','data-action':'focus-start',
+      title:'Step through the due touches one at a time, without leaving this page.'},['Focus mode']);
     todayHead.appendChild(btn);
   }
 
   var now = new Date();
   var textToday = getTextTodayList(STATE, now, UI.callsSearch);
+  /* Text today is a SUMMARY now, with the cards folded away behind it.
+
+     The work itself moved to the messaging workspace, where the touch sits
+     next to the conversation it lands in. Keeping a full second copy of it
+     here is the duplication this consolidation exists to remove -- and two
+     places to send the same touch is two places for somebody to send it
+     twice.
+
+     The cards are folded, not deleted. The workspace is a day old; if it
+     turns out to be missing something, the old way is one click away rather
+     than one deploy away. */
+  var summary = el('text-today-summary');
+  if(summary){
+    var replied = textToday.filter(function(it){
+      var th = conversationThread(it.client).filter(function(x){ return x.dir !== 'note'; });
+      return th.length && th[th.length - 1].dir === 'in';
+    }).length;
+    summary.innerHTML = textToday.length
+      ? '<strong>' + textToday.length + ' ' + (textToday.length === 1 ? 'text' : 'texts') +
+          ' due today</strong>' +
+        (replied
+          ? ' \u00b7 <span class="tt-urgent">' + replied + ' already replied</span>, ' +
+            'so a template is the wrong answer for ' + (replied === 1 ? 'that one' : 'those') + '.'
+          : '') +
+        '<div class="tt-actions">' +
+          '<button class="btn btn-sm btn-primary" data-action="work-the-list">Work the list</button>' +
+          '<button class="btn btn-sm btn-ghost" data-action="toggle-text-today">' +
+            (UI.textTodayOpen ? 'Hide the cards' : 'Show the cards') + '</button>' +
+        '</div>'
+      : '<strong>Nothing due today.</strong>';
+  }
+
+  /* The stale-filter reset runs whether or not the cards are on screen.
+
+     Folding them away gated this too at first, and a test caught it: a
+     filter pointing at a kind no longer due would survive being hidden and
+     then show an empty column when the cards came back, with nothing saying
+     why. Hiding something must not change what is true about it. */
+  var counts = {}, order = [];
+  textToday.forEach(function(it){
+    if(counts[it.stage] === undefined){ counts[it.stage] = 0; order.push(it.stage); }
+    counts[it.stage]++;
+  });
+  // A filter pointing at a kind that is no longer due would show an empty
+  // column with no way to tell why, so it falls back to showing everything.
+  if(UI.touchFilter && counts[UI.touchFilter] === undefined) UI.touchFilter = '';
+
   var todayCol = el('col-text-today');
-  if(todayCol){
+  if(todayCol) todayCol.style.display = UI.textTodayOpen ? '' : 'none';
+  if(todayCol && UI.textTodayOpen){
     todayCol.innerHTML = '';
 
     /* Filter buttons across the top instead of headings down the middle.
@@ -2309,17 +2363,8 @@ function renderCallsBoard(){
        see only those.
 
        Built from what is actually in the list today, so a kind with nothing
-       due does not offer an empty button. */
-    var counts = {}, order = [];
-    textToday.forEach(function(it){
-      if(counts[it.stage] === undefined){ counts[it.stage] = 0; order.push(it.stage); }
-      counts[it.stage]++;
-    });
-
-    // A filter pointing at a kind that is no longer due would show an empty
-    // column with no way to tell why, so it falls back to showing everything.
-    if(UI.touchFilter && counts[UI.touchFilter] === undefined) UI.touchFilter = '';
-
+       due does not offer an empty button. Counted above, so the reset
+       happens even while this is folded. */
     if(order.length > 1){
       var bar = h('div',{class:'touch-filter'},[]);
       bar.appendChild(h('button',{
@@ -4452,7 +4497,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-15e9e5f3';
+var BUILD_STAMP = '20261021-837133d9';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5812,6 +5857,10 @@ document.addEventListener('click', function(ev){
       renderThreadsTab();
       break;
     }
+    case 'toggle-text-today':
+      UI.textTodayOpen = !UI.textTodayOpen;
+      renderCallsBoard();
+      break;
     case 'work-the-list': {
       /* Today -> the workspace, with the day's queue already selected.
          Deliberately does NOT pick a contact: the first one is a guess, and

@@ -1229,6 +1229,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-scroll{overflow-y:auto;flex:1;min-height:0;}
 /* The four questions somebody arrives with, with the count beside each so
    the chip answers "how much" before it is clicked. */
+.text-today-summary{padding:10px 12px;font-size:13px;color:var(--ink-soft);
+  border-bottom:1px solid var(--border);}
+.text-today-summary strong{color:var(--ink);}
+.tt-urgent{color:var(--amber);font-weight:700;}
+.tt-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
 .msgx-filters{display:flex;gap:4px;padding:8px 10px 0;flex-wrap:wrap;}
 .msgx-filters button{flex:1 1 auto;padding:5px 8px;border:1px solid var(--border);
   border-radius:99px;background:var(--card);color:var(--ink-soft);
@@ -1549,11 +1554,6 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <div class="progress-bar-wrap">
     <span class="progress-label" id="progress-label">0 of 0 touches sent today</span>
     <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
-    <!-- Today says how much is due; the messaging workspace is where it gets
-         done. This is the one step between the two, so the count is never a
-         number somebody then has to go hunting for. -->
-    <button class="btn btn-sm btn-primary" data-action="work-the-list"
-      title="Opens the messaging workspace filtered to the contacts due today.">Work the list</button>
     <button class="btn btn-sm" data-action="copy-remaining">Copy all <span id="remaining-count">0</span> remaining</button>
   </div>
 
@@ -1569,6 +1569,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <div class="board board-single">
       <div class="board-col">
         <h3>Text today <span id="count-today"></span></h3>
+        <!-- The summary. The work itself is in the messaging workspace now;
+             this says how much there is and sends you there. The cards below
+             are folded away, not removed. -->
+        <div class="text-today-summary" id="text-today-summary"></div>
         <div class="col-body" id="col-text-today"></div>
       </div>
     </div>
@@ -1753,9 +1757,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-15e9e5f3"></script>
-<script src="data.js?v=20261021-15e9e5f3"></script>
-<script src="app.js?v=20261021-15e9e5f3"></script>
-<script src="auth.js?v=20261021-15e9e5f3"></script>
+<script src="logic.js?v=20261021-837133d9"></script>
+<script src="data.js?v=20261021-837133d9"></script>
+<script src="app.js?v=20261021-837133d9"></script>
+<script src="auth.js?v=20261021-837133d9"></script>
 </body>
 </html>
