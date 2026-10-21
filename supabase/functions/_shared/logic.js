@@ -3646,6 +3646,30 @@ function conversationList(state, now){
   return rows;
 }
 
+/* The last time anything passed between you, either direction.
+
+   Notes excluded: a colleague writing "budget is tight" is not contact with
+   the contact, and counting it would make somebody look recently spoken to
+   when nobody has spoken to them at all. */
+function lastContactAt(client){
+  var items = conversationThread(client).filter(function(it){ return it.dir !== 'note'; });
+  return items.length ? items[items.length - 1].at : null;
+}
+
+/* Where this contact came from, derived rather than stored.
+
+   There is no source column, and inventing one would mean either a migration
+   or a field that is blank for all 790 existing rows. Both of these facts
+   are already on the record: a Google event id means the calendar put them
+   here, and manuallyAdded means a person did. Anything else predates both
+   and is reported as unknown rather than guessed at. */
+function clientSource(client){
+  if(!client) return 'Unknown';
+  if(client.googleEventId) return 'Calendar booking';
+  if(client.manuallyAdded) return 'Added by hand';
+  return 'Unknown';
+}
+
 /* What this conversation is waiting for, in one short phrase.
 
    The header says where a contact stands; this says what to do about it.
@@ -8118,6 +8142,7 @@ var __LOGIC_EXPORTS__ = {
   conversationCounts: conversationCounts,
   conversationSignal: conversationSignal, initialsFor: initialsFor, dueSplit: dueSplit,
   nextActionLabel: nextActionLabel,
+  lastContactAt: lastContactAt, clientSource: clientSource,
   conversationMatchesFilter: conversationMatchesFilter,
   CONVERSATION_FILTERS: CONVERSATION_FILTERS,
   automationState: automationState,

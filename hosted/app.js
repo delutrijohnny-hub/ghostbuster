@@ -93,7 +93,10 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // The Today card list, folded away by default now the workspace exists.
   textTodayOpen:false,
   // Which message has its delivery detail open. One at a time.
-  dlvOpen:null};
+  dlvOpen:null,
+  // Which right-column sections are folded open. The two that hold
+  // history start closed; the rest are not collapsible at all.
+  msgxSections:{activity:false, more:false}};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -2297,21 +2300,89 @@ function renderMsgxProfile(){
       escapeHtml(c.id) + '">refresh</button></div>';
   }
 
+  /* Sections, most-acted-on first, with the rest folded away.
+
+     Everything here used to be one flat run of fifteen labelled fields, so
+     the AI summary and the contact's phone number carried identical weight.
+     Grouping is the whole point: what you need to answer "who is this and
+     what do I do" stays open, and the history you occasionally want does
+     not. */
+  function section(key, title, body, right, collapsible){
+    var open = !collapsible || UI.msgxSections[key];
+    return '<div class="mp-sec">' +
+      '<div class="mp-head"' +
+        (collapsible ? ' data-action="msgx-section" data-key="' + escapeHtml(key) + '"' : '') + '>' +
+        '<span class="mp-title">' + escapeHtml(title) + '</span>' +
+        (right || '') +
+        (collapsible ? '<span class="mp-chev">' + (open ? '\u25be' : '\u25b8') + '</span>' : '') +
+      '</div>' +
+      (open ? '<div class="mp-body">' + body + '</div>' : '') +
+    '</div>';
+  }
+
+  /* The sequence as segments rather than a sentence. "Touch 3 of 5" says
+     where; five blocks say how much is left, which is the part somebody
+     reads without counting. */
+  var segs = '';
+  for(var si = 0; si < prog.total; si++){
+    segs += '<span class="mp-seg' + (si < prog.done ? ' on' : '') + '"></span>';
+  }
+
+  var lastAt = lastContactAt(c);
+  var recent = conversationThread(c).filter(function(it){ return it.dir !== 'note'; })
+    .slice(-6).reverse();
+
   box.innerHTML =
-    field('Where this stands', summaryBody) +
-    (queued.length ? field('Queued to send', queuedBody) : '') +
-    /* Read-only here. The control moved to the conversation header, beside
-       the name, where somebody is already looking when they decide a contact
-       has gone cold. Two selects for one value is two ways to set it and one
-       more thing to keep in step. */
-    field('Status', escapeHtml(c.status || '\u2014')) +
-    field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
-    field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
-    field('Automation', autoBody) +
-    (c.callDateTime ? field('Call', escapeHtml(fmtDate(safeDate(c.callDateTime), c.timezone) + ' ' +
-        fmtTime(safeDate(c.callDateTime), c.timezone))) : '') +
-    (c.email ? field('Email', escapeHtml(c.email)) : '') +
-    (c.notes ? field('Notes', escapeHtml(c.notes.slice(0, 240))) : '');
+    section('details', 'Client details',
+      field('Phone', escapeHtml(c.phone || '\u2014')) +
+      (c.email ? field('Email', escapeHtml(c.email)) : '') +
+      field('Source', escapeHtml(clientSource(c))) +
+      field('Their time', escapeHtml(tz.timeLabel) +
+        (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')),
+      '<button class="btn btn-sm btn-ghost mp-act" data-action="open-client" data-cid="' +
+        escapeHtml(c.id) + '">Open</button>') +
+
+    section('status', 'Status & follow-up',
+      field('Status', escapeHtml(c.status || '\u2014')) +
+      field('Sequence', '<div class="mp-segs">' + segs + '</div>' +
+        '<div class="msgx-sub">Touch ' + (prog.done + 1) + ' of ' + prog.total + '</div>') +
+      field('Next action', escapeHtml(nextActionLabel(STATE, c, now))) +
+      field('Last contact', lastAt
+        ? escapeHtml(fmtDate(safeDate(lastAt), c.timezone) + ' ' + fmtTime(safeDate(lastAt), c.timezone))
+        : '<span class="msgx-sub">nothing yet</span>') +
+      field('Automation', autoBody) +
+      (queued.length ? field('Queued to send', queuedBody) : '')) +
+
+    (c.callDateTime
+      ? section('call', 'Upcoming call',
+          field('When', escapeHtml(fmtDate(safeDate(c.callDateTime), c.timezone) + ' ' +
+            fmtTime(safeDate(c.callDateTime), c.timezone))) +
+          (c.meetLink
+            ? field('Link', '<a href="' + escapeHtml(c.meetLink) + '" target="_blank" rel="noopener">' +
+                escapeHtml(c.meetLink.slice(0, 44)) + '</a>')
+            : ''))
+      : '') +
+
+    section('summary', 'AI summary', summaryBody) +
+
+    section('activity', 'Recent activity',
+      recent.length
+        ? recent.map(function(it){
+            return '<div class="mp-act-row"><span class="msgx-sub">' +
+              escapeHtml(shortWhen(it.at)) + ' \u00b7 ' +
+              (it.dir === 'in' ? 'them' : 'you') + '</span>' +
+              '<div>' + escapeHtml(it.text.slice(0, 70)) + '</div></div>';
+          }).join('')
+        : '<span class="msgx-sub">Nothing yet.</span>',
+      '', true) +
+
+    section('more', 'Additional info',
+      field('Booked', c.bookedDate
+        ? escapeHtml(fmtDate(safeDate(c.bookedDate), c.timezone))
+        : '<span class="msgx-sub">\u2014</span>') +
+      field('Timezone', escapeHtml(c.timezone || '\u2014')) +
+      (c.notes ? field('Notes', escapeHtml(c.notes.slice(0, 400))) : ''),
+      '', true);
 }
 
 /* "3h" / "2d" / a date once it stops being this week. An inbox is scanned,
@@ -4647,7 +4718,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-c3a83f98';
+var BUILD_STAMP = '20261021-1dd76655';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6102,6 +6173,12 @@ document.addEventListener('click', function(ev){
       var msName = STATE.clients[cid] ? firstName(STATE.clients[cid].name) : 'them';
       doMarkSent(cid, stage);
       showToast('Marked sent for ' + msName + '.', lastSnapshot);
+      break;
+    }
+    case 'msgx-section': {
+      var sk = target.getAttribute('data-key');
+      UI.msgxSections[sk] = !UI.msgxSections[sk];
+      renderMsgxProfile();
       break;
     }
     case 'dlv-detail': {

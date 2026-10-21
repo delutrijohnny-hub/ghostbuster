@@ -15461,6 +15461,49 @@ console.log('\n--- per-contact wording ---');
   });
 }
 
+console.log('\n--- right column facts ---');
+{
+  test('last contact counts messages, never internal notes', () => {
+    /* A colleague writing "budget is tight" is not contact with the contact.
+       Counting it makes somebody look recently spoken to when nobody has
+       spoken to them, which is exactly the wrong thing to believe when
+       deciding whether to chase. */
+    const c = GB.sanitizeClient({id:'c1', name:'T',
+      messageLog:[{id:'m', stage:'welcome', channel:'sms', text:'hi',
+                   sentAt:'2026-10-01T10:00:00Z'}],
+      threadNotes:[{id:'n', body:'budget tight', author:'E', at:'2026-10-20T10:00:00Z'}]});
+    assert.strictEqual(GB.lastContactAt(c), '2026-10-01T10:00:00Z');
+  });
+
+  test('a reply counts as contact, and the newest wins', () => {
+    const c = GB.sanitizeClient({id:'c1', name:'T',
+      messageLog:[{id:'m', stage:'welcome', channel:'sms', text:'hi',
+                   sentAt:'2026-10-01T10:00:00Z'}],
+      replies:[{id:'r', at:'2026-10-05T10:00:00Z', text:'sure'}]});
+    assert.strictEqual(GB.lastContactAt(c), '2026-10-05T10:00:00Z');
+  });
+
+  test('a contact nobody has spoken to reports nothing, not a date', () => {
+    assert.strictEqual(GB.lastContactAt(GB.sanitizeClient({id:'c1', name:'T'})), null);
+    assert.strictEqual(GB.lastContactAt(null), null);
+  });
+
+  test('source is derived from what is on the record, never guessed', () => {
+    /* There is no source column. Inventing one means a field blank for all
+       790 existing rows; these two facts are already stored. */
+    assert.strictEqual(GB.clientSource({googleEventId:'evt_1'}), 'Calendar booking');
+    assert.strictEqual(GB.clientSource({manuallyAdded:true}), 'Added by hand');
+    assert.strictEqual(GB.clientSource({}), 'Unknown');
+    assert.strictEqual(GB.clientSource(null), 'Unknown');
+  });
+
+  test('a calendar booking outranks the manual flag', () => {
+    // Both can be set by an import; the event id is the stronger evidence.
+    assert.strictEqual(GB.clientSource({googleEventId:'e', manuallyAdded:true}),
+                       'Calendar booking');
+  });
+}
+
 console.log('\n--- a thread item knows where it came from ---');
 {
   test('conversationThread carries providerId, so sendMode can read it', () => {
