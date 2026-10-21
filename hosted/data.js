@@ -1146,7 +1146,17 @@ function rowClient(c, uid){
     // null, never '': a row imported before titles were kept must stay
     // distinguishable from an event genuinely titled nothing.
     event_title: c.eventTitle || null,
-    email_status: c.emailStatus || 'ok',
+    /* email_status is NOT written back, for the same reason sms_status is
+       not: only email-webhook sets it, from a provider event, and nothing in
+       the browser ever changes it. Carrying it meant a save could lay a
+       stale 'ok' over a bounce recorded while the tab was open.
+
+       That is not cosmetic. A bounce is an address to stop using; resuming
+       mail to a dead mailbox is how a sending domain's reputation goes, and
+       that failure is not contained -- once the domain is distrusted, mail
+       to every other contact starts landing in spam. All 1,009 contacts read
+       'ok' today, so nothing has been lost yet; the first bounce is what
+       this protects. */
     /* Written back, unlike sms_status: a pause is the browser's to set. It is
        an instruction from the person using the app, not something a provider
        told us. */
@@ -1348,18 +1358,35 @@ async function saveState(state){
 
   try{
     var c = diff(prev && prev.clients, next.clients);
-    var upClients = c.added.concat(c.changed);
-    if(upClients.length){
+    /* Ownership is set when a contact is CREATED and never again.
+
+       rowClient stamps user_id with whoever is signed in, which is right for
+       a new contact and wrong for every save after it. RLS lets a manager
+       write rows belonging to anyone in their organisation, so an ordinary
+       save from a manager's tab would quietly take ownership of every
+       contact loaded in it -- undoing a reassignment made while the page was
+       open, with nothing on screen to say so.
+
+       A save is not a transfer. reassign_client is, and it stays the only
+       way ownership moves. The column is simply omitted from updates:
+       PostgREST only sets the columns it is given, so the stored value is
+       left alone. */
+    function stamp(r, keepOwner){
+      var out = {};
+      Object.keys(r).forEach(function(k){
+        if(!keepOwner && k === 'user_id') return;
+        out[k] = r[k];
+      });
       // Stamped onto a copy, never onto the snapshot row itself: these objects
       // become SYNCED, and a server-side bookkeeping column baked into the
       // baseline would make every subsequent diff see a phantom change.
-      var stamped = upClients.map(function(r){
-        var out = {}; Object.keys(r).forEach(function(k){ out[k] = r[k]; });
-        out.updated_at = new Date().toISOString();
-        return out;
-      });
-      writes.push(sb.from('clients').upsert(stamped));
+      out.updated_at = new Date().toISOString();
+      return out;
     }
+    var newRows = c.added.map(function(r){ return stamp(r, true); });
+    var updRows = c.changed.map(function(r){ return stamp(r, false); });
+    if(newRows.length) writes.push(sb.from('clients').upsert(newRows));
+    if(updRows.length) writes.push(sb.from('clients').upsert(updRows));
     // Explicit ids only. Never a "delete everything not in this set" filter.
     if(prev && c.removedKeys.length) writes.push(sb.from('clients').delete().in('id', c.removedKeys));
 

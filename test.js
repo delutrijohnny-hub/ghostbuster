@@ -9811,6 +9811,103 @@ test('with no baseline loaded, a save NEVER issues a delete', async () => {
   assert.deepStrictEqual(deletes, [], 'a save before any load must not delete anything, got ' + JSON.stringify(deletes));
 });
 
+test('a save never lays a stale ok over a bounce', async () => {
+  /* Only email-webhook sets email_status, from a provider event, and nothing
+     in the browser ever changes it -- sanitizeClient merely defaults it to
+     'ok'. Writing it back meant a save could erase a bounce recorded while
+     the tab was open.
+
+     A bounce is an address to stop using. Resuming mail to a dead mailbox is
+     how a sending domain's reputation goes, and it is not contained: once
+     the domain is distrusted, mail to every other contact starts landing in
+     spam. sms_status has been excluded for this reason for weeks; this is
+     the same hole on the other channel. */
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  d.calls.length = 0;
+  d.run("st.clients['c1'].notes = 'spoke today';");
+  await d.run('saveState(st)');
+  const rows = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert')
+                      .flatMap(c => c.payload);
+  assert.ok(rows.length, 'the edit issued no write, so this proved nothing');
+  rows.forEach(r => {
+    assert.ok(!('email_status' in r),
+      'a save carried email_status and can still erase a bounce');
+    assert.ok(!('sms_status' in r),
+      'sms_status regressed into the save payload');
+  });
+});
+
+test('a new contact records who created it', async () => {
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  const ins = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert');
+  assert.ok(ins.length, 'no client write was issued at all');
+  const row = ins[0].payload[0];
+  assert.strictEqual(row.user_id, 'u1',
+    'a contact was created without an owner, which RLS would refuse');
+});
+
+test('an ordinary save never rewrites who owns a contact', async () => {
+  /* rowClient stamps user_id with whoever is signed in. That is right once,
+     when a contact is created, and wrong on every save afterwards.
+
+     RLS on clients allows a manager to write rows belonging to anyone in
+     their organisation, so a save from a manager's tab would take ownership
+     of every contact loaded in it -- silently undoing a reassignment made
+     while the page was open. A save is not a transfer; reassign_client is,
+     and it stays the only way ownership moves. */
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');        // creates it
+  d.calls.length = 0;
+  d.run("st.clients['c1'].notes = 'spoke today';");
+  await d.run('saveState(st)');        // an ordinary edit
+
+  const ups = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert');
+  assert.ok(ups.length, 'the edit issued no write, so this proved nothing');
+  ups.forEach(u => u.payload.forEach(row => {
+    assert.ok(!('user_id' in row),
+      'an edit carried user_id, so a save can still reassign a contact');
+    assert.strictEqual(row.notes, 'spoke today', 'the edit itself was lost');
+  }));
+});
+
+test('creating and editing in one save keep their own rules', async () => {
+  // Both paths in one write cycle: the new row owns itself, the edited one
+  // does not get its ownership restated.
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  d.calls.length = 0;
+  d.run(`
+    st.clients['c1'].notes = 'edited';
+    st.clients['c2'] = sanitizeClient({id:'c2', name:'B', phone:'5125559999'});
+  `);
+  await d.run('saveState(st)');
+  const rows = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert')
+                      .flatMap(c => c.payload);
+  const created = rows.find(r => r.id === 'c2');
+  const edited  = rows.find(r => r.id === 'c1');
+  assert.ok(created && edited, 'expected both a create and an edit');
+  assert.strictEqual(created.user_id, 'u1', 'the new contact lost its owner');
+  assert.ok(!('user_id' in edited), 'the edited contact had its owner restated');
+});
+
 test('an unchanged save writes nothing at all', async () => {
   const d = makeDataCtx();
   d.run(`
