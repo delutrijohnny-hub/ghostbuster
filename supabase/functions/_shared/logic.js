@@ -3630,6 +3630,49 @@ function conversationList(state, now){
   return rows;
 }
 
+/* The four questions somebody actually arrives with.
+
+   Derived from the SAME rows the list renders, never recounted from the
+   client book. A count that comes from one place and a list from another is
+   how a badge says 11 while the list shows 10, and nobody can tell which
+   lied -- so these take the rows as given.
+
+   'needs' is a touch due today, which is the day's work.
+   'waiting' is they spoke last, which is a promise outstanding.
+   'unread' is a reply nobody has looked at, which is narrower than waiting:
+   a contact can be waiting on an answer you have already read and chosen to
+   deal with later. The two are deliberately not the same number. */
+var CONVERSATION_FILTERS = ['needs', 'waiting', 'unread', 'all'];
+
+function conversationMatchesFilter(row, filter){
+  if(!row) return false;
+  if(filter === 'needs')   return !!row.dueStage;
+  if(filter === 'waiting') return !!row.awaitingReply;
+  if(filter === 'unread')  return (row.unread || 0) > 0;
+  return true;                       // 'all', and anything unrecognised
+}
+
+function conversationCounts(rows){
+  var all = rows || [];
+  var out = {needs: 0, waiting: 0, unread: 0, all: all.length};
+  all.forEach(function(r){
+    if(conversationMatchesFilter(r, 'needs'))   out.needs++;
+    if(conversationMatchesFilter(r, 'waiting')) out.waiting++;
+    if(conversationMatchesFilter(r, 'unread'))  out.unread++;
+  });
+  return out;
+}
+
+/* Filter first, then the text search. Both narrow, so the order does not
+   change the result -- but doing it in one place means the count beside a
+   chip and the rows under it can never disagree. */
+function filterConversationsBy(rows, filter, query){
+  var out = (rows || []).filter(function(r){
+    return conversationMatchesFilter(r, filter);
+  });
+  return filterConversations(out, query);
+}
+
 /* Narrowing the inbox to one person.
 
    Name OR number, because those are the two things somebody actually has in
@@ -7848,6 +7891,10 @@ var __LOGIC_EXPORTS__ = {
   recentReplies: recentReplies,
   conversationList: conversationList,
   filterConversations: filterConversations,
+  filterConversationsBy: filterConversationsBy,
+  conversationCounts: conversationCounts,
+  conversationMatchesFilter: conversationMatchesFilter,
+  CONVERSATION_FILTERS: CONVERSATION_FILTERS,
   automationState: automationState,
   scheduledSendCheck: scheduledSendCheck,
   summaryState: summaryState,

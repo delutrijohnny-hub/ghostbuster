@@ -84,7 +84,12 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   msgxQuery:'',
   // Which contact+touch the composer has already been seeded with, so a
   // re-render never retypes over somebody mid-sentence.
-  msgxPrefilled:null};
+  msgxPrefilled:null,
+  // Which of the four questions the list is answering.
+  msgxFilter:'all',
+  // The conversation somebody actually chose, as opposed to one the
+  // desktop layout auto-selected. Only the former counts as read.
+  msgxOpened:null};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1626,7 +1631,11 @@ function renderThreadsTab(){
   /* Searching narrows what is LISTED and nothing else. The selection and
      the badge above were settled on the full set deliberately: typing in
      the search box must not close the conversation being read. */
-  renderMsgxList(filterConversations(rows, UI.msgxQuery), waiting, rows.length);
+  /* Chips and rows come from ONE array. Counting the chips from the client
+     book instead would let a badge say 11 while the list shows 10, with no
+     way to tell which one lied. */
+  renderMsgxFilters(conversationCounts(rows));
+  renderMsgxList(filterConversationsBy(rows, UI.msgxFilter, UI.msgxQuery), waiting, rows.length);
   renderMsgxThread();
   renderMsgxProfile();
 
@@ -1640,7 +1649,19 @@ function renderThreadsTab(){
 
      Marking only when this tab is the one in front means a conversation is
      read when it has been displayed to a person, and not before. */
-  if(UI.tab === 'threads' && UI.threadCid){
+  /* Marking read is an EXPLICIT act, not a side effect of rendering.
+
+     This used to mark whatever was on screen, which was fine while the only
+     way to get there was clicking a conversation. It is not fine now: the
+     desktop layout auto-selects the top row, so clicking a filter chip
+     selected somebody and cleared their unread flag -- and with an Unread
+     count now sitting in the chips, browsing filters visibly decremented it.
+     Somebody watching that number would see work disappear they never saw.
+
+     msgx-open and open-thread mark read instead, because both are somebody
+     choosing a conversation. An auto-selected one stays unread until it is
+     actually picked, which is the honest reading of "have you seen this". */
+  if(UI.tab === 'threads' && UI.threadCid && UI.msgxOpened === UI.threadCid){
     markConversationRead(UI.threadCid);
     var r2 = conversationList(STATE, new Date());
     var u2 = r2.reduce(function(n, r){ return n + r.unread; }, 0);
@@ -1648,7 +1669,8 @@ function renderThreadsTab(){
     if(badge) badge.textContent = u2 ? '(' + u2 + ')' : '';
     // Redraw the row so its unread pill clears with the badge, rather than
     // the two disagreeing until the next render.
-    renderMsgxList(filterConversations(r2, UI.msgxQuery),
+    renderMsgxFilters(conversationCounts(r2));
+    renderMsgxList(filterConversationsBy(r2, UI.msgxFilter, UI.msgxQuery),
                    r2.filter(function(r){ return r.awaitingReply; }).length, r2.length);
   }
 }
@@ -1675,6 +1697,17 @@ function markConversationRead(cid){
               {onConflict: 'user_id,client_id'})
       .then(function(){}, function(){});
   }catch(e){ /* a read marker is never worth breaking the page for */ }
+}
+
+function renderMsgxFilters(counts){
+  var box = el('msgx-filters'); if(!box) return;
+  var labels = {needs: 'Needs text', waiting: 'Waiting', unread: 'Unread', all: 'All'};
+  var cur = UI.msgxFilter || 'all';
+  box.innerHTML = CONVERSATION_FILTERS.map(function(f){
+    return '<button data-action="msgx-filter" data-filter="' + f + '"' +
+      (f === cur ? ' class="on"' : '') + '>' + escapeHtml(labels[f]) +
+      ' <span class="n">' + (counts[f] || 0) + '</span></button>';
+  }).join('');
 }
 
 function renderMsgxList(rows, waiting, total){
@@ -1780,6 +1813,19 @@ function msgxTouchPanel(c, now){
     action = '<span class="msgx-sub">' + escapeHtml(route.reason || 'cannot text this contact') + '</span>';
   }
 
+  var cid = escapeHtml(c.id), st = escapeHtml(touch.stage);
+
+  /* "Mark sent" belongs only where the send CANNOT be observed. On the
+     provider route the Send button above already logs it, so offering this
+     as well is how one touch gets recorded twice and the sequence skips a
+     step. The handoff is the honest case: the draft opened somewhere this
+     app cannot see, and only a person knows whether it went. */
+  var markSentBtn = (route.mode === 'provider')
+    ? ''
+    : '<button class="btn btn-sm btn-ghost" data-action="msgx-mark-sent" data-cid="' + cid +
+      '" data-stage="' + st + '" title="Records this touch as sent and advances the sequence. ' +
+      'Only you can know whether it actually went.">Mark sent</button>';
+
   return '<div class="msgx-touch' + (touch.replyFirst ? ' owed' : '') + '">' +
     '<div class="msgx-touch-head"><strong>' + escapeHtml(touch.label) + '</strong>' +
       '<span class="msgx-sub"> \u00b7 due today</span></div>' +
@@ -1789,9 +1835,22 @@ function msgxTouchPanel(c, now){
       : '') +
     '<div class="msgx-touch-text">' + escapeHtml(touch.text) + '</div>' +
     '<div class="row">' + action +
-      '<button class="btn btn-sm btn-ghost" data-action="open-client" data-cid="' +
-      escapeHtml(c.id) + '" title="Opens the contact, where this touch can be reworded for ' +
+      '<button class="btn btn-sm btn-ghost" data-action="open-client" data-cid="' + cid +
+      '" title="Opens the contact, where this touch can be reworded for ' +
       escapeHtml(firstName(c.name)) + ' only.">Reword</button>' +
+    '</div>' +
+    /* The rest of the Today card's verbs, so the whole touch can be dealt
+       with here: sent, badly timed, or not wanted at all. Without "Skip" the
+       only way to refuse a touch was to snooze it every morning forever. */
+    '<div class="row msgx-touch-more">' + markSentBtn +
+      '<button class="btn btn-sm btn-ghost" data-action="snooze-touch" data-cid="' + cid +
+        '" data-stage="' + st + '" title="Push this to tomorrow">Not today</button>' +
+      '<button class="btn btn-sm btn-ghost" data-action="skip-touch" data-cid="' + cid +
+        '" data-stage="' + st + '" title="Never send this one to ' + escapeHtml(c.name) +
+        '">Skip</button>' +
+      '<button class="btn btn-sm btn-ghost" data-action="generate-ai" data-cid="' + cid +
+        '" data-stage="' + st + '" title="Draft a custom text from this contact\u2019s notes, ' +
+        'in your voice. Nothing is sent.">\u2728 Generate</button>' +
     '</div></div>';
 }
 
@@ -3843,7 +3902,12 @@ function generateAIMessage(cid, stage, btn){
   btn.textContent = 'Generating…';
   callGemini(buildAIPrompt(client, stage)).then(function(text){
     editedTextCache[cid + '|' + stage] = text;
+    /* Both surfaces, because this is now reachable from either. Rendering
+       only the morning list left the draft invisible to somebody who asked
+       for it from inside a conversation -- the button would appear to do
+       nothing. */
     renderCallsBoard();
+    if(UI.tab === 'threads') renderThreadsTab();
     showToast('AI draft ready — review before sending.');
   }).catch(function(e){
     btn.disabled = false;
@@ -4309,7 +4373,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-2670c2fb';
+var BUILD_STAMP = '20261021-15e7e829';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5660,6 +5724,7 @@ document.addEventListener('click', function(ev){
          fired from inside the workspace, where the tab is already showing. */
       UI.tab = 'threads';
       UI.threadCid = cid;
+      UI.msgxOpened = cid;       // arriving from Today is also a choice
       UI.msgxPrefilled = null;   // a freshly opened thread gets its touch seeded
       document.querySelectorAll('.tab-btn').forEach(function(b){
         b.classList.toggle('active', b.getAttribute('data-tab') === 'threads'); });
@@ -5668,8 +5733,38 @@ document.addEventListener('click', function(ev){
       renderThreadsTab();
       break;
     }
+    case 'work-the-list': {
+      /* Today -> the workspace, with the day's queue already selected.
+         Deliberately does NOT pick a contact: the first one is a guess, and
+         landing somebody in a conversation they did not choose is how the
+         wrong person gets texted. */
+      UI.tab = 'threads';
+      UI.msgxFilter = 'needs';
+      UI.msgxQuery = '';
+      var sbox = el('msgx-search'); if(sbox) sbox.value = '';
+      document.querySelectorAll('.tab-btn').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-tab') === 'threads'); });
+      document.querySelectorAll('.tab-panel').forEach(function(pnl){
+        pnl.classList.toggle('active', pnl.id === 'tab-threads'); });
+      renderThreadsTab();
+      break;
+    }
+    case 'msgx-mark-sent': {
+      /* The same doMarkSent the Today checkbox uses -- one way for a touch to
+         become sent, so the two surfaces cannot disagree about the sequence. */
+      lastSnapshot = snapshot();
+      var msName = STATE.clients[cid] ? firstName(STATE.clients[cid].name) : 'them';
+      doMarkSent(cid, stage);
+      showToast('Marked sent for ' + msName + '.', lastSnapshot);
+      break;
+    }
+    case 'msgx-filter':
+      UI.msgxFilter = target.getAttribute('data-filter') || 'all';
+      renderThreadsTab();
+      break;
     case 'msgx-open':
       UI.threadCid = cid;
+      UI.msgxOpened = cid;          // somebody chose this one
       markConversationRead(cid);
       renderThreadsTab();
       break;
@@ -6310,7 +6405,7 @@ document.addEventListener('input', function(ev){
   if(t.id === 'msgx-search'){
     UI.msgxQuery = t.value;
     var allRows = conversationList(STATE, new Date());
-    renderMsgxList(filterConversations(allRows, UI.msgxQuery),
+    renderMsgxList(filterConversationsBy(allRows, UI.msgxFilter, UI.msgxQuery),
                    allRows.filter(function(r){ return r.awaitingReply; }).length,
                    allRows.length);
   }

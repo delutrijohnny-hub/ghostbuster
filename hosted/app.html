@@ -1227,6 +1227,14 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-list{border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;}
 /* The rows scroll; the header and search box above them do not. */
 .msgx-scroll{overflow-y:auto;flex:1;min-height:0;}
+/* The four questions somebody arrives with, with the count beside each so
+   the chip answers "how much" before it is clicked. */
+.msgx-filters{display:flex;gap:4px;padding:8px 10px 0;flex-wrap:wrap;}
+.msgx-filters button{flex:1 1 auto;padding:5px 8px;border:1px solid var(--border);
+  border-radius:99px;background:var(--card);color:var(--ink-soft);
+  font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap;}
+.msgx-filters button.on{background:var(--ink);color:var(--card);border-color:var(--ink);}
+.msgx-filters button .n{opacity:.75;font-weight:600;}
 .msgx-find{padding:8px 10px;border-bottom:1px solid var(--border);}
 .msgx-find input[type=search]{width:100%;box-sizing:border-box;padding:7px 9px;
   border:1px solid var(--border);border-radius:var(--radius-sm);
@@ -1311,6 +1319,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-touch-text{font-size:13px;color:var(--ink-soft);margin-bottom:7px;
   max-height:72px;overflow-y:auto;}
 .msgx-touch .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+/* The secondary verbs sit under the send control, smaller and quieter: they
+   are what you reach for when the primary action is not what you want. */
+.msgx-touch-more{margin-top:6px;gap:4px !important;}
+.msgx-touch-more .btn{font-size:11.5px;padding:3px 7px;}
 .msgx-compose{border-top:1px solid var(--border);padding:9px 12px;}
 .msgx-compose textarea{width:100%;resize:vertical;min-height:54px;font:inherit;font-size:13px;}
 .msgx-compose .row{display:flex;gap:8px;align-items:center;margin-top:7px;flex-wrap:wrap;}
@@ -1531,6 +1543,11 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <div class="progress-bar-wrap">
     <span class="progress-label" id="progress-label">0 of 0 touches sent today</span>
     <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <!-- Today says how much is due; the messaging workspace is where it gets
+         done. This is the one step between the two, so the count is never a
+         number somebody then has to go hunting for. -->
+    <button class="btn btn-sm btn-primary" data-action="work-the-list"
+      title="Opens the messaging workspace filtered to the contacts due today.">Work the list</button>
     <button class="btn btn-sm" data-action="copy-remaining">Copy all <span id="remaining-count">0</span> remaining</button>
   </div>
 
@@ -1600,6 +1617,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
           <h4>Conversations</h4>
           <span class="msgx-sub" id="msgx-count"></span>
         </div>
+        <div class="msgx-filters" id="msgx-filters"></div>
         <div class="msgx-find">
           <input type="search" id="msgx-search" placeholder="Search name or number…">
         </div>
@@ -1729,9 +1747,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-2670c2fb"></script>
-<script src="data.js?v=20261021-2670c2fb"></script>
-<script src="app.js?v=20261021-2670c2fb"></script>
-<script src="auth.js?v=20261021-2670c2fb"></script>
+<script src="logic.js?v=20261021-15e7e829"></script>
+<script src="data.js?v=20261021-15e7e829"></script>
+<script src="app.js?v=20261021-15e7e829"></script>
+<script src="auth.js?v=20261021-15e7e829"></script>
 </body>
 </html>

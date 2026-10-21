@@ -15315,6 +15315,74 @@ console.log('\n--- per-contact wording ---');
   });
 }
 
+console.log('\n--- inbox filters ---');
+{
+  const rows = [
+    {clientId:'a', name:'Due Only',     phone:'2015550001', dueStage:'welcome', unread:0, awaitingReply:false},
+    {clientId:'b', name:'Waiting Read', phone:'2015550002', unread:0, awaitingReply:true},
+    {clientId:'c', name:'Waiting New',  phone:'2015550003', unread:2, awaitingReply:true},
+    {clientId:'d', name:'Quiet',        phone:'2015550004', unread:0, awaitingReply:false},
+  ];
+
+  test('the counts come from the rows the list renders', () => {
+    /* Counted from the same array, never re-derived from the client book.
+       A badge that says 11 while the list shows 10 leaves nobody able to
+       tell which one lied. */
+    assert.deepStrictEqual(GB.conversationCounts(rows),
+      {needs: 1, waiting: 2, unread: 1, all: 4});
+  });
+
+  test('unread is narrower than waiting, deliberately', () => {
+    /* A contact can be waiting on an answer you have already READ and
+       decided to deal with later. Collapsing the two would either hide
+       work or nag about work already seen. */
+    const c = GB.conversationCounts(rows);
+    assert.strictEqual(c.waiting, 2);
+    assert.strictEqual(c.unread, 1);
+    assert.ok(c.unread < c.waiting, 'unread and waiting became the same number');
+  });
+
+  test('each filter selects what its name says', () => {
+    const ids = (f) => GB.filterConversationsBy(rows, f, '').map(r => r.clientId);
+    assert.deepStrictEqual(ids('needs'), ['a']);
+    assert.deepStrictEqual(ids('waiting'), ['b', 'c']);
+    assert.deepStrictEqual(ids('unread'), ['c']);
+    assert.deepStrictEqual(ids('all'), ['a', 'b', 'c', 'd']);
+  });
+
+  test('an unknown filter shows everything rather than nothing', () => {
+    // A blank workspace from a typo'd filter reads as data loss.
+    assert.strictEqual(GB.filterConversationsBy(rows, 'nonsense', '').length, 4);
+    assert.strictEqual(GB.filterConversationsBy(rows, undefined, '').length, 4);
+  });
+
+  test('a filter and a search narrow together', () => {
+    assert.deepStrictEqual(
+      GB.filterConversationsBy(rows, 'waiting', 'new').map(r => r.clientId), ['c']);
+    assert.deepStrictEqual(
+      GB.filterConversationsBy(rows, 'waiting', '2015550003').map(r => r.clientId), ['c']);
+    assert.deepStrictEqual(
+      GB.filterConversationsBy(rows, 'needs', 'waiting').map(r => r.clientId), [],
+      'the filter was ignored once a search was typed');
+  });
+
+  test('the count for a filter equals the rows that filter shows', () => {
+    /* The invariant the chips depend on. Asserted for every filter rather
+       than spot-checked, so a new one cannot be added without it. */
+    const counts = GB.conversationCounts(rows);
+    GB.CONVERSATION_FILTERS.forEach(f => {
+      assert.strictEqual(GB.filterConversationsBy(rows, f, '').length, counts[f],
+        'count and list disagree for filter: ' + f);
+    });
+  });
+
+  test('empty input counts zero rather than throwing', () => {
+    assert.deepStrictEqual(GB.conversationCounts([]), {needs:0, waiting:0, unread:0, all:0});
+    assert.deepStrictEqual(GB.conversationCounts(null), {needs:0, waiting:0, unread:0, all:0});
+    assert.strictEqual(GB.conversationMatchesFilter(null, 'all'), false);
+  });
+}
+
 console.log('\n--- inbox search ---');
 {
   const rows = [
