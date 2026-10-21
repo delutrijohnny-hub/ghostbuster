@@ -78,7 +78,10 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // Which conversation the messaging workspace is showing. Null on a phone
   // means the list is up; on a desktop the newest thread is picked so the
   // panes are never all empty at once.
-  threadCid:null};
+  threadCid:null,
+  // What is typed in the conversation search. Held here rather than read
+  // off the input so a re-render cannot silently drop it.
+  msgxQuery:''};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1599,7 +1602,10 @@ function renderThreadsTab(){
   }
   wrap.setAttribute('data-view', UI.threadCid ? 'thread' : 'list');
 
-  renderMsgxList(rows, waiting);
+  /* Searching narrows what is LISTED and nothing else. The selection and
+     the badge above were settled on the full set deliberately: typing in
+     the search box must not close the conversation being read. */
+  renderMsgxList(filterConversations(rows, UI.msgxQuery), waiting, rows.length);
   renderMsgxThread();
   renderMsgxProfile();
 
@@ -1621,7 +1627,8 @@ function renderThreadsTab(){
     if(badge) badge.textContent = u2 ? '(' + u2 + ')' : '';
     // Redraw the row so its unread pill clears with the badge, rather than
     // the two disagreeing until the next render.
-    renderMsgxList(r2, r2.filter(function(r){ return r.awaitingReply; }).length);
+    renderMsgxList(filterConversations(r2, UI.msgxQuery),
+                   r2.filter(function(r){ return r.awaitingReply; }).length, r2.length);
   }
 }
 
@@ -1649,21 +1656,35 @@ function markConversationRead(cid){
   }catch(e){ /* a read marker is never worth breaking the page for */ }
 }
 
-function renderMsgxList(rows, waiting){
+function renderMsgxList(rows, waiting, total){
   var box = el('msgx-list'); if(!box) return;
+  var q = (UI.msgxQuery || '').trim();
+  if(total == null) total = rows.length;
+
+  /* The count says which question it is answering. While searching it is
+     "how much of the book am I looking at"; otherwise it is the one number
+     worth acting on, which is how many people are waiting. */
+  var count = el('msgx-count');
+  if(count){
+    count.textContent = q ? (rows.length + ' of ' + total)
+                          : (waiting ? waiting + ' waiting' : total + ' total');
+  }
+
   if(!rows.length){
-    box.innerHTML = '<div class="msgx-head"><h4>Conversations</h4></div>' +
-      '<div class="msgx-empty">' +
-      (STATE.smsNumber
-        ? 'No texts yet. Conversations appear here once you send from ' +
-          escapeHtml(STATE.smsNumber.phoneNumber) + '.'
-        : 'No conversations yet. Texts opened in Messages are sent from your own phone, ' +
-          'so their replies arrive there and cannot be shown here.') + '</div>';
+    /* A search that matched nothing is NOT an empty inbox. Telling somebody
+       with 229 conversations that they have none reads as data loss, and it
+       is the kind of thing that sends a person looking for a backup. */
+    box.innerHTML = '<div class="msgx-empty">' + (q
+      ? 'No conversation matches \u201c' + escapeHtml(q) + '\u201d.'
+      : (STATE.smsNumber
+          ? 'No texts yet. Conversations appear here once you send from ' +
+            escapeHtml(STATE.smsNumber.phoneNumber) + '.'
+          : 'No conversations yet. Texts opened in Messages are sent from your own phone, ' +
+            'so their replies arrive there and cannot be shown here.')) + '</div>';
     return;
   }
+
   box.innerHTML =
-    '<div class="msgx-head"><h4>Conversations</h4>' +
-    '<span class="msgx-sub">' + (waiting ? waiting + ' waiting' : rows.length + ' total') + '</span></div>' +
     '<div class="msgx-rows">' + rows.map(function(r){
       var tags = [];
       if(r.unread) tags.push('<span class="msgx-tag unread">' + r.unread + ' unread</span>');
@@ -4147,7 +4168,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261016-a2a86c67';
+var BUILD_STAMP = '20261021-8d149452';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6059,6 +6080,16 @@ document.addEventListener('input', function(ev){
   }
   if(t.id === 'calls-search'){ UI.callsSearch = t.value; renderCallsBoard(); }
   if(t.id === 'clients-search'){ UI.clientsSearch = t.value; renderClientsTab(); }
+  /* Only the list is redrawn. Running the whole tab render would rebuild the
+     thread pane under the reader and jump it back to the bottom on every
+     keystroke. */
+  if(t.id === 'msgx-search'){
+    UI.msgxQuery = t.value;
+    var allRows = conversationList(STATE, new Date());
+    renderMsgxList(filterConversations(allRows, UI.msgxQuery),
+                   allRows.filter(function(r){ return r.awaitingReply; }).length,
+                   allRows.length);
+  }
   if(t.id === 'f-phone'){
     // Keep the timezone guess in sync with the phone as it's typed, but stop
     // once the user has explicitly picked a zone themselves (see the

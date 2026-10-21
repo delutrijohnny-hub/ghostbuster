@@ -14966,6 +14966,110 @@ test('an empty calendar is told apart from a quiet one', () => {
       + 'would alarm somebody whose calendar is simply quiet today');
 });
 
+console.log('\n--- inbox search ---');
+{
+  const rows = [
+    {clientId:'a', name:'Teresa Dinapoli', phone:'(201) 923-7135'},
+    {clientId:'b', name:'Sam Badovinac',   phone:'2019237135'},
+    {clientId:'c', name:'Cash Knight',     phone:'757-802-2578'},
+    {clientId:'d', name:'Geri Westfall',   phone:''},
+  ];
+  const ids = (q) => GB.filterConversations(rows, q).map(r => r.clientId);
+
+  test('an empty query is not a search that found nothing', () => {
+    // The inbox must show everything before anybody types, and again after
+    // they clear the box. Returning [] for '' would blank the list on the
+    // backspace that empties it.
+    assert.strictEqual(GB.filterConversations(rows, '').length, 4);
+    assert.strictEqual(GB.filterConversations(rows, '   ').length, 4);
+    assert.strictEqual(GB.filterConversations(rows, null).length, 4);
+    assert.strictEqual(GB.filterConversations(rows, undefined).length, 4);
+  });
+
+  test('a name matches on any part of it, ignoring case', () => {
+    assert.deepStrictEqual(ids('teresa'), ['a']);
+    assert.deepStrictEqual(ids('DINAPOLI'), ['a']);
+    assert.deepStrictEqual(ids('nigh'), ['c'], 'mid-word match failed');
+  });
+
+  test('a formatted number and a bare one are found by the same search', () => {
+    /* This is the whole reason the comparison is digits-only. 520 of the
+       stored numbers carry brackets, dots or dashes and 379 do not, so a
+       raw-string match would find one of these two contacts and not the
+       other -- and which one would depend on how the row happened to be
+       typed in months ago. */
+    assert.deepStrictEqual(ids('2019237135').sort(), ['a', 'b']);
+    assert.deepStrictEqual(ids('(201) 923-7135').sort(), ['a', 'b']);
+    assert.deepStrictEqual(ids('201-923').sort(), ['a', 'b']);
+  });
+
+  test('the last four digits find a contact, which is how a handset shows it', () => {
+    assert.deepStrictEqual(ids('7135').sort(), ['a', 'b']);
+    assert.deepStrictEqual(ids('2578'), ['c']);
+  });
+
+  test('an area code searches the FRONT of the number, not just the last ten', () => {
+    // phoneKey keeps the last 10 digits and would answer this correctly by
+    // accident for 10-digit numbers; it would not for an 11-digit one with a
+    // country code. Searching an area code is searching a prefix.
+    const withCountry = [{clientId:'e', name:'Ed', phone:'+1 609 338 3773'}];
+    assert.deepStrictEqual(
+      GB.filterConversations(withCountry, '609').map(r => r.clientId), ['e']);
+  });
+
+  test('one or two digits are a name search, not a number search', () => {
+    /* Below three digits almost every row matches, so the list would look
+       broken -- it would not appear to filter until the third keystroke.
+       "2nd" and "J2" are names, and that is what a short query is treated
+       as. */
+    const named = [
+      {clientId:'f', name:'Dave 2nd', phone:'5551234567'},
+      {clientId:'g', name:'Plain',    phone:'5552234567'},
+    ];
+    assert.deepStrictEqual(
+      GB.filterConversations(named, '2').map(r => r.clientId), ['f'],
+      'a one-digit query matched on phone, which matches nearly everything');
+    assert.deepStrictEqual(
+      GB.filterConversations(named, '555').map(r => r.clientId).sort(), ['f', 'g'],
+      'three digits did not start a number search');
+  });
+
+  test('a pasted "name and number" still finds the contact', () => {
+    /* Pasting "Teresa Dinapoli 201-923-7135" out of a spreadsheet or a
+       calendar invite is a real thing somebody does, and the digits are
+       pulled out of whatever surrounds them. The consequence, accepted
+       deliberately: a query that is letters AND digits can match on the
+       digits alone, so "cash2019237135" finds Teresa. Being forgiving about
+       a paste is worth more than being strict about a string nobody types. */
+    assert.deepStrictEqual(ids('Teresa Dinapoli 201-923-7135').sort(), ['a', 'b']);
+  });
+
+  test('a contact with no phone is never matched by a number', () => {
+    assert.strictEqual(ids('923').indexOf('d'), -1,
+      'a contact with an empty phone matched a digit search');
+  });
+
+  test('a query that matches nothing returns nothing, not everything', () => {
+    assert.deepStrictEqual(ids('zzzzz'), []);
+    assert.deepStrictEqual(ids('99999999'), []);
+  });
+
+  test('the rows are not mutated or reordered by searching', () => {
+    const before = rows.map(r => r.clientId);
+    GB.filterConversations(rows, 'teresa');
+    assert.deepStrictEqual(rows.map(r => r.clientId), before,
+      'filtering reordered or mutated the caller\'s array');
+  });
+
+  test('a missing or malformed row does not throw', () => {
+    // conversationList builds these, but a search box runs on every
+    // keystroke and must never be the thing that takes the tab down.
+    assert.doesNotThrow(() => GB.filterConversations([null, {}, {name:null}], 'a'));
+    assert.doesNotThrow(() => GB.filterConversations(null, 'a'));
+    assert.strictEqual(GB.filterConversations(null, 'a').length, 0);
+  });
+}
+
 Promise.all(pendingTests).then(() => {
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'All tests passed') + '\n');
   process.exit(failures ? 1 : 0);

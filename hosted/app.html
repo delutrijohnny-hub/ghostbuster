@@ -1224,7 +1224,13 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx{display:grid;grid-template-columns:290px minmax(0,1fr) 260px;gap:0;
   border:1px solid var(--border);border-radius:10px;overflow:hidden;
   height:calc(100vh - 210px);min-height:420px;}
-.msgx-list{border-right:1px solid var(--border);overflow-y:auto;}
+.msgx-list{border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;}
+/* The rows scroll; the header and search box above them do not. */
+.msgx-scroll{overflow-y:auto;flex:1;min-height:0;}
+.msgx-find{padding:8px 10px;border-bottom:1px solid var(--border);}
+.msgx-find input[type=search]{width:100%;box-sizing:border-box;padding:7px 9px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  font:inherit;background:var(--card);color:var(--ink);}
 .msgx-thread{display:flex;flex-direction:column;min-width:0;overflow:hidden;}
 .msgx-profile{border-left:1px solid var(--border);overflow-y:auto;padding:12px;}
 
@@ -1298,6 +1304,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 @media (max-width: 860px){
   .msgx{grid-template-columns:1fr;height:auto;min-height:0;}
   .msgx-list{border-right:0;max-height:none;}
+  .msgx-scroll{overflow-y:visible;}
   .msgx-profile{border-left:0;border-top:1px solid var(--border);}
   .msgx[data-view="thread"] .msgx-list{display:none;}
   .msgx[data-view="list"] .msgx-thread,
@@ -1561,7 +1568,21 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
          we say", then "what do I know about them" -- and a layout that makes
          them open a modal to reach the third loses the first two. -->
     <div class="msgx" id="msgx">
-      <div class="msgx-list" id="msgx-list"></div>
+      <!-- The header and search box live in the markup, not in
+           renderMsgxList, because that function re-runs on every render and
+           replacing an <input> under a typing cursor loses the caret. The
+           two searches that already work (calls, clients) are static for
+           exactly this reason. Only the rows below are re-rendered. -->
+      <div class="msgx-list">
+        <div class="msgx-head">
+          <h4>Conversations</h4>
+          <span class="msgx-sub" id="msgx-count"></span>
+        </div>
+        <div class="msgx-find">
+          <input type="search" id="msgx-search" placeholder="Search name or number…">
+        </div>
+        <div class="msgx-scroll" id="msgx-list"></div>
+      </div>
       <div class="msgx-thread" id="msgx-thread"></div>
       <div class="msgx-profile" id="msgx-profile"></div>
     </div>
@@ -1686,9 +1707,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261016-a2a86c67"></script>
-<script src="data.js?v=20261016-a2a86c67"></script>
-<script src="app.js?v=20261016-a2a86c67"></script>
-<script src="auth.js?v=20261016-a2a86c67"></script>
+<script src="logic.js?v=20261021-8d149452"></script>
+<script src="data.js?v=20261021-8d149452"></script>
+<script src="app.js?v=20261021-8d149452"></script>
+<script src="auth.js?v=20261021-8d149452"></script>
 </body>
 </html>

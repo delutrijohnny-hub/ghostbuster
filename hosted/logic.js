@@ -3517,6 +3517,45 @@ function conversationList(state, now){
   return rows;
 }
 
+/* Narrowing the inbox to one person.
+
+   Name OR number, because those are the two things somebody actually has in
+   front of them: a name they half-remember from a call, or a number showing
+   on a handset they are about to call back.
+
+   The number is compared DIGITS ONLY on both sides. 520 of the stored numbers
+   are formatted -- "(757) 802-2578", "301) 970-3969", "270.237.0142" -- and
+   379 are bare digits, so matching the raw strings would find barely half the
+   book and would do it unpredictably: the same search would work for one
+   contact and silently miss their duplicate. phoneKey is not used here
+   because it keeps only the last 10 digits, and somebody searching an area
+   code is searching the front of the number.
+
+   Three digits before a number search starts. One or two digits match almost
+   every row, so the list would appear not to filter at all until the third
+   keystroke -- and an area code is the shortest phone search anybody means.
+   Below that the query is treated as a name, which is what "2nd" or "J2" is.
+
+   Returns the rows unchanged for an empty query rather than an empty list:
+   no search is not a search that found nothing. */
+function filterConversations(rows, query){
+  var all = rows || [];
+  var q = String(query == null ? '' : query).trim().toLowerCase();
+  if(!q) return all;
+  var digits = q.replace(/\D/g, '');
+  return all.filter(function(r){
+    if(String((r && r.name) || '').toLowerCase().indexOf(q) !== -1) return true;
+    if(digits.length >= 3){
+      var phone = String((r && r.phone) || '').replace(/\D/g, '');
+      // No empty-phone guard: digits is non-empty by the check above, and
+      // ''.indexOf('923') is already -1. A guard that cannot change an
+      // outcome is one more line to keep true for no benefit.
+      if(phone.indexOf(digits) !== -1) return true;
+    }
+    return false;
+  });
+}
+
 /* Unread across the whole book, for the tab badge.
 
    Deliberately NOT the same number as "waiting on you". A contact can be
@@ -7621,6 +7660,7 @@ var __LOGIC_EXPORTS__ = {
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,
+  filterConversations: filterConversations,
   automationState: automationState,
   scheduledSendCheck: scheduledSendCheck,
   summaryState: summaryState,
