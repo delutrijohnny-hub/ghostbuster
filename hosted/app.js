@@ -993,6 +993,7 @@ function renderAll(){
   renderCalendarHealth();
   renderHealthAlerts();
   renderProgressBar();
+  renderConfirmSends();
   renderStats();
   renderTodos();
   renderThreadsTab();
@@ -1140,6 +1141,48 @@ function describeAlerts(alerts, n){
 }
 
 
+/* "Did that one actually send?"
+
+   The question only this person can answer, asked only where nothing else
+   can answer it: external sends, past the grace window, that the Mac agent
+   has plainly not found. An integrated send reports its own fate and is
+   never listed here.
+
+   Shown on Today because that is where somebody lands when they come back
+   from Messages, which is the moment they still remember what happened. */
+function renderConfirmSends(){
+  var box = el('confirm-sends'); if(!box) return;
+  var pending = awaitingConfirmation(STATE, new Date());
+  if(!pending.length){ box.innerHTML = ''; return; }
+
+  /* Capped, with the count told plainly. 793 of this account's messages are
+     unconfirmed; rendering all of them would turn the dashboard into a
+     backlog nobody will ever clear, and a wall of 793 rows is read as
+     impossible rather than as work. */
+  var show = pending.slice(0, 5);
+  box.innerHTML =
+    '<div class="confirm-head"><strong>' + pending.length +
+      (pending.length === 1 ? ' send needs' : ' sends need') + ' confirming</strong>' +
+      '<span class="msgx-sub"> \u00b7 a draft was opened and nothing came back</span></div>' +
+    show.map(function(a){
+      return '<div class="confirm-row">' +
+        '<div class="confirm-who"><strong>' + escapeHtml(firstName(a.name)) + '</strong>' +
+          '<span class="msgx-sub"> \u00b7 ' + escapeHtml(shortWhen(a.at)) + '</span></div>' +
+        '<div class="confirm-text">' + escapeHtml(a.text.slice(0, 90)) + '</div>' +
+        '<div class="confirm-actions">' +
+          '<button class="btn btn-sm btn-primary" data-action="confirm-send" data-cid="' +
+            escapeHtml(a.clientId) + '" data-mid="' + escapeHtml(a.messageId) + '">I sent it</button>' +
+          '<button class="btn btn-sm btn-ghost" data-action="unsend-message" data-cid="' +
+            escapeHtml(a.clientId) + '" data-mid="' + escapeHtml(a.messageId) +
+            '" title="Puts the touch back on the list as though it had never been opened.">Not sent</button>' +
+        '</div></div>';
+    }).join('') +
+    (pending.length > show.length
+      ? '<div class="msgx-sub confirm-more">' + (pending.length - show.length) +
+        ' older ones are not listed. They stay unconfirmed, which is the truth about them.</div>'
+      : '');
+}
+
 function renderProgressBar(){
   var now = new Date();
   var todayKey = tzDateKey(now, Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
@@ -1147,13 +1190,29 @@ function renderProgressBar(){
   var due = getTextTodayList(STATE, now, '');
   var sentToday = 0;
   clients.forEach(function(c){ c.messageLog.forEach(function(m){ if(tzDateKey(new Date(m.sentAt), Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC') === todayKey) sentToday++; }); });
-  var total = sentToday + due.length;
-  var pctDone = total > 0 ? Math.round((sentToday/total)*100) : 0;
-  var label = el('progress-label'); if(label) label.textContent = sentToday + ' of ' + total + ' touches sent today';
+  /* Confirmed, not merely attempted.
+
+     This counted every logged message as sent, which on the external route
+     means it counted drafts being OPENED. 770 of 1,252 messages have no
+     evidence behind them, so the old number was describing intent and
+     calling it work.
+
+     The gap is shown rather than hidden: a low count with "4 awaiting
+     confirmation" beside it reads as something to finish, where a low count
+     alone reads as a day wasted. */
+  var prog = textingProgress(STATE, now, due.length);
+  var total = prog.total;
+  var pctDone = prog.pct;
+  var label = el('progress-label');
+  if(label){
+    label.textContent = prog.confirmed + ' of ' + total + ' confirmed today' +
+      (prog.awaiting ? ' \u00b7 ' + prog.awaiting + ' awaiting confirmation' : '') +
+      (prog.failed ? ' \u00b7 ' + prog.failed + ' failed' : '');
+  }
   var fill = el('progress-fill');
   if(fill){
     fill.style.width = pctDone + '%';
-    fill.classList.toggle('full', total > 0 && due.length === 0);
+    fill.classList.toggle('full', total > 0 && prog.confirmed === total);
   }
   var rc = el('remaining-count'); if(rc) rc.textContent = due.length;
 }
@@ -4497,7 +4556,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-837133d9';
+var BUILD_STAMP = '20261021-c4cb8075';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5855,6 +5914,38 @@ document.addEventListener('click', function(ev){
       document.querySelectorAll('.tab-panel').forEach(function(pnl){
         pnl.classList.toggle('active', pnl.id === 'tab-threads'); });
       renderThreadsTab();
+      break;
+    }
+    case 'confirm-send': {
+      /* The person says it went. Recorded as its own state: weaker than a
+         provider receipt, far stronger than a draft having been opened, and
+         never silently upgraded to either. */
+      var csC = STATE.clients[cid];
+      var csM = csC && (csC.messageLog || []).filter(function(m){
+        return m.id === target.getAttribute('data-mid'); })[0];
+      if(!csM) break;
+      lastSnapshot = snapshot();
+      csM.deliveryStatus = 'sent_manual';
+      saveState(STATE);
+      renderAll();
+      showToast('Recorded as sent to ' + firstName(csC.name) + '.', lastSnapshot);
+      break;
+    }
+    case 'unsend-message': {
+      /* It never went. The log row is removed, which puts the touch back on
+         the list as though the draft had never been opened -- rather than
+         leaving a message in the history that was never sent, and which
+         every reply rate would then count against. */
+      var usC = STATE.clients[cid];
+      if(!usC) break;
+      var usMid = target.getAttribute('data-mid');
+      var before = (usC.messageLog || []).length;
+      lastSnapshot = snapshot();
+      usC.messageLog = (usC.messageLog || []).filter(function(m){ return m.id !== usMid; });
+      if(usC.messageLog.length === before) break;
+      saveState(STATE);
+      renderAll();
+      showToast('Put back on the list for ' + firstName(usC.name) + '.', lastSnapshot);
       break;
     }
     case 'toggle-text-today':

@@ -3757,8 +3757,120 @@ var DELIVERY_STATES = {
   unverified: 'opened in Messages \u2014 not confirmed',
   // Same honesty on the other channel: a Gmail draft was opened and
   // nothing came back to say Send was ever pressed.
-  unverified_email: 'opened in Gmail \u2014 not confirmed'
+  unverified_email: 'opened in Gmail \u2014 not confirmed',
+  /* Somebody said, in as many words, that they sent it. Weaker evidence than
+     a provider receipt and far stronger than a draft having been opened, so
+     it is its own state rather than being folded into either. */
+  sent_manual: 'you confirmed you sent it'
 };
+
+/* How a message left, as opposed to what happened to it.
+
+   Mode and state answer different questions and get confused constantly:
+   'delivered' means a carrier said so, which can only happen on the
+   integrated route, while 'you confirmed you sent it' can only happen on the
+   external one. Keeping them apart is what stops a handoff ever being
+   described in words only a provider could have earned. */
+var SEND_MODES = {external: 'external', integrated: 'integrated'};
+
+function sendMode(m){
+  if(!m) return SEND_MODES.external;
+  /* A provider id is the only evidence that something went through a
+     provider. Everything else -- a Messages handoff, a Gmail draft, a
+     message the Mac agent found afterwards -- left by somebody's own app. */
+  return m.providerId ? SEND_MODES.integrated : SEND_MODES.external;
+}
+
+/* How much is actually known about whether this went out.
+
+   Three answers, and the middle one is the point of the whole model:
+
+   'confirmed'  something outside this app said so -- a provider receipt, or
+                the Mac agent finding the real message in Messages.
+   'awaiting'   a draft was opened and nothing has come back. NOT a failure
+                and NOT a send; it is the honest gap, and it is where 793 of
+                this account's 1,252 messages sit.
+   'failed'     something said it did not go.
+
+   A send with no evidence is never promoted to 'confirmed' by age, by
+   migration, or by anything else. The only routes out of 'awaiting' are the
+   agent matching it or a person saying what happened. */
+function sendEvidence(m){
+  if(!m) return 'awaiting';
+  var raw = m.deliveryStatus || null;
+  if(raw === 'failed' || raw === 'bounced' || raw === 'complained') return 'failed';
+  if(raw === 'delivered' || raw === 'sent' || raw === 'sent_manual') return 'confirmed';
+  return 'awaiting';          // queued, unverified, and nothing at all
+}
+
+/* The agent runs every two minutes. A send it is going to confirm is
+   confirmed inside that window, so anything still unconfirmed after this has
+   not been seen and is not going to be -- which is the moment it becomes
+   worth asking a person about rather than nagging them about a message that
+   was about to answer for itself. */
+var CONFIRM_GRACE_MINUTES = 10;
+
+/* The sends worth asking about.
+
+   Only external ones: an integrated send reports its own fate and a question
+   about it would be asking somebody to guess. Only ones past the grace
+   window, so the agent gets its chance first. Newest first, because the one
+   just sent is the one still in mind. */
+function awaitingConfirmation(state, now){
+  now = now || new Date();
+  var cutoff = now.getTime() - CONFIRM_GRACE_MINUTES * 60000;
+  var out = [];
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    (c.messageLog || []).forEach(function(m){
+      if(sendMode(m) !== SEND_MODES.external) return;
+      if(sendEvidence(m) !== 'awaiting') return;
+      var t = Date.parse(m.sentAt);
+      if(isNaN(t) || t > cutoff) return;
+      out.push({clientId: c.id, name: c.name, messageId: m.id, stage: m.stage,
+                channel: m.channel || 'sms', at: m.sentAt, t: t,
+                text: m.text || ''});
+    });
+  });
+  out.sort(function(a, b){ return b.t - a.t; });
+  return out;
+}
+
+/* What the day's progress actually is.
+
+   Three numbers, not one. "10 of 11" on its own cannot tell somebody whether
+   the other one is undone or merely unconfirmed, and those need opposite
+   responses. Counted from message_log rather than from any separate tally,
+   so this can never drift from the conversations it describes. */
+function textingProgress(state, now, dueCount){
+  now = now || new Date();
+  var key = tzDateKey(now, Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  var confirmed = 0, awaiting = 0, failed = 0;
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    (c.messageLog || []).forEach(function(m){
+      var t = Date.parse(m.sentAt);
+      if(isNaN(t)) return;
+      if(tzDateKey(new Date(t), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC') !== key) return;
+      var e = sendEvidence(m);
+      if(e === 'confirmed') confirmed++;
+      else if(e === 'failed') failed++;
+      else awaiting++;
+    });
+  });
+  var due = typeof dueCount === 'number' ? dueCount : 0;
+  /* The denominator is everything today asked of somebody: what is still due
+     plus every attempt already made. Counting only the confirmed ones would
+     make the bar shrink as work was done. */
+  var total = confirmed + awaiting + failed + due;
+  return {
+    confirmed: confirmed, awaiting: awaiting, failed: failed,
+    due: due, total: total,
+    pct: total > 0 ? Math.round((confirmed / total) * 100) : 0
+  };
+}
 
 function deliveryState(m){
   if(!m) return {state: 'unknown', label: '', confirmed: false};
@@ -7921,6 +8033,9 @@ var __LOGIC_EXPORTS__ = {
   messagingSetup: messagingSetup,
   AGENT_STALE_MINUTES: AGENT_STALE_MINUTES,
   DELIVERY_STATES: DELIVERY_STATES,
+  SEND_MODES: SEND_MODES, sendMode: sendMode, sendEvidence: sendEvidence,
+  awaitingConfirmation: awaitingConfirmation, textingProgress: textingProgress,
+  CONFIRM_GRACE_MINUTES: CONFIRM_GRACE_MINUTES,
   RECENT_REPLY_DAYS: RECENT_REPLY_DAYS,
   voiceExamples: voiceExamples,
   conversationThread: conversationThread,

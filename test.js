@@ -15060,6 +15060,121 @@ test('an empty calendar is told apart from a quiet one', () => {
       + 'would alarm somebody whose calendar is simply quiet today');
 });
 
+console.log('\n--- what is actually known about a send ---');
+{
+  const msg = (o) => Object.assign({id:'m', sentAt:new Date().toISOString(), channel:'sms'}, o);
+
+  test('a draft that was merely opened is never counted as sent', () => {
+    /* 770 of this account's 1,252 messages are exactly this: a handoff with
+       nothing recorded. Promoting them to sent -- by migration, by age, or
+       by a default -- would manufacture a sending history that never
+       happened, and every reply rate built on it would be wrong. */
+    assert.strictEqual(GB.sendEvidence(msg({deliveryStatus: null})), 'awaiting');
+    assert.strictEqual(GB.sendEvidence(msg({deliveryStatus: 'unverified'})), 'awaiting');
+    assert.strictEqual(GB.sendEvidence(msg({deliveryStatus: 'queued'})), 'awaiting');
+  });
+
+  test('only outside evidence counts as confirmed', () => {
+    ['delivered', 'sent', 'sent_manual'].forEach(st => {
+      assert.strictEqual(GB.sendEvidence(msg({deliveryStatus: st})), 'confirmed', st);
+    });
+  });
+
+  test('a failure is its own answer, never folded into awaiting', () => {
+    // "We do not know" and "it did not go" need opposite responses.
+    ['failed', 'bounced', 'complained'].forEach(st => {
+      assert.strictEqual(GB.sendEvidence(msg({deliveryStatus: st})), 'failed', st);
+    });
+  });
+
+  test('mode is decided by evidence of a provider, not by channel', () => {
+    assert.strictEqual(GB.sendMode(msg({})), 'external');
+    assert.strictEqual(GB.sendMode(msg({channel: 'email'})), 'external');
+    assert.strictEqual(GB.sendMode(msg({providerId: 'SM123'})), 'integrated');
+    // The Mac agent's id marks a message it FOUND, not one it sent -- but it
+    // is still a real provider reference, so the distinction that matters
+    // here is evidence, which it has.
+    assert.strictEqual(GB.sendMode(msg({providerId: 'imsg:abc'})), 'integrated');
+  });
+
+  test('nothing is asked about until the agent has had its chance', () => {
+    /* The agent syncs every two minutes and confirms what it finds. Asking
+       immediately would prompt about messages that are about to answer for
+       themselves, which is how a confirmation UI becomes noise. */
+    const st = GB.buildDefaultState();
+    const now = new Date();
+    const fresh = new Date(now.getTime() - 60000).toISOString();
+    const old = new Date(now.getTime() - 30 * 60000).toISOString();
+    st.clients = {c1: GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+      {id:'new', stage:'welcome', channel:'sms', text:'a', sentAt:fresh},
+      {id:'old', stage:'monday', channel:'sms', text:'b', sentAt:old}
+    ]})};
+    const ask = GB.awaitingConfirmation(st, now);
+    assert.deepStrictEqual(ask.map(a => a.messageId), ['old'],
+      'the grace window was not respected');
+  });
+
+  test('a provider send is never put to a person to guess about', () => {
+    const st = GB.buildDefaultState();
+    const now = new Date();
+    const old = new Date(now.getTime() - 30 * 60000).toISOString();
+    st.clients = {c1: GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+      {id:'p', stage:'welcome', channel:'sms', text:'a', sentAt:old, providerId:'SM1'}
+    ]})};
+    assert.deepStrictEqual(GB.awaitingConfirmation(st, now), [],
+      'somebody was asked to confirm a send the provider reports on');
+  });
+
+  test('a confirmed or failed send is not asked about either', () => {
+    const st = GB.buildDefaultState();
+    const now = new Date();
+    const old = new Date(now.getTime() - 30 * 60000).toISOString();
+    st.clients = {c1: GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+      {id:'ok',  stage:'welcome', channel:'sms', text:'a', sentAt:old, deliveryStatus:'delivered'},
+      {id:'bad', stage:'monday',  channel:'sms', text:'b', sentAt:old, deliveryStatus:'failed'}
+    ]})};
+    assert.deepStrictEqual(GB.awaitingConfirmation(st, now), []);
+  });
+
+  test('progress separates done from merely attempted', () => {
+    /* The number somebody acts on. "3 of 11" alone cannot say whether the
+       other eight are undone or just unconfirmed, and those need opposite
+       responses. */
+    const st = GB.buildDefaultState();
+    const now = new Date();
+    const t = (m) => new Date(now.getTime() - m * 60000).toISOString();
+    st.clients = {c1: GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+      {id:'a', stage:'welcome',    channel:'sms', text:'x', sentAt:t(30), deliveryStatus:'delivered'},
+      {id:'b', stage:'monday',     channel:'sms', text:'x', sentAt:t(25), deliveryStatus:'sent_manual'},
+      {id:'c', stage:'midcheckin', channel:'sms', text:'x', sentAt:t(20)},
+      {id:'d', stage:'dayof',      channel:'sms', text:'x', sentAt:t(15), deliveryStatus:'failed'}
+    ]})};
+    const p = GB.textingProgress(st, now, 2);
+    assert.strictEqual(p.confirmed, 2);
+    assert.strictEqual(p.awaiting, 1);
+    assert.strictEqual(p.failed, 1);
+    assert.strictEqual(p.due, 2);
+    assert.strictEqual(p.total, 6, 'the denominator lost the work still to do');
+    assert.strictEqual(p.pct, 33);
+  });
+
+  test('the bar does not shrink as work gets done', () => {
+    // The denominator counts attempts AND what is still due, so completing
+    // something moves the numerator without moving the goalposts.
+    const st = GB.buildDefaultState();
+    st.clients = {};
+    const p0 = GB.textingProgress(st, new Date(), 5);
+    assert.strictEqual(p0.total, 5);
+    assert.strictEqual(p0.pct, 0);
+  });
+
+  test('an empty day reports zero rather than dividing by it', () => {
+    const p = GB.textingProgress(GB.buildDefaultState(), new Date(), 0);
+    assert.strictEqual(p.total, 0);
+    assert.strictEqual(p.pct, 0);
+  });
+}
+
 console.log('\n--- email in the conversation ---');
 {
   test('logging an email send does not throw, and never credits a template', () => {
