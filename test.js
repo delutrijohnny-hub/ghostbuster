@@ -7583,6 +7583,37 @@ console.log('\n--- the text inbox ---');
       'a timestamp was invented for a contact nothing has happened to');
   });
 
+  test('a contact mid-conversation still shows as needing a text', () => {
+    /* The bug this exists to prevent: dueStage was computed only when the
+       thread was EMPTY, so the first message a contact received gave them a
+       conversation and quietly dropped them out of "Needs text" while a
+       touch was still due. 229 of 790 contacts have a thread, so the filter
+       built to find the day's work would have missed nearly all of it.
+
+       The message here is stage 'custom' -- a hand-typed send -- so it makes
+       a conversation without satisfying any cadence touch. */
+    const st = GB.buildDefaultState();
+    const now = new Date();
+    st.clients = {c1: GB.sanitizeClient({
+      id: 'c1', name: 'Mid Conversation', phone: '2135550199',
+      status: 'Booked', timezone: 'America/New_York',
+      bookedDate: now.toISOString(),
+      callDateTime: new Date(now.getTime() + 21 * 86400000).toISOString(),
+      messageLog: [{id: 'm1', stage: 'custom', variantId: 'custom', channel: 'sms',
+        text: 'quick note', sentAt: new Date(now.getTime() - 3600000).toISOString(),
+        responded: false, reviewed: false}]
+    })};
+
+    assert.deepStrictEqual(GB.computeDue(st.clients.c1, now), ['welcome'],
+      'the fixture had nothing due, so this proved nothing');
+
+    const row = GB.conversationList(st, now)[0];
+    assert.ok(row.messages > 0, 'the fixture produced no conversation');
+    assert.strictEqual(row.dueStage, 'welcome',
+      'a contact with a conversation lost its due touch and vanished from Needs text');
+    assert.strictEqual(GB.conversationCounts([row]).needs, 1);
+  });
+
   test('what needs you is ordered above what is merely recent', () => {
     /* Waiting on you, then due, then the rest. Pure recency buried every due
        touch below the whole back catalogue, which is the bug this ordering

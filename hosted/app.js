@@ -1779,6 +1779,25 @@ function renderMsgxList(rows, waiting, total){
    at all, so without this the panel would be a reminder you could not act
    on. One rule for whether a text may go out (smsSendMode), two places that
    ask it. */
+/* Start from one of the sequence's own templates.
+
+   Fills the box and nothing more. Sending from the composer logs a 'custom'
+   message, so picking the day-of wording here does NOT advance the sequence
+   to day-of -- the touch panel above is what does that, and only for the
+   touch actually due. Two routes to the same words would otherwise mean two
+   ways for the cadence to disagree with itself.
+
+   Rendered for THIS contact, so the preview is the real message with their
+   name and time in it rather than a template full of placeholders. */
+function msgxTemplateSelect(c){
+  var opts = cadenceTouches().map(function(stage, i){
+    return '<option value="' + escapeHtml(stage) + '">Touch ' + (i + 1) + ' \u00b7 ' +
+      escapeHtml(touchLabel(stage)) + '</option>';
+  }).join('');
+  return '<select class="msgx-tpl" data-action="msgx-template" data-cid="' + escapeHtml(c.id) + '">' +
+    '<option value="">Start from a template\u2026</option>' + opts + '</select>';
+}
+
 function msgxTouchPanel(c, now){
   var touch = threadTouch(STATE, c, now);
   if(!touch) return '';
@@ -1897,10 +1916,27 @@ function renderMsgxThread(){
   if(route.mode === 'blocked'){
     composer = '<div class="msgx-sub">' + escapeHtml(firstName(c.name)) +
       ' replied STOP, so they cannot be texted.</div>';
+  } else if(route.mode === 'handoff'){
+    /* A real composer on the handoff route too.
+
+       It used to say "use Open in Messages from Today", which sent somebody
+       out of the conversation to send a message about it -- and even then
+       only let them send the scheduled touch, never a sentence of their own.
+       The draft opens in Messages exactly as the Today link does, and is
+       logged with the same honesty: unverified, because nothing here can see
+       whether Send was pressed. */
+    composer = msgxTemplateSelect(c) +
+      '<textarea id="msgx-text" rows="2" placeholder="Message to ' +
+        escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
+      '<div class="row">' +
+        '<button class="btn btn-sm btn-primary" data-action="msgx-handoff-send" data-cid="' +
+          escapeHtml(c.id) + '">Open in Messages</button>' +
+        '<span class="msgx-sub">Opens your Messages app. Logged as unconfirmed \u2014 ' +
+          'their reply arrives on your phone.</span>' +
+      '</div>';
   } else if(route.mode !== 'provider'){
-    composer = '<div class="msgx-sub">Replying from here needs your own texting number \u2014 ' +
-      escapeHtml(route.reason || 'not available yet') +
-      '. For now use <strong>Open in Messages</strong> from Today.</div>';
+    composer = '<div class="msgx-sub">' +
+      escapeHtml(route.reason || 'This contact cannot be texted.') + '</div>';
   } else if(!win.ok){
     composer = '<div class="msgx-sub">Too late to text them \u2014 ' + escapeHtml(win.reason) +
       '. Texting runs 8am\u20139pm their time.</div>';
@@ -1911,7 +1947,8 @@ function renderMsgxThread(){
        noise, and the draft itself always lands in this box for editing --
        there is no path from a suggestion to a sent message that does not go
        through a person reading it and pressing Send. */
-    composer = '<textarea id="msgx-text" rows="2" placeholder="Write back to ' +
+    composer = msgxTemplateSelect(c) +
+      '<textarea id="msgx-text" rows="2" placeholder="Write back to ' +
       escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
       '<div class="row"><button class="btn btn-sm btn-primary" data-action="msgx-send" data-cid="' +
       escapeHtml(c.id) + '">Send</button>' +
@@ -2073,7 +2110,22 @@ function renderMsgxProfile(){
   box.innerHTML =
     field('Where this stands', summaryBody) +
     (queued.length ? field('Queued to send', queuedBody) : '') +
-    field('Status', escapeHtml(c.status || '\u2014')) +
+    /* Status is EDITABLE here, not just displayed.
+
+       It is the field most likely to change while reading a conversation --
+       they said no, they rescheduled, they went quiet -- and it decides
+       whether the sequence keeps running at all. Sending somebody to the
+       contact modal to change it is how a thread gets read, understood, and
+       then left in a state the cadence disagrees with.
+
+       Goes through setOutcome, the same path End of day uses, so one status
+       change means the same thing wherever it is made. */
+    field('Status',
+      '<select class="msgx-status" data-action="msgx-status" data-cid="' + escapeHtml(c.id) + '">' +
+      VALID_STATUSES.map(function(st){
+        return '<option value="' + escapeHtml(st) + '"' +
+          (st === c.status ? ' selected' : '') + '>' + escapeHtml(st) + '</option>';
+      }).join('') + '</select>') +
     field('Their time', escapeHtml(tz.timeLabel) + (tz.warn ? ' <span class="msgx-tag wait">outside hours</span>' : '')) +
     field('Cadence', 'Touch ' + (prog.done + 1) + ' of ' + prog.total) +
     field('Automation', autoBody) +
@@ -4373,7 +4425,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-15e7e829';
+var BUILD_STAMP = '20261021-6395f7ee';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5749,6 +5801,28 @@ document.addEventListener('click', function(ev){
       renderThreadsTab();
       break;
     }
+    case 'msgx-handoff-send': {
+      /* An arbitrary message, handed to Messages.
+
+         Logged as 'custom' rather than against a sequence stage: these are
+         words somebody typed, so crediting a touch would advance the cadence
+         for a message that was not that touch. The touch panel above remains
+         the only thing that can advance it. */
+      var hc = STATE.clients[cid];
+      if(!hc) break;
+      var hbox = el('msgx-text');
+      var htext = (hbox && hbox.value.trim()) || '';
+      if(!htext){ showToast('Nothing to send yet.'); break; }
+      var hdigits = String(hc.phone || '').replace(/\D/g, '');
+      if(!hdigits){ showToast('That contact has no phone number.'); break; }
+      window.open('sms:' + (hdigits.length === 10 ? '+1' + hdigits : '+' + hdigits) +
+                  '&body=' + encodeURIComponent(htext), '_blank');
+      markSentOnChannel(cid, 'custom', htext, 'sms');
+      if(hbox) hbox.value = '';
+      renderThreadsTab();
+      showToast('Draft opened in Messages \u2014 logged as unconfirmed until you send it.');
+      break;
+    }
     case 'msgx-mark-sent': {
       /* The same doMarkSent the Today checkbox uses -- one way for a touch to
          become sent, so the two surfaces cannot disagree about the sequence. */
@@ -6129,6 +6203,35 @@ document.addEventListener('change', function(ev){
      && !billingAllowsWrite(billingState())){
     showBillingWall();
     renderAll();   // put the control back to what the state actually says
+    return;
+  }
+  if(t.getAttribute && t.getAttribute('data-action') === 'msgx-template'){
+    var tpCid = t.getAttribute('data-cid'), tpStage = t.value;
+    var tpBox = el('msgx-text');
+    if(tpStage && tpBox && STATE.clients[tpCid]){
+      /* Replaces whatever is in the box. Appending would silently glue two
+         messages together, and somebody who picked a template after typing
+         meant to start over. */
+      tpBox.value = getCardText(STATE, STATE.clients[tpCid], tpStage);
+      tpBox.focus();
+    }
+    t.value = '';          // back to the prompt, so it reads as an action
+    return;
+  }
+  if(t.getAttribute && t.getAttribute('data-action') === 'msgx-status'){
+    var stCid = t.getAttribute('data-cid');
+    var stClient = STATE.clients[stCid];
+    if(stClient){
+      lastSnapshot = snapshot();
+      var wasStatus = stClient.status;
+      setOutcome(STATE, stCid, t.value);
+      /* renderAll, not just this pane. A status that stops the cadence
+         changes what is due, which changes the queue, the chip counts and
+         the Today list. Redrawing one pane would leave three surfaces
+         disagreeing about the same contact. */
+      renderAll();
+      showToast(firstName(stClient.name) + ': ' + wasStatus + ' \u2192 ' + t.value + '.', lastSnapshot);
+    }
     return;
   }
   /* Tailored wording, saved when the box loses focus rather than on every

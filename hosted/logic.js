@@ -3557,7 +3557,15 @@ function conversationList(state, now){
        Roughly 560 of 790 contacts have no conversation, so without this the
        chat tab could only ever show the minority who had already replied --
        and the work that needs doing would be the part you could not see. */
-    var dueStages = thread.length ? [] : computeDue(c, now);
+    /* Due is asked for EVERY contact, not only the silent ones.
+
+       It used to be computed only when the thread was empty, which quietly
+       broke the queue the moment anybody was texted: the first message gave
+       them a conversation, so dueStage stopped being set and they vanished
+       from "Needs text" while a touch was still due. 229 of 790 contacts
+       have a thread, and every one of them would have been invisible in the
+       filter built to find them. */
+    var dueStages = computeDue(c, now);
     if(!thread.length && !dueStages.length) return;
 
     if(!thread.length){
@@ -3603,7 +3611,10 @@ function conversationList(state, now){
       messages: thread.length,
       replies: inbound,
       /* Their word was last and nothing has gone back. Someone is waiting. */
-      awaitingReply: last.dir === 'in'
+      awaitingReply: last.dir === 'in',
+      // A touch can be due on a contact you are already mid-conversation
+      // with; that is the common case, not the exception.
+      dueStage: dueStages[0] || null
     });
   });
   /* Ordered by what needs you, then by recency inside that.
