@@ -995,6 +995,19 @@ function renderOwnerTab(){
   ]));
 }
 
+/* Which appearance is chosen, shown on the control.
+
+   Reads the attribute rather than storage, so it reflects what the page is
+   actually doing -- including when storage was unavailable and the choice
+   silently did not stick. */
+function renderThemePick(){
+  var box = el('theme-pick'); if(!box) return;
+  var cur = document.documentElement.getAttribute('data-theme') || 'auto';
+  Array.prototype.forEach.call(box.querySelectorAll('button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-theme') === cur);
+  });
+}
+
 function renderAll(){
   if(!STATE) return;
   applyTerminology();
@@ -1004,6 +1017,7 @@ function renderAll(){
   if(!ONBOARDING && needsOnboarding()) setTimeout(startOnboarding, 0);
   renderCalendarHealth();
   renderHealthAlerts();
+  renderThemePick();
   renderProgressBar();
   renderConfirmSends();
   renderStats();
@@ -4869,7 +4883,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-1991c6d2';
+var BUILD_STAMP = '20261021-e62e73a3';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5510,6 +5524,21 @@ document.addEventListener('click', function(ev){
   }
 
   switch(action){
+    case 'set-theme': {
+      /* 'auto' REMOVES the attribute rather than writing a value, so the
+         media query takes over again. Writing 'auto' into data-theme would
+         match neither rule and silently pin the light palette. */
+      var th = target.getAttribute('data-theme') || 'auto';
+      if(th === 'auto'){
+        document.documentElement.removeAttribute('data-theme');
+        try{ localStorage.removeItem('gr-theme'); }catch(e){}
+      } else {
+        document.documentElement.setAttribute('data-theme', th);
+        try{ localStorage.setItem('gr-theme', th); }catch(e){}
+      }
+      renderThemePick();
+      break;
+    }
     case 'toggle-menu':
       el('overflow-menu').classList.toggle('hidden');
       break;

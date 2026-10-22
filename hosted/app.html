@@ -21,6 +21,24 @@
 <meta property="og:description" content="Follow-up that never forgets a lead.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%2317171a%27%2F%3E%3Cg%20transform%3D%27translate%285%206%29%20scale%280.80%29%27%3E%3Cpath%20fill-rule%3D%27evenodd%27%20fill%3D%27%23ffffff%27%20d%3D%27M30%209c-10.5%200-18%207.4-18%2018v19.3c0%202.4%202.8%203.6%204.5%202l3.3-3.1%203.4%203.1c1%201%202.6%201%203.6%200l3.4-3.1%203.4%203.1c1%201%202.6%201%203.6%200l3.3-3.1%203.2%203c1.7%201.6%204.3.3%204.3-2V27c0-10.6-7.5-18-18-18zM24%2025a2.5%202.5%200%201%200%200%205%202.5%202.5%200%201%200%200-5zM36%2025a2.5%202.5%200%201%200%200%205%202.5%202.5%200%201%200%200-5z%27%2F%3E%3Cpath%20d%3D%27M53.5%2015.5a12%2012%200%200%201%203.2%209%27%20fill%3D%27none%27%20stroke%3D%27%23dc2f4a%27%20stroke-width%3D%274%27%20stroke-linecap%3D%27round%27%2F%3E%3Cpath%20d%3D%27M50%2023.2a5.5%205.5%200%200%201%201.5%204.1%27%20fill%3D%27none%27%20stroke%3D%27%23dc2f4a%27%20stroke-width%3D%273.6%27%20stroke-linecap%3D%27round%27%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<script>
+/* Applied before the stylesheet paints, deliberately inline and tiny.
+
+   Doing this from app.js means the page renders in the OS theme first and
+   then flips -- a white flash on every load for somebody who chose dark,
+   which is exactly the thing a dark theme is chosen to avoid.
+
+   Three values: 'auto' follows the OS and is the default, so nobody who has
+   never touched this sees a change. 'light' and 'dark' pin it. Wrapped
+   because localStorage throws in a private window, and a theme preference
+   is never worth failing a page load for. */
+(function(){
+  try{
+    var t = localStorage.getItem('gr-theme');
+    if(t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+  }catch(e){}
+})();
+</script>
 <style>
 @font-face{
   font-family:'Anton';
@@ -145,6 +163,13 @@ header.app-header h1{
 header.app-header .btn{background:#26262b;border-color:#3a3a40;color:#fff;position:relative;z-index:1;}
 header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .menu-wrap{position:relative;z-index:1;}
+.menu-theme{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--ink-soft);}
+.theme-pick{display:inline-flex;gap:3px;}
+.theme-pick button{padding:3px 8px;border:1px solid var(--border);border-radius:999px;
+  background:var(--card);color:var(--ink-soft);font:inherit;font-size:11px;
+  font-weight:700;cursor:pointer;width:auto;text-align:center;}
+.theme-pick button.on{background:var(--ink);color:var(--card);border-color:var(--ink);}
 .menu-dropdown{
   position:absolute;right:0;top:calc(100% + 6px);background:var(--card);color:var(--ink);
   border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);
@@ -1241,9 +1266,13 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 }
 .pw-pct{font-size:12px;color:var(--ink-faint);font-variant-numeric:tabular-nums;flex:0 0 auto;}
 .pw-stats{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto;}
+/* colour set explicitly. Every word in here lives in a child span today, so
+   the button's own colour is never painted -- which is exactly why it was
+   left at the browser default of black, invisible on a dark card. One bare
+   text node added later and it would vanish with nothing to explain it. */
 .pw-stat{display:flex;flex-direction:column;align-items:flex-start;gap:0;
   padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);
-  background:var(--card);cursor:pointer;font:inherit;min-width:62px;}
+  background:var(--card);color:var(--ink);cursor:pointer;font:inherit;min-width:62px;}
 .pw-stat:hover{background:var(--bg);}
 .pw-stat .n{font-size:15px;font-weight:800;line-height:1.1;}
 .pw-stat .k{font-size:10px;color:var(--ink-faint);white-space:nowrap;}
@@ -1637,6 +1666,14 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <div class="menu-wrap">
     <button class="btn" data-action="toggle-menu">⋯ Menu</button>
     <div class="menu-dropdown hidden" id="overflow-menu">
+      <div class="menu-theme">
+        <span>Appearance</span>
+        <span class="theme-pick" id="theme-pick">
+          <button data-action="set-theme" data-theme="auto">Auto</button>
+          <button data-action="set-theme" data-theme="light">Light</button>
+          <button data-action="set-theme" data-theme="dark">Dark</button>
+        </span>
+      </div>
       <button data-action="open-settings">⚙ Business settings</button>
       <!-- Named separately because "Business settings" says nothing about
            follow-up timing. The cadence editor shipped inside that modal,
@@ -1902,9 +1939,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-1991c6d2"></script>
-<script src="data.js?v=20261021-1991c6d2"></script>
-<script src="app.js?v=20261021-1991c6d2"></script>
-<script src="auth.js?v=20261021-1991c6d2"></script>
+<script src="logic.js?v=20261021-e62e73a3"></script>
+<script src="data.js?v=20261021-e62e73a3"></script>
+<script src="app.js?v=20261021-e62e73a3"></script>
+<script src="auth.js?v=20261021-e62e73a3"></script>
 </body>
 </html>
