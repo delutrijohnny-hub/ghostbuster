@@ -15676,6 +15676,92 @@ console.log('\n--- text and email are separate conversations ---');
   });
 }
 
+console.log('\n--- appearance: colour maths ---');
+{
+  test('hex parsing accepts the shapes people type, and rejects the rest', () => {
+    /* A theme is user input. A bad value silently becoming black is how
+       somebody loses their workspace to a typo. */
+    assert.deepStrictEqual(GB.hexToRgb('#ffffff'), {r:255, g:255, b:255});
+    assert.deepStrictEqual(GB.hexToRgb('ffffff'),  {r:255, g:255, b:255});
+    assert.deepStrictEqual(GB.hexToRgb('#fff'),    {r:255, g:255, b:255});
+    assert.deepStrictEqual(GB.hexToRgb('#DC2F4A'), {r:220, g:47, b:74});
+    ['', 'nope', '#12', '#1234567', 'rgb(1,2,3)', null, undefined]
+      .forEach(v => assert.strictEqual(GB.hexToRgb(v), null, JSON.stringify(v) + ' was accepted'));
+  });
+
+  test('a colour survives the round trip', () => {
+    ['#000000', '#ffffff', '#dc2f4a', '#0f1116'].forEach(h => {
+      assert.strictEqual(GB.rgbToHex(GB.hexToRgb(h)), h);
+    });
+  });
+
+  test('contrast uses gamma expansion, not a naive average', () => {
+    /* The part that matters. By simple averaging, white on gold looks
+       acceptable; by luminance it is 1.7 and unreadable. Getting this wrong
+       means the warning never fires on exactly the colours people pick. */
+    assert.ok(Math.abs(GB.contrastRatio('#111111', '#ffffff') - 18.88) < 0.1);
+    assert.strictEqual(Math.round(GB.contrastRatio('#ffffff', '#ffffff')), 1);
+    const whiteOnGold = GB.contrastRatio('#ffffff', '#f0c020');
+    assert.ok(whiteOnGold < 2, 'white on gold scored ' + whiteOnGold + ', it should be unreadable');
+  });
+
+  test('contrast is symmetric and safe on bad input', () => {
+    assert.strictEqual(GB.contrastRatio('#111111', '#ffffff'),
+                       GB.contrastRatio('#ffffff', '#111111'));
+    assert.strictEqual(GB.contrastRatio('nope', '#ffffff'), null);
+    assert.strictEqual(GB.contrastRatio('#ffffff', null), null);
+  });
+
+  test('the readable-text fix picks the one that actually wins', () => {
+    /* Not a guess at a midpoint: for saturated colours the eye is wrong.
+       Gold takes black, coral takes white, and both are computed. */
+    assert.strictEqual(GB.readableInk('#f0c020'), '#111111');
+    assert.strictEqual(GB.readableInk('#dc2f4a'), '#ffffff');
+    assert.strictEqual(GB.readableInk('#ffffff'), '#111111');
+    assert.strictEqual(GB.readableInk('#000000'), '#ffffff');
+    // and it always returns something usable, even for nonsense
+    assert.ok(/^#[0-9a-f]{6}$/i.test(GB.readableInk('nope')));
+  });
+
+  test('the suggested fix always beats the threshold', () => {
+    /* A one-click fix that still fails is worse than none: it tells
+       somebody the problem is solved when it is not. */
+    ['#f0c020', '#dc2f4a', '#0f1116', '#8fd400', '#ffffff'].forEach(bg => {
+      const ink = GB.readableInk(bg);
+      assert.ok(GB.contrastRatio(ink, bg) >= GB.CONTRAST_MIN,
+        'the fix for ' + bg + ' scored only ' + GB.contrastRatio(ink, bg));
+    });
+  });
+
+  test('warnings name the pair, the score and the fix', () => {
+    const bad = {ink: '#cccccc', bg: '#ffffff', card: '#ffffff',
+                 'ink-soft': '#dddddd', bubble: '#f0c020', 'bubble-ink': '#ffffff',
+                 sidebar: '#1b1d24', 'sidebar-ink': '#f2f3f7'};
+    const w = GB.themeWarnings(bad);
+    assert.ok(w.length >= 2, 'unreadable combinations went unreported');
+    w.forEach(x => {
+      assert.ok(x.pair.label && x.pair.label.length, 'a warning had no readable label');
+      assert.ok(x.ratio < GB.CONTRAST_MIN);
+      assert.ok(/^#[0-9a-f]{6}$/i.test(x.suggested));
+    });
+    // the navigation pair in this theme is fine and must NOT be flagged
+    assert.ok(!w.some(x => x.pair.fg === 'sidebar-ink'),
+      'a readable pair was reported as a problem');
+  });
+
+  test('a theme that reads well produces no warnings', () => {
+    const good = {ink: '#14161f', bg: '#f3f4f8', card: '#ffffff',
+                  'ink-soft': '#545a70', bubble: '#dc2f4a', 'bubble-ink': '#ffffff',
+                  sidebar: '#1b1d24', 'sidebar-ink': '#f2f3f7'};
+    assert.deepStrictEqual(GB.themeWarnings(good), []);
+  });
+
+  test('missing colours are skipped rather than guessed at', () => {
+    assert.deepStrictEqual(GB.themeWarnings({}), []);
+    assert.deepStrictEqual(GB.themeWarnings(null), []);
+  });
+}
+
 console.log('\n--- the priority queue ---');
 {
   const now = new Date('2026-10-21T16:00:00Z');       // midday New York

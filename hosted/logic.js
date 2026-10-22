@@ -3795,6 +3795,82 @@ function channelActivity(client, channel){
   return items.length ? items[items.length - 1].at : null;
 }
 
+/* ============================================================
+   APPEARANCE
+   ============================================================ */
+
+/* Colour maths, kept here rather than in the browser so it can be tested.
+
+   hexToRgb accepts #abc and #aabbcc, with or without the hash, and answers
+   null for anything else -- a theme is user input and a bad value must not
+   silently become black. */
+function hexToRgb(hex){
+  var h = String(hex || '').trim().replace(/^#/, '');
+  if(h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if(!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return {r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16)};
+}
+
+function rgbToHex(c){
+  function p(n){ var v = Math.max(0, Math.min(255, Math.round(n))).toString(16); return v.length === 1 ? '0'+v : v; }
+  return '#' + p(c.r) + p(c.g) + p(c.b);
+}
+
+/* Relative luminance, per WCAG. The gamma expansion is not decorative: a
+   naive average says white-on-yellow is fine, and it is not. */
+function relLuminance(hex){
+  var c = hexToRgb(hex);
+  if(!c) return null;
+  function ch(v){ v = v/255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); }
+  return 0.2126*ch(c.r) + 0.7152*ch(c.g) + 0.0722*ch(c.b);
+}
+
+function contrastRatio(a, b){
+  var la = relLuminance(a), lb = relLuminance(b);
+  if(la === null || lb === null) return null;
+  return (Math.max(la,lb) + 0.05) / (Math.min(la,lb) + 0.05);
+}
+
+/* Black or white, whichever is actually readable on this background.
+
+   The one-click fix offered when somebody picks a colour their text cannot
+   survive. Computed rather than guessed: the midpoint people reach for by
+   eye is wrong for saturated colours. */
+function readableInk(bgHex){
+  var onWhite = contrastRatio(bgHex, '#ffffff');
+  var onBlack = contrastRatio(bgHex, '#111111');
+  if(onWhite === null) return '#111111';
+  return onWhite >= onBlack ? '#ffffff' : '#111111';
+}
+
+/* WCAG AA for normal text. Reported, never enforced: it is somebody's own
+   workspace and they may have reasons. They should know, not be stopped. */
+var CONTRAST_MIN = 4.5;
+
+/* The pairs that have to stay readable, named in words somebody can act on. */
+var THEME_CONTRAST_PAIRS = [
+  {fg: 'ink',       bg: 'bg',     label: 'Body text on the page'},
+  {fg: 'ink',       bg: 'card',   label: 'Body text on panels'},
+  {fg: 'ink-soft',  bg: 'card',   label: 'Secondary text on panels'},
+  {fg: 'bubble-ink',bg: 'bubble', label: 'Your messages'},
+  {fg: 'sidebar-ink', bg: 'sidebar', label: 'Navigation'}
+];
+
+function themeWarnings(theme){
+  var t = theme || {};
+  var out = [];
+  THEME_CONTRAST_PAIRS.forEach(function(p){
+    var fg = t[p.fg], bg = t[p.bg];
+    if(!fg || !bg) return;
+    var r = contrastRatio(fg, bg);
+    if(r === null) return;
+    if(r < CONTRAST_MIN){
+      out.push({pair: p, ratio: Math.round(r * 100) / 100, fix: p.fg, suggested: readableInk(bg)});
+    }
+  });
+  return out;
+}
+
 /* The rules that decide what to do next, in ONE place.
 
    Scattering these across the components that render them is how a badge
@@ -8451,6 +8527,10 @@ var __LOGIC_EXPORTS__ = {
   totalChannelUnread: totalChannelUnread,
   channelActivity: channelActivity, readKey: readKey,
   MESSAGE_CHANNELS: MESSAGE_CHANNELS,
+  hexToRgb: hexToRgb, rgbToHex: rgbToHex, relLuminance: relLuminance,
+  contrastRatio: contrastRatio, readableInk: readableInk,
+  themeWarnings: themeWarnings, CONTRAST_MIN: CONTRAST_MIN,
+  THEME_CONTRAST_PAIRS: THEME_CONTRAST_PAIRS,
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
   nextInQueue: nextInQueue,
