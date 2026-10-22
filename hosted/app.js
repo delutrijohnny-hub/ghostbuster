@@ -3961,9 +3961,9 @@ function openEmailPicker(client){
 
   if(!docs.length){
     openModalHtml(head +
-      '<p class="hint">There are no emails in your library yet. The Emails tab is where they live — ' +
+      '<p class="hint">There are no emails in your library yet. The Email templates tab is where they live — ' +
       'add the ones you already send and they will show up here for every ' + escapeHtml(termLower('contact')) + '.</p>' +
-      '<div class="modal-foot"><button class="btn btn-green" data-action="tab" data-tab="emails">Go to Emails</button></div>');
+      '<div class="modal-foot"><button class="btn btn-green" data-action="tab" data-tab="emails">Go to Email templates</button></div>');
     return;
   }
 
@@ -4780,7 +4780,7 @@ function emailButtonsHtml(c){
   var docs = emailLibrary(STATE);
   if(!docs.length){
     return '<div class="field-row"><label>Send an email</label>' +
-      '<div class="hint">Nothing in your library yet. The Emails tab is where they live.</div></div>';
+      '<div class="hint">Nothing in your library yet. The Email templates tab is where they live.</div></div>';
   }
   var from = businessEmailAccount(STATE);
   var btns = docs.map(function(d){
@@ -5161,7 +5161,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261022-dc8a1d92';
+var BUILD_STAMP = '20261022-b19cde78';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5470,7 +5470,7 @@ function renderSettingsModal(){
        lost if a provider route comes back. They are just no longer presented
        as choices that have an effect. */
     '<div class="set-section"><h3>Email</h3>' +
-    '<div class="hint">Your emails live in the Emails tab. The Email button on a ' +
+    '<div class="hint">Your emails live in the Email templates tab. The Email button on a ' +
       escapeHtml(termLower('contact')) + ' opens Gmail with one of them already written, ' +
       'so it sends from you and replies come back to you.</div>' +
     '<div class="term-grid" style="margin-top:8px;">' +

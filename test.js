@@ -3806,7 +3806,7 @@ test('an empty library points at where emails live rather than showing nothing',
     STATE.clients['c1'] = sanitizeClient({id:'c1', name:'Dana', phone:'2135550100', email:'d@e.com'});
   `, ctx);
   const html = vm.runInContext("emailButtonsHtml(STATE.clients['c1'])", ctx);
-  assert.ok(/Emails tab/.test(html), html);
+  assert.ok(/Email templates tab/.test(html), html);
 });
 
 test('the contact modal still renders end to end with the buttons in it', () => {

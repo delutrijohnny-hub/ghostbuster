@@ -569,7 +569,7 @@ async function loadState(){
      load above it, which is correct for tables that have existed for months
      and catastrophic for one added this morning. Deploy the code before the
      migration and loadState throws on a table that does not exist yet, so
-     nobody can open Ghost Recall at all: not the Emails tab, the whole app.
+     nobody can open Ghost Recall at all: not the Email templates tab, the whole app.
      Contacts, today's texts, everything, gone behind a blank screen because
      an email library could not be read.
 
@@ -608,7 +608,7 @@ async function loadState(){
     clients: {},
     variants: {},
     emailVariants: {},
-    // Read by the Emails tab so it can explain itself, rather than showing an
+    // Read by the Email templates tab so it can explain itself, rather than showing an
     // empty library and letting someone conclude their emails were deleted.
     calendarConnections: calConnections,
     emailLibraryUnavailable: libraryUnavailable,

@@ -1492,7 +1492,7 @@ function seedEmailLibrary(emailVariants){
 
    seedEmailLibrary only carries across emails somebody already wrote against
    the old touches. A business signing up today has written none, so it opens
-   the Emails tab, finds it completely empty, and has to work out both what
+   the Email templates tab, finds it completely empty, and has to work out both what
    belongs there and how to write it before the tab does anything at all. That
    is the single worst moment in the app for somebody new.
 
@@ -5320,7 +5320,7 @@ function computeVariantPerformance(state, now){
      deliberately; "which of these wins" is not a comparison anyone asked for,
      and the id is not a name.
 
-     If per-email reply rates are ever wanted, they belong in the Emails tab
+     If per-email reply rates are ever wanted, they belong in the Email templates tab
      labelled with each email's title, not here. */
   function isLibraryEmail(stage){ return stage === 'email'; }
 
