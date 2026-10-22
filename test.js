@@ -171,6 +171,31 @@ sandbox.FileReader = function () {};
 sandbox.Blob = function () {};
 sandbox.URL = { createObjectURL: () => '', revokeObjectURL: () => {} };
 
+/* data.js, which the sandbox does not load.
+
+   app.js's export object names these directly, so without them the whole
+   file throws on its last statement and nothing in it can be tested. That is
+   exactly what happened: syncing app.js broke this runner, so the root copy
+   simply stopped being synced on 2 October and the app-layer tests spent
+   three weeks asserting things about a file that predates the messaging
+   workspace, the priority queue and the theme system. A stub is a far
+   smaller lie than a fossil. */
+sandbox.loadState = () => Promise.resolve(sandbox.GhostBuster
+  ? sandbox.GhostBuster.buildDefaultState() : {});
+sandbox.saveState = () => {};
+sandbox.same = () => true;
+sandbox.diff = () => ({});
+sandbox.loadTeamRows = () => Promise.resolve([]);
+sandbox.fetchClientEvents = () => Promise.resolve([]);
+sandbox.saveClientMessageText = () => Promise.resolve();
+sandbox.clearClientMessageText = () => Promise.resolve();
+sandbox.saveTheme = () => Promise.resolve();
+sandbox.inviteToOrg = () => Promise.resolve();
+sandbox.acceptOrgInvite = () => Promise.resolve();
+sandbox.reassignMany = () => Promise.resolve();
+sandbox.setMemberRole = () => Promise.resolve();
+sandbox.reassignClient = () => Promise.resolve();
+
 const context = vm.createContext(sandbox);
 vm.runInContext(code, context, { filename: 'logic.js + app.js' });
 
@@ -237,6 +262,27 @@ function assertDue(actual, expected) {
   const b = fs.readFileSync(path.join(__dirname, 'hosted', 'logic.js'), 'utf8');
   assert.strictEqual(a, b, 'logic.js and hosted/logic.js have drifted — run: cp logic.js hosted/logic.js');
   console.log('  ok  - logic.js and hosted/logic.js are byte-identical');
+}
+
+/* app.js needs the same guard, and did not have it.
+
+   The tests load the ROOT app.js; the browser is served hosted/app.js. With
+   no assertion tying them together the root copy stopped being synced on
+   2 October and nobody found out: it sat at 1,502 lines while the shipped
+   file grew to 8,751, so every app-layer test here -- the call-site check,
+   and every render-layer test built on GBFull -- was asserting things about
+   a file that predated the messaging workspace, the priority queue and the
+   theme system. They passed, which was the problem.
+
+   It drifted precisely because syncing it BROKE this runner: the real
+   app.js names data.js functions in its exports, so it threw on load until
+   the stubs above existed. A copy that cannot be loaded is a copy that gets
+   quietly abandoned. */
+{
+  const a = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const b = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+  assert.strictEqual(a, b, 'app.js and hosted/app.js have drifted — run: cp hosted/app.js app.js');
+  console.log('  ok  - app.js and hosted/app.js are byte-identical');
 }
 
 // The Edge Function shares logic.js rather than reimplementing the cadence.
@@ -6694,6 +6740,73 @@ console.log('\n--- what the setup panel says is true ---');
   test('an empty or missing state does not throw', () => {
     assert.strictEqual(GB.messagingSetup(null, now).modes.length, 3);
     assert.strictEqual(GB.messagingSetup({}, now).modes.length, 3);
+  });
+}
+
+console.log('\n--- the day\'s cards on Today ---');
+
+{
+  const prefKey = (uid) => 'gr-ui:text-today-open:' + uid;
+  const reset = (uid) => {
+    sandbox.localStorage.clear();
+    const st = GBFull.buildDefaultState();
+    st.userId = uid;
+    GBFull._setState(st);
+    GBFull._getUI().textTodayOpen = null;   // unresolved, as on a fresh load
+  };
+
+  test('the cards are open by default', () => {
+    /* They were folded away to stop Today carrying a second copy of the
+       day's touches. Two people work the list from this screen, and because
+       UI is rebuilt on every page load and nothing remembered the answer,
+       the fold was not a preference -- it was a click every single load. */
+    reset('u1');
+    assert.strictEqual(GBFull.textTodayOpen(), true);
+  });
+
+  test('folding them is remembered across a reload', () => {
+    reset('u1');
+    GBFull.setTextTodayOpen(false);
+    GBFull._getUI().textTodayOpen = null;        // what a reload does
+    assert.strictEqual(GBFull.textTodayOpen(), false);
+  });
+
+  test('and so is opening them again', () => {
+    reset('u1');
+    GBFull.setTextTodayOpen(false);
+    GBFull.setTextTodayOpen(true);
+    GBFull._getUI().textTodayOpen = null;
+    assert.strictEqual(GBFull.textTodayOpen(), true);
+  });
+
+  test('one person folding it does not fold it for the next', () => {
+    /* Keyed by user, so a shared browser does not hand somebody else's
+       layout to whoever signs in after them. */
+    reset('u1');
+    GBFull.setTextTodayOpen(false);
+    assert.strictEqual(sandbox.localStorage.getItem(prefKey('u1')), '0');
+
+    const st = GBFull.buildDefaultState();
+    st.userId = 'u2';
+    GBFull._setState(st);
+    GBFull._getUI().textTodayOpen = null;
+    assert.strictEqual(GBFull.textTodayOpen(), true, 'u2 inherited u1\'s fold');
+  });
+
+  test('storage that refuses to answer still gives an open default', () => {
+    /* Private browsing throws on both the read and the write. A preference
+       that cannot be read is not a preference to hide the work behind. */
+    reset('u1');
+    const real = sandbox.localStorage;
+    sandbox.localStorage = { getItem(){ throw new Error('denied'); },
+                             setItem(){ throw new Error('denied'); } };
+    try {
+      GBFull._getUI().textTodayOpen = null;
+      assert.strictEqual(GBFull.textTodayOpen(), true);
+      GBFull.setTextTodayOpen(false);            // must not throw
+    } finally {
+      sandbox.localStorage = real;
+    }
   });
 }
 

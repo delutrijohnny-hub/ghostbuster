@@ -94,7 +94,9 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // Where the open contact sat in the queue when it was opened.
   msgxIndex:-1,
   // The Today card list, folded away by default now the workspace exists.
-  textTodayOpen:false,
+  /* null means "nobody has said yet", which is not the same as false.
+     Resolved from the stored preference on first use, defaulting to OPEN. */
+  textTodayOpen:null,
   // Which message has its delivery detail open. One at a time.
   dlvOpen:null,
   // Which right-column sections are folded open. The two that hold
@@ -1155,8 +1157,59 @@ function renderThemePick(){
   });
 }
 
+/* Per-person UI preferences that survive a reload.
+
+   localStorage rather than app_settings on purpose. These are per-DEVICE
+   answers as much as per-person ones -- somebody may well want the day's
+   cards open on a laptop and folded on a phone -- and a server round trip to
+   remember whether a panel is folded is more machinery than the question
+   deserves. Keyed by user so a shared browser does not hand one person's
+   layout to the next. Wrapped because private browsing throws on both the
+   read and the write. */
+function uiPrefKey(name){
+  return 'gr-ui:' + name + ':' + ((STATE && STATE.userId) || 'anon');
+}
+function readUiPref(name, dflt){
+  try{
+    var v = localStorage.getItem(uiPrefKey(name));
+    return v === null ? dflt : v === '1';
+  }catch(e){ return dflt; }
+}
+function writeUiPref(name, val){
+  try{ localStorage.setItem(uiPrefKey(name), val ? '1' : '0'); }catch(e){}
+}
+
+/* Whether Today shows the day's cards or just the count.
+
+   They were folded away yesterday so Today would stop carrying a second copy
+   of the day's touches. For the people who actually work the list from this
+   screen that turned out to be a click on every single page load -- UI is
+   rebuilt from scratch each time and nothing remembered the answer, so the
+   fold was not a preference, it was a daily tax. Open by default now, and
+   the choice is kept: folding it is a personal way of working (you live in
+   the workspace instead), not a decision to make on everybody's behalf. */
+function textTodayOpen(){
+  if(UI.textTodayOpen === null) UI.textTodayOpen = readUiPref('text-today-open', true);
+  return UI.textTodayOpen;
+}
+function setTextTodayOpen(v){
+  UI.textTodayOpen = !!v;
+  writeUiPref('text-today-open', UI.textTodayOpen);
+}
+
+/* Which tab is open, on the body, so the stylesheet can reach it.
+
+   The global day-progress header and the alerts strip sit ABOVE every tab
+   panel in the markup, so no selector rooted at the active panel can touch
+   them -- they are preceding siblings. Reflecting the tab on an ancestor is
+   what lets a phone drop that header on the one tab where it is in the way. */
+function markActiveTab(){
+  try{ document.body.setAttribute('data-tab', UI.tab || ''); }catch(e){}
+}
+
 function renderAll(){
   if(!STATE) return;
+  markActiveTab();
   applyTerminology();
   // Shown once, on an account that has nothing in it yet. Deliberately after
   // the first render so the wizard opens over a real app rather than a blank
@@ -1881,6 +1934,7 @@ function buildAllClearPanel(subtitle){
    Clicking a row opens that contact, where the thread and the reply box
    already live, rather than building a second place to read and answer. */
 function renderThreadsTab(){
+  markActiveTab();     // reached from several places, not only the tab strip
   var wrap = el('msgx'); if(!wrap) return;
   var rows = conversationList(STATE, new Date());
   var waiting = rows.filter(function(r){ return r.awaitingReply; }).length;
@@ -2939,7 +2993,7 @@ function renderCallsBoard(){
         '<div class="tt-actions">' +
           '<button class="btn btn-sm btn-primary" data-action="work-the-list">Work the list</button>' +
           '<button class="btn btn-sm btn-ghost" data-action="toggle-text-today">' +
-            (UI.textTodayOpen ? 'Hide the cards' : 'Show the cards') + '</button>' +
+            (textTodayOpen() ? 'Hide the cards' : 'Show the cards') + '</button>' +
         '</div>'
       : '<strong>Nothing due today.</strong>';
   }
@@ -2960,8 +3014,8 @@ function renderCallsBoard(){
   if(UI.touchFilter && counts[UI.touchFilter] === undefined) UI.touchFilter = '';
 
   var todayCol = el('col-text-today');
-  if(todayCol) todayCol.style.display = UI.textTodayOpen ? '' : 'none';
-  if(todayCol && UI.textTodayOpen){
+  if(todayCol) todayCol.style.display = textTodayOpen() ? '' : 'none';
+  if(todayCol && textTodayOpen()){
     todayCol.innerHTML = '';
 
     /* Filter buttons across the top instead of headings down the middle.
@@ -5107,7 +5161,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261022-9a12731c';
+var BUILD_STAMP = '20261022-48b9edac';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5894,6 +5948,7 @@ document.addEventListener('click', function(ev){
       break;
     case 'tab':
       UI.tab = target.getAttribute('data-tab');
+      markActiveTab();
       document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.toggle('active', b===target); });
       document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.toggle('active', p.id==='tab-'+UI.tab); });
       /* The messaging workspace is laid out from the window width, and a
@@ -6598,7 +6653,7 @@ document.addEventListener('click', function(ev){
       break;
     }
     case 'toggle-text-today':
-      UI.textTodayOpen = !UI.textTodayOpen;
+      setTextTodayOpen(!textTodayOpen());
       renderCallsBoard();
       break;
     case 'pw-stat':
@@ -8684,6 +8739,11 @@ var __GB_EXPORTS__ = {
   getCallsByLocalDay: getCallsByLocalDay, renderCalendarTab: renderCalendarTab,
   lastMessageIndex: lastMessageIndex,
   _getUI: function(){ return UI; },
+  /* The day's cards: open by default and remembered. Exposed because the
+     default is the whole point of the change -- folding it was costing two
+     people a click on every page load -- and a silent flip back to false
+     would look like nothing at all. */
+  textTodayOpen: textTodayOpen, setTextTodayOpen: setTextTodayOpen,
   _resetCaches: function(){ stickyVariantCache = {}; editedTextCache = {}; },
   _setState: function(s){ STATE = s; }
 };

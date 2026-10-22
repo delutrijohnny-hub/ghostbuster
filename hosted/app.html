@@ -805,6 +805,19 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .vp-w-rate{flex:0 0 44px;text-align:right;}
 .vp-w-n{flex:0 0 150px;color:var(--muted);font-size:11.5px;}
 .vp-w-text{flex:1 1 auto;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* On a phone the Texts tab is a messaging screen, not a dashboard.
+
+   The day-progress header and the alerts strip are global: they sit above
+   every tab panel. On a wide screen that is a dashboard header and costs
+   nothing. Stacked above a conversation on a 375px phone it measured 381px
+   before the first message and put the reply box at 816px -- past the bottom
+   of an iPhone screen, so answering anybody began with a scroll, every time.
+   They still live on Today, which is where the day's numbers belong. */
+@media (max-width: 860px){
+  body[data-tab="threads"] .progress-bar-wrap,
+  body[data-tab="threads"] #health-alerts-wrap{ display:none; }
+}
+
 @media (max-width: 860px){
   .vp-wording{flex-wrap:wrap;}
   .vp-w-text{flex:1 1 100%;white-space:normal;}
@@ -1998,9 +2011,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261022-9a12731c"></script>
-<script src="data.js?v=20261022-9a12731c"></script>
-<script src="app.js?v=20261022-9a12731c"></script>
-<script src="auth.js?v=20261022-9a12731c"></script>
+<script src="logic.js?v=20261022-48b9edac"></script>
+<script src="data.js?v=20261022-48b9edac"></script>
+<script src="app.js?v=20261022-48b9edac"></script>
+<script src="auth.js?v=20261022-48b9edac"></script>
 </body>
 </html>
