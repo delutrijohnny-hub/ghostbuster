@@ -14159,8 +14159,11 @@ test('the app says so, once, and cleans the address bar', () => {
     'instructions somebody has to act on in another product are being shown '
       + 'as a toast that disappears');
 
-  const init = app.slice(app.indexOf('async function init()'),
-                         app.indexOf('async function init()') + 400);
+  /* The whole function, not a byte window. A fixed slice means adding a
+     comment inside init fails this test for no reason -- which is exactly
+     what happened, twice now, in two different tests. */
+  const initStart = app.indexOf('async function init()');
+  const init = app.slice(initStart, app.indexOf('\n}', initStart));
   assert.ok(/noteCalendarReturn\(\)/.test(init), 'init never checks for the return');
   assert.ok(init.indexOf('renderAll()') < init.indexOf('noteCalendarReturn()'),
     'the toast fires before the render, so it lands over an empty screen '

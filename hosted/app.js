@@ -1002,6 +1002,151 @@ function renderOwnerTab(){
    Reads the attribute rather than storage, so it reflects what the page is
    actually doing -- including when storage was unavailable and the choice
    silently did not stick. */
+/* The Appearance panel.
+
+   Preview is immediate and Save is explicit, which is the shape the brief
+   asks for and the right one: colour is judged by looking, not by reading
+   hex. Cancel restores the saved theme, so experimenting costs nothing. */
+/* The parts that must update WHILE somebody types, without touching the
+   fields they are typing in.
+
+   Re-rendering the whole panel on every keystroke would rewrite the hex
+   input and send the caret to the end after each character. But a contrast
+   warning that only appears once focus leaves is a warning shown after the
+   damage -- the whole point is to see it as the colour changes. So the
+   warning block and the preset highlight refresh; the inputs do not. */
+function refreshThemeMeta(){
+  var t = themeDraft();
+  var box = el('ap-warnings');
+  if(box){
+    var warns = themeWarnings(t.colors);
+    box.innerHTML = warns.length
+      ? '<div class="ap-warn"><strong>\u26a0 Hard to read</strong>' +
+        warns.map(function(w){
+          return '<div class="ap-warn-row"><span>' + escapeHtml(w.pair.label) +
+            ' \u2014 ' + w.ratio + ':1, needs ' + CONTRAST_MIN + '</span>' +
+            '<button class="btn btn-sm" data-action="theme-fix" data-field="' +
+            escapeHtml(w.fix) + '" data-hex="' + escapeHtml(w.suggested) +
+            '">Make readable</button></div>';
+        }).join('') + '</div>'
+      : '';
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.ap-preset'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-preset') === t.preset);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.ap-mode'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-mode') === t.mode);
+  });
+}
+
+function renderAppearance(){
+  var box = el('appearance-body'); if(!box) return;
+  var t = themeDraft();
+  var warns = themeWarnings(t.colors);
+
+  function swatch(field, label){
+    var v = t.colors[field];
+    return '<label class="ap-row"><span class="ap-label">' + escapeHtml(label) + '</span>' +
+      '<span class="ap-controls">' +
+        '<input type="color" class="ap-wheel" data-action="theme-color" data-field="' +
+          escapeHtml(field) + '" value="' + escapeHtml(v) + '" aria-label="' +
+          escapeHtml(label) + ' colour picker">' +
+        /* The hex field is not decoration. A colour wheel cannot be driven
+           from a keyboard with any precision, and a brand colour arrives as
+           a hex string -- somebody pasting #DC2F4A should not have to hunt
+           for it by eye. The two stay in step. */
+        '<input type="text" class="ap-hex" data-action="theme-hex" data-field="' +
+          escapeHtml(field) + '" value="' + escapeHtml(v) + '" maxlength="7" ' +
+          'spellcheck="false" aria-label="' + escapeHtml(label) + ' hex value">' +
+      '</span></label>';
+  }
+
+  var presets = Object.keys(THEME_PRESETS).map(function(k){
+    return '<button class="ap-preset' + (t.preset === k ? ' on' : '') +
+      '" data-action="theme-preset" data-preset="' + k + '">' +
+      '<span class="ap-chip" style="background:' + THEME_PRESETS[k].colors.accent + '"></span>' +
+      escapeHtml(THEME_PRESETS[k].label) + '</button>';
+  }).join('');
+
+  var modes = ['light','dark','system'].map(function(m){
+    return '<button class="ap-mode' + (t.mode === m ? ' on' : '') +
+      '" data-action="theme-mode" data-mode="' + m + '">' +
+      m.charAt(0).toUpperCase() + m.slice(1) + '</button>';
+  }).join('');
+
+  box.innerHTML =
+    '<div class="ap-sec"><h4>Mode</h4><div class="ap-modes">' + modes + '</div>' +
+      '<div class="msgx-sub">System follows your device.</div></div>' +
+
+    '<div class="ap-sec"><h4>Preset</h4><div class="ap-presets">' + presets +
+      '<button class="ap-preset' + (t.preset === 'custom' ? ' on' : '') +
+      '" data-action="theme-preset" data-preset="custom">Custom</button></div></div>' +
+
+    '<div class="ap-sec"><h4>Colours</h4>' +
+      swatch('accent', 'Accent') +
+      swatch('bubble', 'Your messages') +
+      swatch('sidebar', 'Navigation bar') +
+      '<details class="ap-adv"><summary>Advanced colours</summary>' +
+        swatch('bg', 'Page background') +
+        swatch('card', 'Panels') +
+        swatch('ink', 'Text') +
+        swatch('ink-soft', 'Secondary text') +
+        swatch('bubble-ink', 'Message text') +
+        swatch('sidebar-ink', 'Navigation text') +
+      '</details></div>' +
+
+    '<div id="ap-warnings"></div>' +
+
+    '<div class="ap-actions">' +
+      '<button class="btn btn-sm btn-primary" data-action="theme-save">Save</button>' +
+      '<button class="btn btn-sm" data-action="theme-cancel">Cancel</button>' +
+      '<button class="btn btn-sm btn-ghost" data-action="theme-reset">Reset to default</button>' +
+    '</div>';
+
+  refreshThemeMeta();
+}
+
+/* Paint a theme onto the page.
+
+   Sets the derived tokens as inline custom properties on <html>, which beat
+   the stylesheet's :root without editing it -- so the whole app re-themes,
+   not just this workspace, and nothing has to know which screens exist.
+
+   mode decides which base palette the untouched tokens fall back to:
+   'system' removes the attribute so the media query takes over again. */
+function applyTheme(theme){
+  var t = sanitizeTheme(theme);
+  var root = document.documentElement;
+
+  if(t.mode === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', t.mode);
+
+  var tokens = themeTokens(t);
+  Object.keys(tokens).forEach(function(k){
+    if(tokens[k]) root.style.setProperty(k, tokens[k]);
+  });
+}
+
+/* Back to whatever the stylesheet says, with nothing overridden. */
+function clearThemeOverrides(){
+  var root = document.documentElement;
+  Object.keys(themeTokens({preset:'default'})).forEach(function(k){
+    root.style.removeProperty(k);
+  });
+}
+
+/* The working copy while Appearance is open.
+
+   Edits preview immediately and are discarded by Cancel, so this is held
+   apart from STATE.theme -- the saved one -- rather than written over it.
+   Without the separation, Cancel has nothing to go back to. */
+var THEME_DRAFT = null;
+
+function themeDraft(){
+  if(!THEME_DRAFT) THEME_DRAFT = sanitizeTheme(STATE && STATE.theme);
+  return THEME_DRAFT;
+}
+
 function renderThemePick(){
   var box = el('theme-pick'); if(!box) return;
   var cur = document.documentElement.getAttribute('data-theme') || 'auto';
@@ -4903,7 +5048,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-49c65a2c';
+var BUILD_STAMP = '20261021-3be29874';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5544,6 +5689,81 @@ document.addEventListener('click', function(ev){
   }
 
   switch(action){
+    case 'open-appearance':
+      el('overflow-menu').classList.add('hidden');
+      THEME_DRAFT = sanitizeTheme(STATE && STATE.theme);
+      el('appearance-modal').classList.remove('hidden');
+      renderAppearance();
+      break;
+    case 'theme-mode':
+      themeDraft().mode = target.getAttribute('data-mode') || 'system';
+      applyTheme(THEME_DRAFT);
+      renderAppearance();
+      break;
+    case 'theme-preset': {
+      var pk = target.getAttribute('data-preset');
+      if(pk === 'custom'){
+        /* Custom starts from whatever is on screen, not from a blank set.
+           Somebody who nudges a preset then presses Custom means "like
+           this, but mine" -- handing them defaults would throw away the
+           thing they were reacting to. */
+        THEME_DRAFT = sanitizeTheme({mode: themeDraft().mode, preset: 'custom',
+                                     colors: themeDraft().colors});
+      } else {
+        THEME_DRAFT = sanitizeTheme({mode: THEME_PRESETS[pk].mode, preset: pk});
+      }
+      applyTheme(THEME_DRAFT);
+      renderAppearance();
+      break;
+    }
+    case 'theme-fix': {
+      var ff = target.getAttribute('data-field');
+      var fh = target.getAttribute('data-hex');
+      var dft = themeDraft();
+      dft.colors[ff] = fh;
+      dft.preset = 'custom';
+      applyTheme(dft);
+      renderAppearance();
+      break;
+    }
+    case 'theme-save': {
+      var toSave = sanitizeTheme(THEME_DRAFT);
+      STATE.theme = toSave;
+      /* Mirrored locally so the <head> script can paint before the
+         stylesheet on the next load. The row is the record; this is the
+         copy that prevents a flash of the wrong colours. */
+      /* Stored with the DERIVED tokens already computed, because the <head>
+         script runs before logic.js exists and cannot derive anything. It
+         sets variables and nothing else -- which is the only shape of code
+         that belongs before first paint. */
+      try{
+        localStorage.setItem('gr-theme-full', JSON.stringify(
+          {mode: toSave.mode, tokens: themeTokens(toSave)}));
+      }catch(e){}
+      el('appearance-modal').classList.add('hidden');
+      saveTheme(toSave).then(function(r){
+        showToast(r.ok ? 'Appearance saved.'
+                       : 'Saved on this device only \u2014 ' + r.error + '.');
+      });
+      break;
+    }
+    case 'theme-cancel':
+      /* Back to the SAVED theme, not to the default. Cancel means "forget
+         what I just did", and a cancel that resets you is a trap. */
+      THEME_DRAFT = null;
+      if(STATE && STATE.theme) applyTheme(STATE.theme); else clearThemeOverrides();
+      el('appearance-modal').classList.add('hidden');
+      break;
+    case 'theme-reset':
+      /* Clears the pre-paint mirror as well. Leaving it would repaint the
+         abandoned colours on the next load, before state arrives to correct
+         them -- a flash of a theme somebody explicitly reset. */
+      try{ localStorage.removeItem('gr-theme-full'); }catch(e){}
+      clearThemeOverrides();
+      THEME_DRAFT = sanitizeTheme({mode:'system', preset:'default'});
+      applyTheme(THEME_DRAFT);
+      renderAppearance();
+      break;
     case 'set-theme': {
       /* 'auto' REMOVES the attribute rather than writing a value, so the
          media query takes over again. Writing 'auto' into data-theme would
@@ -7024,6 +7244,34 @@ document.addEventListener('change', function(ev){
 
 document.addEventListener('input', function(ev){
   var t = ev.target;
+  /* On INPUT, not change. A text field fires change only on blur, so the
+     handler sat in the change listener and typing a hex previewed nothing
+     until focus left -- which for a colour picker is the entire point gone.
+     input also fires continuously while a colour wheel is dragged, which is
+     what makes the preview live. */
+  if(t.getAttribute && (t.getAttribute('data-action') === 'theme-color' ||
+                        t.getAttribute('data-action') === 'theme-hex')){
+    var tf = t.getAttribute('data-field');
+    var val = t.value;
+    /* The hex box accepts whatever is being typed and only commits once it
+       parses. Rejecting every keystroke would make it impossible to type
+       '#dc2f4a' at all, since the first five are not a colour. */
+    var rgb = hexToRgb(val);
+    if(!rgb) return;
+    var d = themeDraft();
+    d.colors[tf] = rgbToHex(rgb);
+    d.preset = 'custom';
+    applyTheme(d);
+    /* Only the partner control is updated, never the field being typed in:
+       rewriting it would move the caret to the end on every character. */
+    var partner = document.querySelector('[data-action="' +
+      (t.getAttribute('data-action') === 'theme-hex' ? 'theme-color' : 'theme-hex') +
+      '"][data-field="' + tf + '"]');
+    if(partner) partner.value = d.colors[tf];
+    refreshThemeMeta();
+    return;
+  }
+
   // Settings edits land in the draft, never in STATE — the modal is only
   // committed on save, so a stage mid-rename never reaches computeDue.
   // Deliberately no re-render on keystroke: rebuilding the modal would steal
@@ -8264,6 +8512,9 @@ function noteCalendarReturn(){
 
 async function init(){
   STATE = await loadState();
+  /* The row is authoritative: it is what follows somebody to a new device,
+     where the local mirror does not exist. */
+  if(STATE && STATE.theme) applyTheme(STATE.theme);
   renderAll();
   // After the render, so the toast lands on a screen that already has the
   // newly imported bookings on it rather than over an empty one.

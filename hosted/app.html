@@ -36,6 +36,26 @@
   try{
     var t = localStorage.getItem('gr-theme');
     if(t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+
+    /* The full chosen theme, mirrored here by Save so the colours are right
+       on the FIRST paint. The database row is the record -- it is what
+       follows somebody to a new device -- but it cannot be read before the
+       stylesheet runs, and waiting for it means a flash of the wrong
+       palette on every single load.
+
+       Deliberately dumb: set the variables, validate nothing. sanitizeTheme
+       already ran before this was written, and a parse error here must cost
+       a colour, never the page. */
+    var full = JSON.parse(localStorage.getItem('gr-theme-full') || 'null');
+    if(full && full.mode){
+      if(full.mode === 'system') document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', full.mode);
+    }
+    if(full && full.tokens){
+      Object.keys(full.tokens).forEach(function(k){
+        document.documentElement.style.setProperty(k, full.tokens[k]);
+      });
+    }
   }catch(e){}
 })();
 </script>
@@ -163,6 +183,37 @@ header.app-header h1{
 header.app-header .btn{background:#26262b;border-color:#3a3a40;color:#fff;position:relative;z-index:1;}
 header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .menu-wrap{position:relative;z-index:1;}
+.ap-panel{max-width:420px;width:100%;max-height:86vh;overflow-y:auto;}
+.ap-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--border);}
+.ap-head h3{margin:0;font-size:15px;}
+#appearance-body{padding:12px 14px 14px;}
+.ap-sec{margin-bottom:14px;}
+.ap-sec h4{margin:0 0 6px;font-size:10px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--ink-faint);}
+.ap-modes,.ap-presets{display:flex;gap:6px;flex-wrap:wrap;}
+.ap-mode,.ap-preset{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+  border:1px solid var(--border);border-radius:999px;background:var(--card);
+  color:var(--ink-soft);font:inherit;font-size:12px;font-weight:700;cursor:pointer;}
+.ap-mode.on,.ap-preset.on{background:var(--ink);color:var(--card);border-color:var(--ink);}
+.ap-chip{width:12px;height:12px;border-radius:50%;display:inline-block;}
+.ap-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:5px 0;font-size:12.5px;}
+.ap-label{color:var(--ink-soft);}
+.ap-controls{display:flex;align-items:center;gap:6px;}
+.ap-wheel{width:34px;height:26px;padding:0;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:none;cursor:pointer;}
+.ap-hex{width:88px;padding:4px 7px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);font:inherit;font-size:12px;
+  font-variant-numeric:tabular-nums;background:var(--card);color:var(--ink);}
+.ap-adv{margin-top:6px;}
+.ap-adv summary{cursor:pointer;font-size:12px;color:var(--ink-soft);padding:4px 0;}
+.ap-warn{border:1px solid var(--amber);background:var(--amber-soft);
+  border-radius:var(--radius-sm);padding:9px 11px;margin-bottom:12px;font-size:12px;}
+.ap-warn-row{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-top:6px;}
+.ap-actions{display:flex;gap:7px;flex-wrap:wrap;padding-top:4px;
+  border-top:1px solid var(--border);margin-top:4px;padding-top:12px;}
 .menu-theme{display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--ink-soft);}
 .theme-pick{display:inline-flex;gap:3px;}
@@ -1669,9 +1720,17 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   </div>
   <button class="btn" data-action="end-of-day">End of day <span id="eod-count">(0)</span></button>
   <button class="btn btn-primary" data-action="add-client">+ Add <span data-term="contact">client</span></button>
+  <div class="modal-backdrop hidden" id="appearance-modal">
+    <div class="modal-panel ap-panel">
+      <div class="ap-head"><h3>Appearance</h3>
+        <button class="btn btn-sm btn-ghost" data-action="theme-cancel">×</button></div>
+      <div id="appearance-body"></div>
+    </div>
+  </div>
   <div class="menu-wrap">
     <button class="btn" data-action="toggle-menu">⋯ Menu</button>
     <div class="menu-dropdown hidden" id="overflow-menu">
+      <button data-action="open-appearance">◐ Appearance…</button>
       <div class="menu-theme">
         <span>Appearance</span>
         <span class="theme-pick" id="theme-pick">
@@ -1945,9 +2004,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-49c65a2c"></script>
-<script src="data.js?v=20261021-49c65a2c"></script>
-<script src="app.js?v=20261021-49c65a2c"></script>
-<script src="auth.js?v=20261021-49c65a2c"></script>
+<script src="logic.js?v=20261021-3be29874"></script>
+<script src="data.js?v=20261021-3be29874"></script>
+<script src="app.js?v=20261021-3be29874"></script>
+<script src="auth.js?v=20261021-3be29874"></script>
 </body>
 </html>

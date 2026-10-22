@@ -636,6 +636,11 @@ async function loadState(){
     sequence: (settingsRes.data && Array.isArray(settingsRes.data.sequence) && settingsRes.data.sequence.length)
       ? settingsRes.data.sequence : null,
     scoreWeights: (settingsRes.data && settingsRes.data.score_weights) || null,
+    /* Null means NEVER CHOSEN, which is different from the default theme
+       written out. Somebody who has not opened Appearance should follow
+       their device; a stored row of light-theme hexes would pin them to
+       light the first time their OS went dark. */
+    theme: (settingsRes.data && settingsRes.data.theme) || null,
     calendarFilter: (settingsRes.data && settingsRes.data.calendar_filter) || null,
     myCalendars: myCalendars,
     emailEnabled: !!(settingsRes.data && settingsRes.data.email_enabled),
@@ -1330,6 +1335,28 @@ async function clearClientMessageText(clientId, stage){
   var res = await sb.from('client_message_texts').delete()
     .eq('client_id', clientId).eq('stage', stage);
   if(res && res.error) return {ok: false, error: res.error.message || 'could not reset'};
+  return {ok: true};
+}
+
+/* Save the chosen appearance.
+
+   Written to app_settings, whose key is the user -- so one person's theme
+   cannot reach another's screen without writing that isolation again.
+
+   Also mirrored into localStorage by the caller. That copy is not the
+   record; it exists so the <head> script can paint the right colours before
+   the stylesheet runs, which it cannot do while waiting on a round trip.
+   The row is what survives a new device. */
+async function saveTheme(theme){
+  var sb = window.GB_SUPABASE;
+  if(!sb) return {ok: false, error: 'not ready'};
+  var userRes = await sb.auth.getUser();
+  var uid = userRes && userRes.data && userRes.data.user && userRes.data.user.id;
+  if(!uid) return {ok: false, error: 'not signed in'};
+  var res = await sb.from('app_settings')
+    .upsert({user_id: uid, theme: theme || null, updated_at: new Date().toISOString()},
+            {onConflict: 'user_id'});
+  if(res && res.error) return {ok: false, error: res.error.message || 'could not save'};
   return {ok: true};
 }
 
