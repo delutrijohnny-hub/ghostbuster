@@ -3932,6 +3932,40 @@ function priorityQueue(state, now){
   return rows;
 }
 
+/* Who to work next, without losing your place.
+
+   Two cases, and the second is the one that matters. Normally "next" is the
+   row after this one. But the whole point of working a queue is that
+   finishing something removes it -- so by the time you ask, the client you
+   just dealt with is often gone from the list.
+
+   When that happens the honest answer is whoever moved up into their slot,
+   not the row after some position they no longer occupy. Taking the next id
+   from a stale list would skip somebody every single time an action
+   succeeded, which is the one moment this is used.
+
+   Returns null at the end rather than wrapping. A queue that loops forever
+   never tells you that you are done, and "done" is the thing somebody is
+   working towards. */
+function nextInQueue(rows, currentId, lastIndex){
+  var list = rows || [];
+  if(!list.length) return null;
+
+  var i = -1;
+  for(var k = 0; k < list.length; k++){
+    if(list[k].clientId === currentId){ i = k; break; }
+  }
+
+  if(i === -1){
+    /* Gone from the queue -- dealt with, or no longer needing anything. The
+       row now standing where they stood is next. */
+    var j = (typeof lastIndex === 'number' && lastIndex >= 0) ? lastIndex : 0;
+    if(j > list.length - 1) j = list.length - 1;
+    return list[j].clientId;
+  }
+  return i + 1 < list.length ? list[i + 1].clientId : null;
+}
+
 /* Every appointment still ahead, soonest first.
 
    A different question from the queue: the queue is what needs doing, this
@@ -8419,6 +8453,7 @@ var __LOGIC_EXPORTS__ = {
   MESSAGE_CHANNELS: MESSAGE_CHANNELS,
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
+  nextInQueue: nextInQueue,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
   appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,
   nextActionLabel: nextActionLabel,

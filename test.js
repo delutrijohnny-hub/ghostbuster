@@ -15786,6 +15786,42 @@ console.log('\n--- the priority queue ---');
     assert.deepStrictEqual(GB.priorityQueue(st([done]), now), []);
   });
 
+  test('next is the row after this one', () => {
+    const rows = [{clientId:'a'}, {clientId:'b'}, {clientId:'c'}];
+    assert.strictEqual(GB.nextInQueue(rows, 'a'), 'b');
+    assert.strictEqual(GB.nextInQueue(rows, 'b'), 'c');
+  });
+
+  test('the end of the queue says so rather than looping', () => {
+    /* A queue that wraps never tells you that you are done, and done is
+       what somebody is working towards. */
+    assert.strictEqual(GB.nextInQueue([{clientId:'a'}, {clientId:'b'}], 'b'), null);
+    assert.strictEqual(GB.nextInQueue([], 'a'), null);
+    assert.strictEqual(GB.nextInQueue(null, 'a'), null);
+  });
+
+  test('when the client you just finished has left, their slot is next', () => {
+    /* The case that matters. Finishing something REMOVES it from the queue,
+       so by the time Next is pressed the current client is usually gone.
+       Reading "the row after them" from a list they are no longer in would
+       skip somebody every time an action succeeded. */
+    const before = [{clientId:'a'}, {clientId:'b'}, {clientId:'c'}];
+    const after  = [{clientId:'b'}, {clientId:'c'}];          // 'a' was dealt with
+    const idx = before.findIndex(r => r.clientId === 'a');    // 0
+    assert.strictEqual(GB.nextInQueue(after, 'a', idx), 'b',
+      'the client who moved up into the empty slot was skipped');
+  });
+
+  test('finishing the last one lands on the new last one', () => {
+    const after = [{clientId:'a'}, {clientId:'b'}];
+    assert.strictEqual(GB.nextInQueue(after, 'c', 2), 'b',
+      'an index past the end should fall back to the last row, not nothing');
+  });
+
+  test('an unknown client with no remembered place starts at the top', () => {
+    assert.strictEqual(GB.nextInQueue([{clientId:'a'}, {clientId:'b'}], 'zzz'), 'a');
+  });
+
   test('upcoming calls lists what is coming, not what needs doing', () => {
     /* A different question from the queue. A confirmed call that needs
        nothing from anybody belongs here and in no other filter. */

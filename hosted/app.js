@@ -91,6 +91,8 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // The conversation somebody actually chose, as opposed to one the
   // desktop layout auto-selected. Only the former counts as read.
   msgxOpened:null,
+  // Where the open contact sat in the queue when it was opened.
+  msgxIndex:-1,
   // The Today card list, folded away by default now the workspace exists.
   textTodayOpen:false,
   // Which message has its delivery detail open. One at a time.
@@ -1857,6 +1859,21 @@ function renderMsgxFilters(counts){
    Called, never recursive: the redraw path needs the LIST rebuilt, not the
    whole tab, and calling renderThreadsTab from inside itself is a stack
    overflow with a nice comment on it. */
+/* The rows the left column is actually showing.
+
+   Next has to walk the list in front of somebody, not a canonical one they
+   cannot see -- otherwise pressing it on the Calls filter jumps into the
+   action queue for no stated reason. */
+function currentQueueRows(){
+  var f = UI.msgxFilter || 'action';
+  var now = new Date();
+  if(f === 'all') return filterConversations(conversationList(STATE, now), UI.msgxQuery);
+  if(f === 'upcoming') return filterConversations(upcomingCalls(STATE, now), UI.msgxQuery);
+  var q = priorityQueue(STATE, now);
+  if(f === 'waiting') q = q.filter(function(r){ return r.group === 'needs_response'; });
+  return filterConversations(q, UI.msgxQuery);
+}
+
 function renderLeftColumn(queue, rows, waiting){
   var f = UI.msgxFilter || 'action';
   if(f === 'action' || f === 'waiting'){
@@ -2377,7 +2394,10 @@ function renderMsgxThread(){
     '</div>' +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
     msgxTouchPanel(c, new Date()) +
-    '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>';
+    '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>' +
+    /* Working the list is the point: deal with one, move to the next,
+       without going back to hunt for where you were. */
+    '<div class="msgx-next"><button class="linkish" data-action="msgx-next">Next client \u2192</button></div>';
 
   /* Pre-fill the box with the due touch, ONCE per contact and touch.
 
@@ -4883,7 +4903,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-e62e73a3';
+var BUILD_STAMP = '20261021-07a7cf88';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6381,6 +6401,11 @@ document.addEventListener('click', function(ev){
       stashDraft();
       UI.threadCid = cid;
       UI.msgxOpened = cid;          // somebody chose this one
+      /* Where they sat when opened. Finishing their task removes them from
+         the queue, and by the time Next is pressed the list no longer
+         contains them -- this is what lets nextInQueue hand back whoever
+         moved up rather than skipping them. */
+      UI.msgxIndex = currentQueueRows().findIndex(function(r){ return r.clientId === cid; });
       markConversationRead(cid, UI.msgxChannel);
       renderThreadsTab();
       break;
@@ -6391,6 +6416,22 @@ document.addEventListener('click', function(ev){
     case 'msgx-send':
       doMsgxSend(cid, target);
       break;
+    case 'msgx-next': {
+      var nrows = currentQueueRows();
+      var nid = nextInQueue(nrows, UI.threadCid, UI.msgxIndex);
+      if(!nid){
+        showToast('That was the last one.');
+        break;
+      }
+      stashDraft();
+      UI.threadCid = nid;
+      UI.msgxOpened = nid;
+      UI.msgxIndex = nrows.findIndex(function(r){ return r.clientId === nid; });
+      UI.msgxPrefilled = null;      // the new contact gets its own touch seeded
+      markConversationRead(nid, UI.msgxChannel);
+      renderThreadsTab();
+      break;
+    }
     case 'msgx-channel': {
       var newChan = target.getAttribute('data-channel') || 'sms';
       /* The draft for the channel being LEFT is kept before the switch, so
