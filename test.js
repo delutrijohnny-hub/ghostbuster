@@ -190,6 +190,7 @@ sandbox.fetchClientEvents = () => Promise.resolve([]);
 sandbox.saveClientMessageText = () => Promise.resolve();
 sandbox.clearClientMessageText = () => Promise.resolve();
 sandbox.saveTheme = () => Promise.resolve();
+sandbox.refreshDeviceAgent = () => Promise.resolve(false);
 sandbox.inviteToOrg = () => Promise.resolve();
 sandbox.acceptOrgInvite = () => Promise.resolve();
 sandbox.reassignMany = () => Promise.resolve();
@@ -251,6 +252,29 @@ function isoDaysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString(
 // their contents match. Compare by value via JSON instead.
 function assertDue(actual, expected) {
   assert.strictEqual(JSON.stringify(Array.from(actual)), JSON.stringify(expected));
+}
+
+/* The agent heartbeat must be refreshed, not just loaded once.
+
+   This is the shape of the bug it exists for: loadState runs once at
+   startup, and deviceAgent.lastSeenAt is then compared against the clock to
+   decide whether the Mac can send. Snapshot plus moving clock means a page
+   open longer than the staleness window concludes the agent has gone quiet,
+   and silently falls back to the old handoff -- which only opens a draft. A
+   text to a client was logged as sent and never sent that way.
+
+   Asserted at the source level because the failure is in the WIRING: every
+   function involved was individually correct, and no unit test of any of
+   them could have caught that nothing called the refresh. */
+{
+  assert.ok(/refreshDeviceAgent/.test(appSrc),
+    'app.js never refreshes deviceAgent — a heartbeat loaded once and compared ' +
+    'against a moving clock goes stale and takes the Mac send route away');
+  const inInterval = /setInterval\([\s\S]{0,600}?refreshDeviceAgent/.test(appSrc);
+  assert.ok(inInterval,
+    'refreshDeviceAgent is referenced but not on a timer — a refresh that only ' +
+    'runs once is the bug it was written to fix');
+  console.log('  ok  - the Mac agent heartbeat is refreshed on a timer, not frozen at page load');
 }
 
 // hosted/logic.js must stay byte-identical to logic.js — they are the same

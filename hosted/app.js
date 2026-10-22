@@ -5161,7 +5161,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261022-b19cde78';
+var BUILD_STAMP = '20261022-b89ed06e';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -8694,6 +8694,22 @@ async function init(){
 // timer; it's cheap and touches nothing else.
 if(typeof setInterval !== 'undefined'){
   setInterval(function(){ if(STATE) renderOnDeck(); }, 30000);
+  /* The agent's heartbeat has to keep up with the clock it is compared to.
+
+     Everything loadState fetched is a snapshot from startup. That is fine for
+     state the person rewrites as they work; it is wrong for a timestamp whose
+     whole job is to be measured against now. Left unrefreshed, a tab open for
+     more than AGENT_SEND_STALE_MINUTES decided the Mac had gone silent and
+     fell back to the handoff -- on a Mac that was answering every two minutes.
+
+     Re-rendered only when the value actually moves, so this costs one small
+     indexed read a minute and no repaints. */
+  setInterval(function(){
+    if(!STATE || typeof refreshDeviceAgent !== 'function') return;
+    refreshDeviceAgent(STATE).then(function(changed){
+      if(changed && STATE) renderAll();
+    });
+  }, 60000);
 }
 
 /* The workspace switches between three panes and one on a width boundary, so

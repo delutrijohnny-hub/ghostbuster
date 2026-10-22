@@ -1347,6 +1347,44 @@ async function clearClientMessageText(clientId, stage){
    record; it exists so the <head> script can paint the right colours before
    the stylesheet runs, which it cannot do while waiting on a round trip.
    The row is what survives a new device. */
+/* Re-read the Mac agent's heartbeat into a state that is already loaded.
+
+   loadState runs ONCE, at startup, so everything it fetched is a snapshot
+   taken then. For most of state that is fine -- it is rewritten as the
+   person works. deviceAgent.lastSeenAt is different: it is compared against
+   the clock to decide whether the Mac can send, so a page left open for
+   twenty minutes concluded the agent had been silent for twenty minutes and
+   quietly took the send route away. The agent was answering every two
+   minutes throughout.
+
+   That is how a text to a client was logged as sent and never sent: the
+   route had fallen back to the old handoff, which only ever opened a draft.
+
+   Returns true when the value moved, so the caller can re-render instead of
+   repainting the screen every thirty seconds for nothing. */
+async function refreshDeviceAgent(state){
+  var sb = window.GB_SUPABASE;
+  if(!sb || !state) return false;
+  try{
+    var res = await sb.from('device_tokens')
+      .select('id, label, last_seen_at, revoked_at')
+      .is('revoked_at', null)
+      .order('created_at', {ascending: false})
+      .limit(1);
+    var row = (res && res.data && res.data[0]) || null;
+    var next = row ? {label: row.label || '', lastSeenAt: row.last_seen_at || null} : null;
+    var before = state.deviceAgent ? state.deviceAgent.lastSeenAt : null;
+    var after = next ? next.lastSeenAt : null;
+    state.deviceAgent = next;
+    return before !== after;
+  }catch(e){
+    /* A failed read must not demote the agent. Reporting "your Mac has not
+       answered" because OUR request failed would blame the Mac for the
+       network, and take away the send route on the strength of it. */
+    return false;
+  }
+}
+
 async function saveTheme(theme){
   var sb = window.GB_SUPABASE;
   if(!sb) return {ok: false, error: 'not ready'};
