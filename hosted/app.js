@@ -5048,7 +5048,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-3be29874';
+var BUILD_STAMP = '20261021-d65091a5';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5692,7 +5692,14 @@ document.addEventListener('click', function(ev){
     case 'open-appearance':
       el('overflow-menu').classList.add('hidden');
       THEME_DRAFT = sanitizeTheme(STATE && STATE.theme);
-      el('appearance-modal').classList.remove('hidden');
+      /* The app's own modal, not a bespoke one: it already centres, dims
+         the page and closes on the overlay. */
+      openModalHtml(
+        '<div class="modal-head"><h2>Appearance</h2>' +
+        '<button class="btn-ghost btn" data-action="theme-cancel">\u2715</button></div>' +
+        '<div id="appearance-body"></div>', false);
+      var apm = document.querySelector('#modal-root .modal');
+      if(apm) apm.classList.add('ap-modal');
       renderAppearance();
       break;
     case 'theme-mode':
@@ -5740,7 +5747,7 @@ document.addEventListener('click', function(ev){
         localStorage.setItem('gr-theme-full', JSON.stringify(
           {mode: toSave.mode, tokens: themeTokens(toSave)}));
       }catch(e){}
-      el('appearance-modal').classList.add('hidden');
+      closeModal();
       saveTheme(toSave).then(function(r){
         showToast(r.ok ? 'Appearance saved.'
                        : 'Saved on this device only \u2014 ' + r.error + '.');
@@ -5752,7 +5759,7 @@ document.addEventListener('click', function(ev){
          what I just did", and a cancel that resets you is a trap. */
       THEME_DRAFT = null;
       if(STATE && STATE.theme) applyTheme(STATE.theme); else clearThemeOverrides();
-      el('appearance-modal').classList.add('hidden');
+      closeModal();
       break;
     case 'theme-reset':
       /* Clears the pre-paint mirror as well. Leaving it would repaint the

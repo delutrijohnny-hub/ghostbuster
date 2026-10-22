@@ -183,11 +183,12 @@ header.app-header h1{
 header.app-header .btn{background:#26262b;border-color:#3a3a40;color:#fff;position:relative;z-index:1;}
 header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 .menu-wrap{position:relative;z-index:1;}
-.ap-panel{max-width:420px;width:100%;max-height:86vh;overflow-y:auto;}
-.ap-head{display:flex;align-items:center;justify-content:space-between;
-  padding:12px 14px;border-bottom:1px solid var(--border);}
-.ap-head h3{margin:0;font-size:15px;}
-#appearance-body{padding:12px 14px 14px;}
+/* Sits inside the app's own .modal, so it inherits the overlay, the
+   centring and the dismiss behaviour every other dialog already has.
+   The first version invented .modal-backdrop and .modal-panel, which do
+   not exist -- so it rendered in normal document flow and shoved the page
+   sideways. */
+.modal.ap-modal{max-width:440px;}
 .ap-sec{margin-bottom:14px;}
 .ap-sec h4{margin:0 0 6px;font-size:10px;font-weight:800;text-transform:uppercase;
   letter-spacing:.07em;color:var(--ink-faint);}
@@ -1720,13 +1721,6 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   </div>
   <button class="btn" data-action="end-of-day">End of day <span id="eod-count">(0)</span></button>
   <button class="btn btn-primary" data-action="add-client">+ Add <span data-term="contact">client</span></button>
-  <div class="modal-backdrop hidden" id="appearance-modal">
-    <div class="modal-panel ap-panel">
-      <div class="ap-head"><h3>Appearance</h3>
-        <button class="btn btn-sm btn-ghost" data-action="theme-cancel">×</button></div>
-      <div id="appearance-body"></div>
-    </div>
-  </div>
   <div class="menu-wrap">
     <button class="btn" data-action="toggle-menu">⋯ Menu</button>
     <div class="menu-dropdown hidden" id="overflow-menu">
@@ -2004,9 +1998,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-3be29874"></script>
-<script src="data.js?v=20261021-3be29874"></script>
-<script src="app.js?v=20261021-3be29874"></script>
-<script src="auth.js?v=20261021-3be29874"></script>
+<script src="logic.js?v=20261021-d65091a5"></script>
+<script src="data.js?v=20261021-d65091a5"></script>
+<script src="app.js?v=20261021-d65091a5"></script>
+<script src="auth.js?v=20261021-d65091a5"></script>
 </body>
 </html>
