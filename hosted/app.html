@@ -1773,7 +1773,14 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
   <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
   <button class="tab-btn" data-action="tab" data-tab="threads">Texts <span id="threads-count"></span></button>
-  <button class="tab-btn" data-action="tab" data-tab="variants">Messages</button>
+  <!-- "Templates" because this is the template library, not a place
+       conversations live. It was called Messages while the tab beside it
+       was called Texts, which are synonyms in English for two unrelated
+       screens -- and the app now also talks about the Messages APP on the
+       Mac in a dozen places, so the word was doing three jobs. The
+       data-tab key stays 'variants': it is what the bandit calls these,
+       and renaming it would touch state, keyboard order and saved UI. -->
+  <button class="tab-btn" data-action="tab" data-tab="variants">Templates</button>
   <button class="tab-btn" data-action="tab" data-tab="emails">Emails</button>
   <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
@@ -2011,9 +2018,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261022-48b9edac"></script>
-<script src="data.js?v=20261022-48b9edac"></script>
-<script src="app.js?v=20261022-48b9edac"></script>
-<script src="auth.js?v=20261022-48b9edac"></script>
+<script src="logic.js?v=20261022-dc8a1d92"></script>
+<script src="data.js?v=20261022-dc8a1d92"></script>
+<script src="app.js?v=20261022-dc8a1d92"></script>
+<script src="auth.js?v=20261022-dc8a1d92"></script>
 </body>
 </html>
