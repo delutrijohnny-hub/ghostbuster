@@ -68,6 +68,74 @@ TOKEN_PATH = os.path.expanduser('~/.ghost-recall-token')
 # Apple stores dates as nanoseconds since 2001-01-01 UTC.
 APPLE_EPOCH = 978307200
 
+# U+FFFC OBJECT REPLACEMENT CHARACTER: where an attachment sits in the text.
+OBJ_PLACEHOLDER = '\ufffc'
+
+
+def _typedstream_len(b, i):
+    """A typedstream length at `i`, as (value, index after it).
+
+    Short lengths are one byte. Longer ones are a marker byte followed by a
+    little-endian integer of 2, 4 or 8 bytes.
+    """
+    n = b[i]
+    if n == 0x81:
+        return int.from_bytes(b[i + 1:i + 3], 'little'), i + 3
+    if n == 0x82:
+        return int.from_bytes(b[i + 1:i + 5], 'little'), i + 5
+    if n == 0x83:
+        return int.from_bytes(b[i + 1:i + 9], 'little'), i + 9
+    return n, i + 1
+
+
+def message_body(text, blob):
+    """The words of a message, wherever macOS decided to keep them.
+
+    About a third of the messages on a real Mac have an EMPTY `text` column
+    and their body in the `attributedBody` BLOB instead, an old NSArchiver
+    "typedstream". This agent used to exclude those rows in SQL with
+    `coalesce(m.text, '') <> ''`, which silently dropped a third of every
+    conversation: a third of the replies, so reply rates read low and clients
+    who had answered looked unresponsive, and a third of the outgoing
+    messages, so those sends could never be matched and stayed "not
+    confirmed" forever. The log said "up to date - nothing new to sync"
+    throughout, so there was nothing to notice.
+
+    That is how a client believed never to have received her day-of reminder
+    turned out to have been sent two, replied to both, and cancelled: four of
+    the six messages in the thread were in blobs.
+
+    Checked against the two thirds of messages that have a `text` AND a blob,
+    which makes `text` a second source for the decoder: 8,000 of them across
+    the whole history -- multi-line, emoji, and one 2,620 characters long --
+    decode to exactly their `text`, with no mismatches.
+
+    An attachment's body starts with U+FFFC where the picture goes. A caption
+    after it is worth keeping; a bare image decodes to the placeholder alone
+    and comes back empty so the caller skips it.
+    """
+    if text and text.strip():
+        return text
+    if not blob:
+        return ''
+    b = bytes(blob)
+    for marker in (b'NSMutableString', b'NSString'):
+        start = b.find(marker)
+        if start < 0:
+            continue
+        # A short run of framing bytes follows the class name, then '+'
+        # introduces the payload.
+        head = start + len(marker)
+        plus = b.find(b'+', head, head + 12)
+        if plus < 0:
+            continue
+        length, j = _typedstream_len(b, plus + 1)
+        if length <= 0 or j + length > len(b):
+            continue
+        body = b[j:j + length].decode('utf-8', 'replace')
+        return body.replace(OBJ_PLACEHOLDER, '').strip()
+    return ''
+
 
 def post(token, payload):
     req = urllib.request.Request(
@@ -298,13 +366,14 @@ def collect(conn, since_map, since_rowid, limit):
     rows = cur.execute("""
         select m.ROWID, m.guid, h.id, m.is_from_me, m.service,
                m.date/1000000000 + ? as epoch,
-               coalesce(m.text, '')
+               coalesce(m.text, ''),
+               case when trim(coalesce(m.text, '')) <> '' then null
+                    else m.attributedBody end
           from message m
           join handle h on h.ROWID = m.handle_id
           join chat_message_join cmj on cmj.message_id = m.ROWID
           join chat ch on ch.ROWID = cmj.chat_id
          where m.ROWID > ?
-           and coalesce(m.text, '') <> ''
            and m.associated_message_type = 0
            and ch.style = 45
            and (select count(*) from chat_handle_join chj
@@ -315,8 +384,11 @@ def collect(conn, since_map, since_rowid, limit):
     """, (APPLE_EPOCH, since_rowid, limit)).fetchall()
 
     out, top = [], since_rowid
-    for rowid, guid, handle, from_me, service, epoch, text in rows:
-        top = max(top, rowid)
+    for rowid, guid, handle, from_me, service, epoch, text, blob in rows:
+        top = max(top, rowid)         # before any skip, or these rescan forever
+        text = message_body(text, blob)
+        if not text:
+            continue          # a bare image, or a body we could not read
         digits = ''.join(ch for ch in (handle or '') if ch.isdigit())
         key = digits[-10:] if len(digits) > 10 else digits
         if len(key) != 10 or key not in since_map:
