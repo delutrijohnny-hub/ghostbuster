@@ -15558,6 +15558,191 @@ console.log('\n--- per-contact wording ---');
   });
 }
 
+console.log('\n--- the priority queue ---');
+{
+  const now = new Date('2026-10-21T16:00:00Z');       // midday New York
+  const inMin = (m) => new Date(now.getTime() + m * 60000).toISOString();
+  const agoMin = (m) => new Date(now.getTime() - m * 60000).toISOString();
+  const mk = (o) => GB.sanitizeClient(Object.assign(
+    {name:'X', phone:'2015550001', timezone:'America/New_York', status:'Booked'}, o));
+  const st = (clients) => {
+    const x = GB.buildDefaultState(); x.senderName = 'J'; x.clients = {};
+    clients.forEach(c => { x.clients[c.id] = c; });
+    return x;
+  };
+
+  test('an unconfirmed call soon outranks an unanswered reply', () => {
+    /* The spec's one explicit ordering rule, and the one that matters: a
+       reply can be answered in ten minutes, an appointment somebody is
+       about to miss cannot be un-missed. */
+    const risky = mk({id:'a', name:'Soon', callDateTime: inMin(45)});
+    const replied = mk({id:'b', name:'Replied',
+      replies:[{id:'r', at: agoMin(8), text:'can we move it?'}]});
+    const q = GB.priorityQueue(st([risky, replied]), now);
+    assert.deepStrictEqual(q.map(r => r.group),
+      ['call_at_risk', 'needs_response']);
+    assert.strictEqual(q[0].reason, 'Call in 45 min \u00b7 Not confirmed');
+  });
+
+  test('a confirmed appointment is not at risk', () => {
+    /* Confirmed means THEY said yes. The whole group exists to catch the
+       ones nobody has heard from. */
+    const q = GB.priorityQueue(st([mk({id:'a', status:'Confirmed', callDateTime: inMin(45)})]), now);
+    assert.ok(!q.some(r => r.group === 'call_at_risk'),
+      'a confirmed appointment was flagged as at risk');
+  });
+
+  test('being reminded is not the same as having confirmed', () => {
+    /* 'Reminded' is a fact about us, not about them. Reading it as
+       confirmation means an unconfirmed appointment stops being flagged
+       precisely because somebody chased it. */
+    assert.strictEqual(GB.appointmentConfirmed({status:'Reminded'}), false);
+    assert.strictEqual(GB.appointmentConfirmed({status:'Confirmed'}), true);
+    const q = GB.priorityQueue(st([mk({id:'a', status:'Reminded', callDateTime: inMin(30)})]), now);
+    assert.strictEqual(q[0].group, 'call_at_risk');
+  });
+
+  test('a call too far out is not yet a problem', () => {
+    // Four hours is the last point at which doing something still helps.
+    const q = GB.priorityQueue(st([mk({id:'a', callDateTime: inMin(60 * 8)})]), now);
+    assert.ok(!q.some(r => r.group === 'call_at_risk'));
+  });
+
+  test('a client with several problems appears once, under the worst', () => {
+    /* A queue that lists somebody three times is a queue that gets worked
+       three times. The others are counted so the row can say there is more. */
+    const both = mk({id:'a', callDateTime: inMin(30),
+      replies:[{id:'r', at: agoMin(5), text:'hi'}]});
+    const q = GB.priorityQueue(st([both]), now);
+    assert.strictEqual(q.length, 1, 'the same client appeared more than once');
+    assert.strictEqual(q[0].group, 'call_at_risk');
+    assert.ok(q[0].alsoCount >= 1, 'the other reason was not counted');
+  });
+
+  test('the sooner call comes first inside its group', () => {
+    const q = GB.priorityQueue(st([
+      mk({id:'later', name:'Later', callDateTime: inMin(200)}),
+      mk({id:'sooner', name:'Sooner', callDateTime: inMin(20)})
+    ]), now);
+    assert.deepStrictEqual(q.map(r => r.clientId), ['sooner', 'later']);
+  });
+
+  test('the longest-waiting reply comes first', () => {
+    const q = GB.priorityQueue(st([
+      mk({id:'new', replies:[{id:'r1', at: agoMin(2), text:'a'}]}),
+      mk({id:'old', replies:[{id:'r2', at: agoMin(90), text:'b'}]})
+    ]), now);
+    assert.deepStrictEqual(q.map(r => r.clientId), ['old', 'new']);
+  });
+
+  test('queue order does not depend on the order clients loaded in', () => {
+    /* The real property, and the one a same-order fixture cannot test:
+       V8's sort is stable and Object.keys returns insertion order, so
+       rendering the SAME state twice agrees even with no tie-breaker at all.
+
+       What is not guaranteed is the order rows come back from the database.
+       Without an explicit tie-break, two clients with identical urgency swap
+       places depending on how the load happened to be ordered -- and the
+       queue reshuffles between sessions for no reason anybody can see. */
+    const clients = [mk({id:'bbb'}), mk({id:'aaa'}), mk({id:'ccc'})]
+      .map(c => Object.assign(c, {callDateTime: inMin(60)}));   // identical urgency
+
+    const forward = GB.priorityQueue(st(clients), now).map(r => r.clientId);
+    const reversed = GB.priorityQueue(st(clients.slice().reverse()), now).map(r => r.clientId);
+
+    assert.ok(forward.length === 3, 'the fixture produced no queue');
+    assert.deepStrictEqual(reversed, forward,
+      'the queue changed order because the clients loaded in a different order');
+    assert.deepStrictEqual(forward, ['aaa', 'bbb', 'ccc'],
+      'ties did not fall back to a stable key');
+  });
+
+  test('an archived client is never queued', () => {
+    assert.deepStrictEqual(
+      GB.priorityQueue(st([mk({id:'a', ignored:true, callDateTime: inMin(10)})]), now), []);
+  });
+
+  test('a client with nothing wrong is not in the queue at all', () => {
+    // "Action needed" has to mean it.
+    const done = mk({id:'a', status:'Completed'});
+    assert.deepStrictEqual(GB.priorityQueue(st([done]), now), []);
+  });
+
+  test('the counts come from the same rows the queue renders', () => {
+    const clients = [
+      mk({id:'a', callDateTime: inMin(30)}),
+      mk({id:'b', replies:[{id:'r', at: agoMin(9), text:'hi'}]}),
+      mk({id:'c', callDateTime: inMin(600)})
+    ];
+    const state = st(clients);
+    const rows = GB.priorityQueue(state, now);
+    const counts = GB.priorityCounts(rows, state, now);
+    assert.strictEqual(counts.action, rows.length,
+      'the Action needed count disagreed with the queue');
+    assert.strictEqual(counts.waiting,
+      rows.filter(r => r.group === 'needs_response').length);
+    assert.strictEqual(counts.upcoming, 2, 'upcoming counts every future call');
+  });
+
+  test('every group has a label somebody can read', () => {
+    GB.PRIORITY_RULES.groups.forEach(g => {
+      assert.ok(GB.PRIORITY_LABELS[g] && GB.PRIORITY_LABELS[g].length,
+        g + ' has no heading');
+    });
+  });
+}
+
+console.log('\n--- the reminder rules are locked ---');
+{
+  /* These values are the follow-up process behind a reported 93% show-up
+     rate. They are written down here so that changing one is a deliberate
+     act with a failing test attached, rather than a side effect of a UI
+     consolidation that happened to touch the sequence.
+
+     If you are here because this test failed: the rules changed. Either that
+     was intended -- in which case update these numbers and say so -- or
+     something edited the cadence while meaning to edit a screen. */
+  const EXPECTED = {
+    welcome:    {type: 'on_create'},
+    monday:     {type: 'weekday_of_appointment_week'},
+    midcheckin: {type: 'midpoint_booked_to_appointment'},
+    dayof:      {type: 'day_of_appointment'},
+    hourbefore: {type: 'minutes_before_appointment', leadMin: 75, floorMin: 10},
+    recovery:   {type: 'repeat_while_role', roles: ['stalled','lost'],
+                 anchor: 'stalled', afterDays: 2, everyDays: 4},
+    noshow:     {type: 'repeat_while_role', roles: ['missed'],
+                 anchor: 'appointment', afterDays: 0, everyDays: 4, windowDays: 14},
+    revival:    {type: 'repeat_while_role', roles: ['stalled','lost','missed','won'],
+                 unlessClosed: true, anchor: 'lastContact', afterDays: 30, everyDays: 30}
+  };
+
+  test('every reminder keeps its exact trigger and timing', () => {
+    const seq = GB.buildDefaultSequence();
+    const byKey = {};
+    seq.forEach(s => { byKey[s.key] = s.trigger; });
+    assert.deepStrictEqual(Object.keys(byKey).sort(), Object.keys(EXPECTED).sort(),
+      'a reminder step was added or removed');
+    Object.keys(EXPECTED).forEach(k => {
+      assert.deepStrictEqual(byKey[k], EXPECTED[k],
+        'the ' + k + ' reminder changed its trigger or timing');
+    });
+  });
+
+  test('the hour-before reminder still fires 75 minutes out', () => {
+    /* Called out on its own because it is the one closest to the
+       appointment, and the one a "tidy up the mockup" change would most
+       plausibly round to 60. */
+    const t = GB.buildDefaultSequence().filter(s => s.key === 'hourbefore')[0].trigger;
+    assert.strictEqual(t.leadMin, 75);
+    assert.strictEqual(t.floorMin, 10);
+  });
+
+  test('the five appointment touches are still the five', () => {
+    assert.deepStrictEqual(GB.cadenceTouches(),
+      ['welcome', 'monday', 'midcheckin', 'dayof', 'hourbefore']);
+  });
+}
+
 console.log('\n--- right column facts ---');
 {
   test('last contact counts messages, never internal notes', () => {

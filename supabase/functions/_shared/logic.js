@@ -3710,6 +3710,155 @@ function nextActionLabel(state, client, now){
   return 'Nothing due';
 }
 
+/* The rules that decide what to do next, in ONE place.
+
+   Scattering these across the components that render them is how a badge
+   ends up disagreeing with the count above it. Everything -- the groups, the
+   filters, the counts, the reason on each row -- is derived from this.
+
+   callAtRiskMin: how close an appointment has to be before being
+   unconfirmed is a problem rather than a fact. Four hours is the last point
+   at which doing something about it still changes the outcome: the 75-minute
+   reminder has not fired yet, and there is still time to reach somebody.
+   It does NOT change the reminder itself, which fires on its own schedule. */
+var PRIORITY_RULES = {
+  callAtRiskMin: 240,
+  groups: ['call_at_risk', 'needs_response', 'confirmation_due', 'missed', 'follow_up_due']
+};
+
+var PRIORITY_LABELS = {
+  call_at_risk:     'Upcoming call at risk',
+  needs_response:   'Needs your response',
+  confirmation_due: 'Confirmation due',
+  missed:           'Missed appointment',
+  follow_up_due:    'Follow-up due'
+};
+
+/* Confirmed means THEY said yes.
+
+   'Reminded' means we sent one, which is a fact about us. Reading it as
+   confirmation is how an unconfirmed appointment stops being flagged
+   precisely because somebody chased it. */
+function appointmentConfirmed(client){
+  return (client && client.status) === 'Confirmed';
+}
+
+function minutesUntil(iso, now){
+  var t = Date.parse(iso || '');
+  if(isNaN(t)) return null;
+  return Math.round((t - (now || new Date()).getTime()) / 60000);
+}
+
+/* How long they have been waiting, in words somebody can act on. */
+function waitedLabel(mins){
+  if(mins === null || mins === undefined) return '';
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins + ' min';
+  var h = Math.floor(mins / 60);
+  if(h < 24) return h + 'h';
+  var d = Math.floor(h / 24);
+  return d + 'd';
+}
+
+/* One row per client, carrying the single most urgent reason to open them.
+
+   A client with three things wrong appears once, under the worst of them,
+   with a count of the rest -- because a queue that lists somebody three
+   times is a queue that gets worked three times. */
+function priorityQueue(state, now){
+  now = now || new Date();
+  var rows = [];
+
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+
+    var reasons = [];
+
+    // 1. An appointment close enough that being unconfirmed still matters.
+    var mins = minutesUntil(c.callDateTime, now);
+    if(mins !== null && mins > 0 && mins <= PRIORITY_RULES.callAtRiskMin &&
+       !appointmentConfirmed(c) && !stopsCadence(c.status)){
+      reasons.push({group: 'call_at_risk', sort: mins,
+        reason: 'Call in ' + waitedLabel(mins) + ' \u00b7 Not confirmed'});
+    }
+
+    // 2. They spoke last and nobody has answered.
+    var thread = conversationThread(c).filter(function(it){ return it.dir !== 'note'; });
+    var last = thread.length ? thread[thread.length - 1] : null;
+    if(last && last.dir === 'in'){
+      var waited = Math.max(0, Math.round((now.getTime() - last.t) / 60000));
+      reasons.push({group: 'needs_response', sort: -waited,
+        reason: 'Reply waiting \u00b7 ' + waitedLabel(waited), channel: last.channel || 'sms'});
+    }
+
+    // 3/4/5. Whatever the cadence says is due, grouped by what kind it is.
+    var due = computeDue(c, now);
+    if(due.length){
+      var stage = due[0];
+      var group = (stage === 'dayof' || stage === 'hourbefore') ? 'confirmation_due'
+                : (stage === 'noshow') ? 'missed'
+                : 'follow_up_due';
+      var lastAt = lastContactAt(c);
+      var quiet = lastAt ? Math.round((now.getTime() - Date.parse(lastAt)) / 60000) : null;
+      reasons.push({group: group, sort: mins === null ? 0 : mins,
+        reason: group === 'confirmation_due' ? 'Confirmation reminder due'
+              : group === 'missed' ? 'Missed the call \u00b7 follow up'
+              : (quiet === null ? 'Follow-up due' : 'Follow-up due \u00b7 quiet ' + waitedLabel(quiet)),
+        stage: stage});
+    }
+
+    if(!reasons.length) return;
+
+    /* Worst first, and only the worst is shown. The others are counted, so
+       somebody can see there is more behind the one reason on screen. */
+    reasons.sort(function(a, b){
+      return PRIORITY_RULES.groups.indexOf(a.group) - PRIORITY_RULES.groups.indexOf(b.group);
+    });
+    var top = reasons[0];
+    rows.push({
+      clientId: c.id, name: c.name, phone: c.phone || '', status: c.status,
+      group: top.group, reason: top.reason, stage: top.stage || null,
+      channel: top.channel || 'sms',
+      alsoCount: reasons.length - 1,
+      callAt: c.callDateTime || null,
+      sort: top.sort
+    });
+  });
+
+  /* Group order first, then urgency inside it, then the client id.
+
+     The id is a stable tie-breaker and it is there for one reason: without
+     it two rows with identical urgency can swap places between renders, and
+     a list that reorders itself while being read is one somebody loses their
+     place in. */
+  rows.sort(function(a, b){
+    var ga = PRIORITY_RULES.groups.indexOf(a.group);
+    var gb = PRIORITY_RULES.groups.indexOf(b.group);
+    if(ga !== gb) return ga - gb;
+    if(a.sort !== b.sort) return a.sort - b.sort;
+    return a.clientId < b.clientId ? -1 : (a.clientId > b.clientId ? 1 : 0);
+  });
+  return rows;
+}
+
+/* The counts behind the filter chips, from the same rows the queue renders. */
+function priorityCounts(rows, state, now){
+  var all = rows || [];
+  var upcoming = 0;
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    var m = minutesUntil(c.callDateTime, now || new Date());
+    if(m !== null && m > 0) upcoming++;
+  });
+  return {
+    action: all.length,
+    upcoming: upcoming,
+    waiting: all.filter(function(r){ return r.group === 'needs_response'; }).length
+  };
+}
+
 /* The ONE thing a row should say about itself.
 
    The list currently stacks up to five badges -- unread, waiting, touch due,
@@ -8141,6 +8290,9 @@ var __LOGIC_EXPORTS__ = {
   filterConversationsBy: filterConversationsBy,
   conversationCounts: conversationCounts,
   conversationSignal: conversationSignal, initialsFor: initialsFor, dueSplit: dueSplit,
+  priorityQueue: priorityQueue, priorityCounts: priorityCounts,
+  PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
+  appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,
   nextActionLabel: nextActionLabel,
   lastContactAt: lastContactAt, clientSource: clientSource,
   conversationMatchesFilter: conversationMatchesFilter,
