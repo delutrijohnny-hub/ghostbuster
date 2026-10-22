@@ -69,10 +69,29 @@ Deno.serve(async (req) => {
   const userId = user?.id;
   if (!userId) return json({ error: 'Not signed in' }, 401);
 
-  let payload: { clientId?: string; text?: string; stage?: string; variantId?: string };
+  let payload: { clientId?: string; text?: string; stage?: string; variantId?: string;
+                 route?: string };
   try { payload = await req.json(); } catch { return json({ error: 'Bad JSON' }, 400); }
   const { clientId, text, stage, variantId } = payload;
   if (!clientId || !text) return json({ error: 'clientId and text are required' }, 400);
+
+  /* Two ways out of here, and every guard below applies to both.
+
+     'provider' hands the text to Twilio from a registered 10DLC number.
+     'mac' queues it for the Mac agent to send through the Messages app, from
+     the number the recipient already knows -- which is the whole point, and
+     is also why it is not the default: it only works while that Mac is awake
+     and signed in.
+
+     The guards are deliberately NOT relaxed for the Mac route. There is no
+     A2P campaign to get filtered and iMessage is not carrier SMS, so the
+     carrier argument for them is weaker here. The other two reasons hold
+     completely: a contact who replied STOP should not then get a text from
+     somebody's personal Apple ID, and the moment Messages falls back to a
+     green bubble it IS carrier SMS again, with the same rules it always had.
+     A route that quietly dropped the checks would be the one route that
+     texts an opted-out contact at 3am. */
+  const route = payload.route === 'mac' ? 'mac' : 'provider';
 
   const db = (path: string, init?: RequestInit) =>
     fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -120,16 +139,24 @@ Deno.serve(async (req) => {
 
      Ordered so a row with a user_id wins: PostgREST sorts nulls last here, so
      the personal number comes before the org fallback. */
-  const nRes = await db(
-    `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered` +
-    `&or=(user_id.eq.${userId},user_id.is.null)` +
-    `&select=phone_number,user_id,provider&order=user_id.asc.nullslast&limit=1`);
-  const num = (await nRes.json())?.[0];
-  if (!num?.phone_number) {
-    return json({
-      error: 'This team has no registered texting number yet. A2P 10DLC registration has to clear first.',
-      code: 'no_number',
-    }, 503);
+  /* Only the provider route needs one. The Mac sends from whatever Apple ID
+     and phone number that Mac is signed in as, so demanding a registered
+     10DLC row here would block the one route that works without it -- and
+     this org has no registered number at all, which is exactly why the Mac
+     route is being built. */
+  let num: { phone_number: string; user_id: string | null; provider: string } | null = null;
+  if (route === 'provider') {
+    const nRes = await db(
+      `org_phone_numbers?org_id=eq.${client.org_id}&status=eq.registered` +
+      `&or=(user_id.eq.${userId},user_id.is.null)` +
+      `&select=phone_number,user_id,provider&order=user_id.asc.nullslast&limit=1`);
+    num = (await nRes.json())?.[0] || null;
+    if (!num?.phone_number) {
+      return json({
+        error: 'This team has no registered texting number yet. A2P 10DLC registration has to clear first.',
+        code: 'no_number',
+      }, 503);
+    }
   }
 
   /* Quiet hours, enforced HERE rather than only in the browser.
@@ -178,20 +205,43 @@ Deno.serve(async (req) => {
     messageLog: (Array.isArray(prior) ? prior : []).map(() => ({channel: 'sms'})),
   });
 
-  const picked = providerFor(num.provider, { accountSid: ACCOUNT_SID, authToken: AUTH_TOKEN });
-  if (!picked.provider) {
-    return json({ error: picked.error, code: 'no_provider' }, 503);
-  }
+  /* What goes in the row depends on who is carrying the message.
 
-  const sent = await picked.provider.send({
-    from: num.phone_number,
-    // E.164. phoneKey gives the last ten digits, which for a US number is
-    // the whole thing after the country code.
-    to: `+1${toDigits}`,
-    body: body,
-    statusCallback: `${SUPABASE_URL}/functions/v1/sms-webhook`,
-  });
-  if (!sent.ok) return json({ error: sent.error, code: 'provider_error' }, 502);
+     On the Mac route NOTHING has been sent at the moment this row is written
+     -- it is a request, and 'queued' with no provider_id is what the agent
+     looks for. Saying 'sent' here would be the same lie "Open in Messages"
+     told 637 times: a status nobody earned. */
+  let providerId: string | null = null;
+  let status = 'queued';
+  let providerName = 'messages-app';
+  let real = true;
+  let fromLabel: string | null = null;
+
+  if (route === 'provider') {
+    const picked = providerFor(num!.provider, { accountSid: ACCOUNT_SID, authToken: AUTH_TOKEN });
+    if (!picked.provider) {
+      return json({ error: picked.error, code: 'no_provider' }, 503);
+    }
+
+    const sent = await picked.provider.send({
+      from: num!.phone_number,
+      // E.164. phoneKey gives the last ten digits, which for a US number is
+      // the whole thing after the country code.
+      to: `+1${toDigits}`,
+      body: body,
+      statusCallback: `${SUPABASE_URL}/functions/v1/sms-webhook`,
+    });
+    if (!sent.ok) return json({ error: sent.error, code: 'provider_error' }, 502);
+
+    providerId = sent.id || null;
+    /* What the provider said, not what we hoped. A provider that cannot
+       confirm anything reports 'queued', and that is what gets stored --
+       the delivery states are only worth having if each one is earned. */
+    status = sent.status || 'queued';
+    providerName = picked.provider.name;
+    real = picked.provider.real;
+    fromLabel = num!.phone_number;
+  }
 
   /* Logged exactly the way a hand-sent text is, so every count, rate and
      bandit stat treats them identically. provider_id is what ties the
@@ -228,20 +278,21 @@ Deno.serve(async (req) => {
       responded: false,
       reviewed: false,
       channel: 'sms',
-      provider_id: sent.id || null,
-      /* What the provider said, not what we hoped. A provider that cannot
-         confirm anything reports 'queued', and that is what gets stored --
-         the delivery states are only worth having if each one is earned. */
-      delivery_status: sent.status || 'queued',
+      provider_id: providerId,
+      delivery_status: status,
     }]),
   });
 
   const loggedRow = logRes.ok ? (await logRes.json().catch(() => []))?.[0] : null;
   return json({
-    ok: true, providerId: sent.id, logged: logRes.ok,
-    messageId: loggedRow?.id || null, from: num.phone_number,
+    ok: true, providerId: providerId, logged: logRes.ok,
+    messageId: loggedRow?.id || null, from: fromLabel,
+    /* The Mac route returns queued, and the UI has to say that rather than
+       "sent". Nothing has left the building yet: the agent has not even seen
+       this row. */
+    route: route, status: status,
     // So the UI can say plainly that nothing reached a real phone.
-    provider: picked.provider.name, real: picked.provider.real,
+    provider: providerName, real: real,
     /* What actually went out, so the browser logs the same string rather
        than recomputing the opt-out rule and risking a different answer. Its
        own upsert would otherwise overwrite this row's text with a version

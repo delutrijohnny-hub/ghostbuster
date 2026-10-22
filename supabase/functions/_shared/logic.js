@@ -3193,7 +3193,47 @@ var SMS_START_WORDS = { start: 1, unstop: 1 };
    asked it to stop -- the same TCPA problem with the paper trail removed.
    An undeliverable number is different: the carrier could not reach it, which
    may be a wrong digit rather than a refusal, so the handoff stays open. */
-function smsSendMode(state, client){
+/* AGENT_SEND_STALE_MINUTES is deliberately far tighter than
+   AGENT_STALE_MINUTES. An hour of silence is the right threshold for "your
+   threads are out of date"; it is the wrong one for "press this and the text
+   goes out", because a send offered against a Mac that stopped answering
+   fifty minutes ago sits in a queue instead of reaching anybody. Within a
+   couple of minutes the agent has polled; ten minutes allows for a slow wake
+   from sleep and no more. */
+var AGENT_SEND_STALE_MINUTES = 10;
+
+function macSendReady(state, now){
+  now = now || new Date();
+  var agent = (state && state.deviceAgent) || null;
+  /* `configured` separates "there is no Mac" from "the Mac is not answering".
+     They need different sentences. Somebody who has never connected one
+     should be told about the thing they have not set up; somebody whose Mac
+     is asleep should be told THAT, because it is both surprising and fixable
+     in a second, and burying it under the 10DLC explanation would send them
+     off to solve the wrong problem. */
+  if(!agent) return {ready: false, configured: false, reason: 'no Mac is connected'};
+  if(!agent.lastSeenAt){
+    return {ready: false, configured: true, reason: 'that Mac has never checked in'};
+  }
+  var mins = (now.getTime() - Date.parse(agent.lastSeenAt)) / 60000;
+  if(isNaN(mins)){
+    return {ready: false, configured: true, reason: 'that Mac has never checked in'};
+  }
+  if(mins > AGENT_SEND_STALE_MINUTES){
+    return {
+      ready: false,
+      configured: true,
+      minutes: Math.round(mins),
+      reason: 'your Mac has not answered for ' +
+        (mins < 120 ? Math.round(mins) + ' minutes'
+                    : (mins < 1440 ? Math.round(mins / 60) + ' hours'
+                                   : Math.round(mins / 1440) + ' days'))
+    };
+  }
+  return {ready: true, configured: true, minutes: Math.round(mins), reason: null};
+}
+
+function smsSendMode(state, client, now){
   if(!client) return {mode: 'none', reason: 'no contact'};
   var hasNumber = !!(state && state.smsNumber && state.smsNumber.phoneNumber);
   var status = client.smsStatus || 'ok';
@@ -3206,11 +3246,31 @@ function smsSendMode(state, client){
   if(status !== 'ok'){
     /* Undeliverable. The provider route would just fail again and spend a
        message doing it, so it is not offered -- but a human with the same
-       number in front of them may know something the carrier did not. */
+       number in front of them may know something the carrier did not.
+
+       Not offered to the Mac either, deliberately: send-sms refuses any
+       contact whose sms_status is not 'ok', so a Mac button here would be a
+       button that always fails. The browser and the server have to agree
+       about who can be texted or one of them is lying. */
     return {mode: 'handoff', reason: 'the carrier could not reach that number'};
   }
+  /* The Mac first, when it is actually awake.
+
+     messagingSetup's note says a status panel should not alter behaviour, and
+     that still holds -- this is not the panel reading across, it is routing
+     asking the one question that decides whether a send can happen at all.
+     Apple lets no server send an iMessage; only that Mac can. If it is not
+     answering there is nothing to route to, and the manual handoff is better
+     than a queue nobody is draining. */
+  var mac = macSendReady(state, now);
+  if(mac.ready){
+    return {mode: 'mac', reason: null};
+  }
   if(!hasNumber){
-    return {mode: 'handoff', reason: 'no registered texting number yet'};
+    return {
+      mode: 'handoff',
+      reason: mac.configured ? mac.reason : 'no registered texting number yet'
+    };
   }
   return {mode: 'provider', reason: null};
 }
@@ -5858,6 +5918,18 @@ function interactionLabel(inter){
     h < 1 ? 'just now' :
     h < 24 ? Math.round(h) + 'h ago' :
     Math.round(h / 24) + 'd ago';
+  /* A message still sitting in the queue has NOT been sent, so neither half
+     of "waiting for reply, sent 3h ago" is true of it. It reads as settled
+     work when nothing has left the building -- and the gap is not always the
+     few seconds it takes the Mac to poll: a Mac asleep overnight leaves this
+     claiming a text was sent hours before anybody sent it.
+
+     Only the callers that hand over the message can be asked this, which is
+     why it is read off inter.message rather than off the state: the others
+     keep exactly the behaviour they had. */
+  if(inter.message && deliveryState(inter.message).state === 'queued'){
+    return 'Queued to send' + (when ? ' · ' + when : '');
+  }
   switch(inter.state){
     case 'waiting':       return 'Waiting for reply · sent ' + when;
     case 'needs_outcome': return 'No response yet · sent ' + when;
@@ -8616,7 +8688,8 @@ var __LOGIC_EXPORTS__ = {
   phoneKey: phoneKey,
   matchInboundReply: matchInboundReply,
   smsKeyword: smsKeyword,
-  smsSendMode: smsSendMode,
+  smsSendMode: smsSendMode, macSendReady: macSendReady,
+  AGENT_SEND_STALE_MINUTES: AGENT_SEND_STALE_MINUTES,
   smsSendWindow: smsSendWindow,
   recentReplies: recentReplies,
   conversationList: conversationList,

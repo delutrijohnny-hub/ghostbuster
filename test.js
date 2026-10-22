@@ -6668,12 +6668,27 @@ console.log('\n--- what the setup panel says is true ---');
   test('it describes and never decides', () => {
     /* The guarantee that makes this safe to ship while the rest is unfinished:
        the panel reports, smsSendMode decides. If this ever started influencing
-       the send path, a "coming soon" section would be changing live behaviour. */
-    const st = {smsNumber: null, deviceAgent: {lastSeenAt: ago(1)}};
-    const before = GB.smsSendMode(st, {id:'c1', phone:'2135550100'}).mode;
-    GB.messagingSetup(st, now);
-    assert.strictEqual(GB.smsSendMode(st, {id:'c1', phone:'2135550100'}).mode, before);
-    assert.strictEqual(before, 'handoff');
+       the send path, a "coming soon" section would be changing live behaviour.
+
+       Routing DOES now ask whether the Mac is awake, which is a different
+       thing and deliberate: Apple lets no server send an iMessage, so a
+       sleeping Mac means there is no automatic route to offer. That is
+       routing asking its own question, not the panel reaching across -- and
+       this test still pins the part that matters, that calling messagingSetup
+       changes nothing. Checked in both routing states, so the panel cannot
+       quietly start mattering in one of them. */
+    const contact = {id:'c1', phone:'2135550100'};
+    for(const [label, agent, expected] of [
+      ['a Mac that answered a minute ago', {lastSeenAt: ago(1)}, 'mac'],
+      ['a Mac silent for a day', {lastSeenAt: ago(60 * 24)}, 'handoff'],
+    ]){
+      const st = {smsNumber: null, deviceAgent: agent};
+      const before = GB.smsSendMode(st, contact, now).mode;
+      GB.messagingSetup(st, now);
+      assert.strictEqual(GB.smsSendMode(st, contact, now).mode, before,
+        'messagingSetup changed the route for ' + label);
+      assert.strictEqual(before, expected, label);
+    }
   });
 
   test('an empty or missing state does not throw', () => {
@@ -6697,6 +6712,28 @@ console.log('\n--- what may be claimed about a message ---');
     assert.strictEqual(d.confirmed, false);
     assert.ok(/not confirmed/i.test(d.label), d.label);
     assert.ok(!/^sent$/i.test(d.label), 'an unconfirmed handoff claimed to be sent');
+  });
+
+  test('a queued text is not described as sent', () => {
+    /* The Mac route writes the row before anything leaves, so there is a
+       window -- seconds normally, hours if that Mac is asleep -- where
+       "Waiting for reply, sent 3h ago" would be two false claims about a
+       message nobody has sent. */
+    const queued = {channel:'sms', deliveryStatus:'queued', providerId:null,
+                    sentAt:new Date().toISOString()};
+    const label = GB.interactionLabel({state:'waiting', hoursAgo:3, message:queued});
+    assert.ok(/queued/i.test(label), label);
+    assert.ok(!/\bsent\b/i.test(label), 'a queued text claimed it was sent: ' + label);
+  });
+
+  test('a confirmed send still reads as sent', () => {
+    // The queued case must not swallow the ordinary one.
+    const sent = {channel:'sms', deliveryStatus:'sent', providerId:'imsg:x',
+                  sentAt:new Date().toISOString()};
+    assert.ok(/sent/i.test(
+      GB.interactionLabel({state:'waiting', hoursAgo:3, message:sent})));
+    // And a caller that hands over no message keeps the old behaviour.
+    assert.ok(/sent/i.test(GB.interactionLabel({state:'waiting', hoursAgo:3})));
   });
 
   test('only a provider or the agent can confirm a send', () => {
@@ -8185,6 +8222,9 @@ console.log('\n--- which sending route a contact gets ---');
   const withNumber = {smsNumber: {phoneNumber: '+15550001111'}};
   const noNumber = {};
   const c = (o) => Object.assign({id: 'c1', phone: '2135550100', smsStatus: 'ok'}, o);
+  // Minutes here, not days: the Mac freshness window is measured in minutes.
+  const now = new Date();
+  const ago = (m) => new Date(now.getTime() - m * 60000).toISOString();
 
   test('a registered number means the text goes out through the provider', () => {
     assert.strictEqual(GB.smsSendMode(withNumber, c({})).mode, 'provider');
@@ -8198,6 +8238,97 @@ console.log('\n--- which sending route a contact gets ---');
     const m = GB.smsSendMode(noNumber, c({}));
     assert.strictEqual(m.mode, 'handoff');
     assert.ok(/registered/.test(m.reason), m.reason);
+  });
+
+  test('a Mac that is awake becomes the send route', () => {
+    /* The point of the whole feature. Before this the only automatic route
+       was a 10DLC number that does not exist on this book, so every text was
+       a manual handoff to Messages that Ghost Recall then lost sight of. */
+    const live = {deviceAgent: {lastSeenAt: ago(1)}};
+    assert.strictEqual(GB.smsSendMode(live, c({}), now).mode, 'mac');
+  });
+
+  test('a sleeping Mac is not offered as a route', () => {
+    /* A send offered against a Mac that stopped answering an hour ago does
+       not go out -- it sits in a queue with nobody draining it. Better to
+       hand the person back the manual route and say why. */
+    const asleep = {deviceAgent: {lastSeenAt: ago(90)}};
+    const m = GB.smsSendMode(asleep, c({}), now);
+    assert.strictEqual(m.mode, 'handoff');
+    assert.ok(/not answered/.test(m.reason), m.reason);
+  });
+
+  test('a connected Mac that never checked in is not a route either', () => {
+    const never = {deviceAgent: {lastSeenAt: null}};
+    const m = GB.smsSendMode(never, c({}), now);
+    assert.strictEqual(m.mode, 'handoff');
+    assert.ok(/never checked in/.test(m.reason), m.reason);
+  });
+
+  test('the reason names the Mac only when there IS a Mac', () => {
+    /* Two true statements, and the useful one differs. Somebody who has never
+       connected a Mac needs to hear about what they have not set up; somebody
+       whose Mac is asleep needs to hear THAT, or they go off and try to solve
+       10DLC registration instead of opening their laptop. */
+    assert.ok(/registered/.test(GB.smsSendMode({}, c({}), now).reason));
+    assert.ok(/not answered/.test(
+      GB.smsSendMode({deviceAgent: {lastSeenAt: ago(90)}}, c({}), now).reason));
+  });
+
+  test('the Mac is preferred over a registered provider number', () => {
+    /* Asked for explicitly: the recipients recognise the number on his own
+       phone, which is the entire reason the reminders get answered. */
+    const both = {smsNumber: {phoneNumber: '+15550001111'},
+                  deviceAgent: {lastSeenAt: ago(1)}};
+    assert.strictEqual(GB.smsSendMode(both, c({}), now).mode, 'mac');
+  });
+
+  test('an opt-out beats a live Mac', () => {
+    /* The route that can actually send is the one where forgetting this
+       would do the damage. */
+    const live = {deviceAgent: {lastSeenAt: ago(1)}};
+    assert.strictEqual(GB.smsSendMode(live, c({smsStatus: 'opted_out'}), now).mode, 'blocked');
+  });
+
+  test('an undeliverable number is not handed to the Mac', () => {
+    /* send-sms refuses any contact whose sms_status is not ok, so a Mac
+       button here would be one that always fails. The browser and the server
+       have to agree about who can be texted. */
+    const live = {deviceAgent: {lastSeenAt: ago(1)}};
+    assert.strictEqual(GB.smsSendMode(live, c({smsStatus: 'undeliverable'}), now).mode, 'handoff');
+  });
+
+  test('no usable number beats a live Mac', () => {
+    const live = {deviceAgent: {lastSeenAt: ago(1)}};
+    assert.strictEqual(GB.smsSendMode(live, c({phone: '555'}), now).mode, 'none');
+  });
+
+  test('the send freshness window is minutes, not the hour the panel uses', () => {
+    /* AGENT_STALE_MINUTES answers "are my threads current". This answers
+       "will this text leave now", and an hour of slack would mean offering a
+       send against a Mac that went to sleep fifty minutes ago. */
+    assert.ok(GB.AGENT_SEND_STALE_MINUTES < GB.AGENT_STALE_MINUTES);
+    const inside = {deviceAgent: {lastSeenAt: ago(GB.AGENT_SEND_STALE_MINUTES - 1)}};
+    const outside = {deviceAgent: {lastSeenAt: ago(GB.AGENT_SEND_STALE_MINUTES + 1)}};
+    assert.strictEqual(GB.smsSendMode(inside, c({}), now).mode, 'mac');
+    assert.strictEqual(GB.smsSendMode(outside, c({}), now).mode, 'handoff');
+  });
+
+  test('macSendReady separates no Mac from an unreachable one', () => {
+    assert.strictEqual(GB.macSendReady({}, now).configured, false);
+    assert.strictEqual(
+      GB.macSendReady({deviceAgent: {lastSeenAt: ago(90)}}, now).configured, true);
+    assert.strictEqual(
+      GB.macSendReady({deviceAgent: {lastSeenAt: ago(1)}}, now).ready, true);
+  });
+
+  test('an unparseable check-in is treated as never, not as now', () => {
+    /* Date.parse of rubbish is NaN, and NaN comparisons are false -- so a
+       stale check would pass it as fresh and offer a send against a Mac whose
+       heartbeat cannot be read at all. */
+    const bad = {deviceAgent: {lastSeenAt: 'not a date'}};
+    assert.strictEqual(GB.macSendReady(bad, now).ready, false);
+    assert.strictEqual(GB.smsSendMode(bad, c({}), now).mode, 'handoff');
   });
 
   test('an opt-out blocks the handoff too, not just the provider', () => {

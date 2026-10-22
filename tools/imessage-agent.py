@@ -46,6 +46,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -460,6 +461,316 @@ def scan_all(conn, numbers, since, page=5000, on_batch=None):
     return found, top, scanned
 
 
+# ---------------------------------------------------------------------------
+# Sending, through the Messages app
+# ---------------------------------------------------------------------------
+#
+# Ghost Recall used to open a prefilled sms: link and hope. The person still
+# had to press Send, and nothing ever found out whether they did -- which is
+# where 637 rows with no delivery state came from. Now a text typed in Ghost
+# Recall is queued server-side and this sends it from here, because this is
+# the only machine Apple lets send anything.
+#
+# THE BODY IS NEVER INTERPOLATED INTO APPLESCRIPT. It is somebody's message:
+# it contains quotes, apostrophes and newlines, and building a script around
+# it by string concatenation would break on an apostrophe at best and run
+# whatever a message contained at worst. It goes in as an argv item, which
+# AppleScript takes as data.
+
+SEND_SCRIPT = r"""
+on run argv
+    set theHandle to item 1 of argv
+    set theBody to item 2 of argv
+    tell application "Messages"
+        -- An EXISTING one-to-one conversation is the most reliable target.
+        -- Addressing somebody Messages has never spoken to fails on some
+        -- releases, and fails silently, so the known-good path is tried first.
+        repeat with c in chats
+            try
+                set ps to participants of c
+                if (count of ps) is 1 then
+                    if (handle of item 1 of ps) is theHandle then
+                        send theBody to c
+                        return "ok existing chat"
+                    end if
+                end if
+            end try
+        end repeat
+        -- Nobody here has texted them before. Address them directly, iMessage
+        -- first, then the SMS relay for a number with no Apple account.
+        repeat with wanted in {"iMessage", "SMS"}
+            repeat with a in accounts
+                try
+                    if (service type of a as text) is wanted and (enabled of a) then
+                        send theBody to participant theHandle of a
+                        return "ok new " & wanted
+                    end if
+                end try
+            end repeat
+        end repeat
+        return "FAILED no account would take it"
+    end tell
+end run
+"""
+
+
+def e164(phone):
+    """+1XXXXXXXXXX, which is how handles are written in the Messages db.
+
+    An Apple ID goes through untouched. Messages addresses those as readily as
+    it does a number, and a contact reachable only that way is a real case --
+    it is also the only handle this Mac can be tested against without texting
+    somebody's client.
+    """
+    raw = str(phone or '').strip()
+    if '@' in raw:
+        return raw
+    d = ''.join(c for c in raw if c.isdigit())
+    if len(d) == 10:
+        return '+1' + d
+    if len(d) == 11 and d.startswith('1'):
+        return '+' + d
+    if len(d) > 11:
+        return '+' + d
+    return ''
+
+
+def max_message_rowid():
+    """The last row in the Messages db, read live rather than from a copy.
+
+    open_db copies 68MB for a consistent scan across the whole history. That
+    is the right call there and the wrong one here: this runs either side of
+    every single send, and only ever reads the newest few rows.
+    """
+    con = sqlite3.connect('file:%s?mode=ro' % CHAT_DB, uri=True)
+    try:
+        return int(con.execute('select coalesce(max(ROWID), 0) from message').fetchone()[0])
+    finally:
+        con.close()
+
+
+def applescript_send(handle, body):
+    """(ok, detail). ok means Messages ACCEPTED it, not that it arrived."""
+    fd, path = tempfile.mkstemp(prefix='gr-send-', suffix='.applescript')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(SEND_SCRIPT)
+        try:
+            r = subprocess.run(['osascript', path, handle, body],
+                               capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return False, 'Messages did not respond within a minute.'
+        out = (r.stdout or '').strip() or (r.stderr or '').strip()
+        return (r.returncode == 0 and out.lower().startswith('ok')), out[:300]
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def send_failure_reason(detail):
+    """AppleScript's complaint, in words worth putting in front of somebody."""
+    d = (detail or '').lower()
+    if '-1743' in d or 'not authorized' in d or 'not allowed' in d:
+        return ('macOS has not allowed this to control Messages. Give it '
+                'permission under Privacy & Security -> Automation.')
+    if '-600' in d or 'not running' in d:
+        return 'The Messages app is not running on that Mac.'
+    if 'no account would take it' in d:
+        return 'Messages has no account that can reach that number.'
+    return 'The Messages app would not send it: ' + (detail or 'no reason given')[:160]
+
+
+def confirm_sent(handle, body, since_rowid, wait=12.0, settle=4.0):
+    """Find the message just sent and read APPLE's verdict on it.
+
+    is_sent, is_delivered and error are Apple's own columns. They are the
+    difference between this and the old handoff: a delivery state nobody
+    invented. Matching is on normalised text, because the row that comes back
+    is frequently one whose `text` column is empty and whose body is in
+    attributedBody -- the test send that proved this feature worked at all was
+    one of those, so message_body is load-bearing here.
+    """
+    key = ''.join(c for c in (handle or '') if c.isdigit())[-10:]
+    want = ' '.join((body or '').split()).strip().lower()
+    deadline = time.time() + wait
+    first_seen = None
+    while True:
+        rows = []
+        try:
+            con = sqlite3.connect('file:%s?mode=ro' % CHAT_DB, uri=True)
+            try:
+                rows = con.execute("""
+                    select m.guid, m.text, m.attributedBody, m.is_sent,
+                           m.is_delivered, m.error, m.date/1000000000 + ?, h.id
+                      from message m
+                      left join handle h on h.ROWID = m.handle_id
+                     where m.ROWID > ? and m.is_from_me = 1
+                     order by m.ROWID asc
+                """, (APPLE_EPOCH, since_rowid)).fetchall()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass                      # locked mid-write; the retry below covers it
+        for guid, text, blob, is_sent, is_deliv, err, epoch, hid in rows:
+            hk = ''.join(c for c in (hid or '') if c.isdigit())[-10:]
+            if key and hk and hk != key:
+                continue
+            got = ' '.join(message_body(text, blob).split()).strip().lower()
+            if want and got == want:
+                hit = {
+                    'guid': guid,
+                    'delivered': bool(is_deliv),
+                    'errorCode': int(err or 0),
+                    'at': time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(epoch)) + 'Z',
+                }
+                break
+        else:
+            hit = None
+
+        if hit:
+            # Apple writes is_sent immediately and is_delivered a moment
+            # later. The first version read the row the instant it appeared,
+            # found is_delivered still 0, and recorded 'sent' for a message
+            # the database marked delivered in the same second. So once the
+            # message is found, give the flag a few seconds to land before
+            # settling for the weaker claim.
+            if first_seen is None:
+                first_seen = time.time()
+            if hit['delivered'] or (time.time() - first_seen) >= settle:
+                return hit
+        elif time.time() >= deadline:
+            return None
+        time.sleep(0.5)
+
+
+def send_outbox(token, verbose=False):
+    """Send whatever Ghost Recall has queued. Returns (sent, holding, cancelled).
+
+    One at a time and reported afterwards, rather than fired off in a batch.
+    Every send here puts words on somebody's phone and cannot be recalled, so
+    the server claims each row BEFORE this sees it: a crash loses the status
+    update, never the message, and never sends one twice.
+    """
+    res = post(token, {'action': 'outbox'})
+    sends = res.get('sends') or []
+    holding = int(res.get('holding') or 0)
+    cancelled = int(res.get('cancelled') or 0)
+    if not sends:
+        return 0, holding, cancelled
+
+    results, done = [], 0
+    for s in sends:
+        mid = s.get('id')
+        handle = e164(s.get('phone'))
+        body = s.get('body') or ''
+        if not mid:
+            continue
+        if not handle or not body:
+            results.append({'id': mid, 'ok': False,
+                            'error': 'That contact has no usable phone number.'})
+            continue
+        try:
+            base = max_message_rowid()
+        except Exception:
+            base = 0                  # verification degrades; the send still goes
+        ok, detail = applescript_send(handle, body)
+        if not ok:
+            results.append({'id': mid, 'ok': False, 'error': send_failure_reason(detail)})
+            if verbose:
+                say('could not send to %s: %s' % (s.get('name') or handle, detail))
+            continue
+        seen = confirm_sent(handle, body, base)
+        if seen:
+            results.append({'id': mid, 'ok': True, 'guid': seen['guid'],
+                            'delivered': seen['delivered'],
+                            'errorCode': seen['errorCode'], 'at': seen['at']})
+        else:
+            # Messages took it and it cannot be found again yet. 'sent' with
+            # no provider_id is the honest answer; the ordinary sync links it
+            # to the real message on a later pass.
+            results.append({'id': mid, 'ok': True})
+        done += 1
+
+    if results:
+        post(token, {'action': 'sent', 'results': results})
+    return done, holding, cancelled
+
+
+def refresh_deliveries(token, verbose=False):
+    """Upgrade 'sent' to 'delivered' once Apple says so.
+
+    Delivery is not instant and is not guaranteed: a recipient whose phone is
+    off gets the message when it comes back on, minutes or hours later. The
+    send loop cannot wait that long, so it records the weaker true thing and
+    this comes back for the answer. Without it every message sent while the
+    recipient was unreachable would read 'sent' forever, which is the quiet
+    kind of wrong -- it looks like a working feature.
+    """
+    res = post(token, {'action': 'delivery_check'})
+    rows = res.get('pending') or []
+    if not rows:
+        return 0
+
+    by_guid = {}
+    for r in rows:
+        pid = str(r.get('providerId') or '')
+        if pid.startswith('imsg:') and r.get('id'):
+            by_guid[pid[5:]] = r['id']
+    if not by_guid:
+        return 0
+
+    results = []
+    try:
+        con = sqlite3.connect('file:%s?mode=ro' % CHAT_DB, uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        marks = ','.join('?' * len(by_guid))
+        found = con.execute(
+            'select guid, is_delivered, error from message where guid in (%s)' % marks,
+            list(by_guid.keys())).fetchall()
+    except sqlite3.Error:
+        found = []
+    finally:
+        con.close()
+
+    for guid, delivered, err in found:
+        if int(err or 0) != 0:
+            results.append({'id': by_guid[guid], 'ok': True, 'guid': guid,
+                            'errorCode': int(err or 0)})
+        elif delivered:
+            results.append({'id': by_guid[guid], 'ok': True, 'guid': guid,
+                            'delivered': True, 'errorCode': 0})
+
+    if results:
+        post(token, {'action': 'sent', 'results': results})
+        if verbose:
+            say('Delivery confirmed for %d message%s.'
+                % (len(results), '' if len(results) == 1 else 's'))
+    return len(results)
+
+
+def outbox_delay(quiet_polls, base):
+    """How long to wait before looking for queued texts again.
+
+    A text typed in Ghost Recall should leave within seconds, so this polls
+    fast while anything is happening. Held at that rate around the clock it
+    would also make some 17,000 requests a day finding nothing, which is most
+    of a month's function budget spent on silence. So it eases off while idle
+    and snaps back to full speed the moment a send appears. The cost of the
+    backoff is that the first text after a long quiet spell can wait up to
+    twenty seconds; every one after it goes immediately.
+    """
+    base = max(2, int(base or 5))
+    if quiet_polls < 20:
+        return base
+    if quiet_polls < 60:
+        return base * 2
+    return min(20, base * 4)
+
+
 def sync_once(token, verbose=True, reset=False, max_messages=0):
     numbers = fetch_since_map(token)
     if not numbers:
@@ -518,6 +829,10 @@ def main():
     ap = argparse.ArgumentParser(description='Sync client text threads into Ghost Recall.')
     ap.add_argument('--watch', action='store_true', help='keep running, sync every few minutes')
     ap.add_argument('--interval', type=int, default=120, help='seconds between syncs with --watch')
+    ap.add_argument('--send-interval', type=int, default=5,
+                    help='seconds between checks for texts queued in Ghost Recall')
+    ap.add_argument('--send-once', action='store_true',
+                    help='send anything Ghost Recall has queued, then stop')
     ap.add_argument('--reset', action='store_true',
                     help='forget the sync position and re-scan from the beginning')
     ap.add_argument('--dry-run', action='store_true',
@@ -578,17 +893,67 @@ def main():
             say(up_to_date_line(len(numbers)))
         return
 
+    if args.send_once:
+        sent, holding, cancelled = send_outbox(token, verbose=True)
+        refresh_deliveries(token, verbose=True)
+        parts = []
+        if sent:
+            parts.append('Sent %d.' % sent)
+        if cancelled:
+            parts.append('%d could not be sent (see Ghost Recall for why).' % cancelled)
+        if holding:
+            parts.append('%d held until 8am where they are.' % holding)
+        print(' '.join(parts) if parts else 'Nothing queued to send.')
+        return
+
     if args.watch:
-        print('Watching Messages. Ctrl-C to stop.')
+        print('Watching Messages, and sending what Ghost Recall queues. Ctrl-C to stop.')
+        # Two clocks. Importing replies is a background job and runs on the
+        # --interval one. Sending is somebody waiting at a keyboard having
+        # just pressed send, so it gets its own much faster loop: a two
+        # minute pause between pressing send and the text leaving would make
+        # the feature feel broken even though nothing was wrong.
+        next_sync = 0.0
+        quiet = 0
         while True:
+            if time.time() >= next_sync:
+                try:
+                    sync_once(token, reset=args.reset, max_messages=args.max_messages)
+                    args.reset = False
+                except SystemExit as e:
+                    say('sync failed: %s' % e)
+                except Exception as e:                # keep the watcher alive
+                    say('sync failed: %r' % e)
+                try:
+                    refresh_deliveries(token)
+                except SystemExit as e:
+                    say('delivery check failed: %s' % e)
+                except Exception as e:              # keep the watcher alive
+                    say('delivery check failed: %r' % e)
+                next_sync = time.time() + max(30, args.interval)
+
             try:
-                sync_once(token, reset=args.reset, max_messages=args.max_messages)
-                args.reset = False
+                sent, holding, cancelled = send_outbox(token)
+                if sent or cancelled:
+                    quiet = 0
+                    bits = []
+                    if sent:
+                        bits.append('sent %d' % sent)
+                    if cancelled:
+                        bits.append('%d could not be sent' % cancelled)
+                    if holding:
+                        bits.append('%d held until 8am their time' % holding)
+                    say('Outbox: %s.' % ', '.join(bits))
+                else:
+                    quiet += 1
             except SystemExit as e:
-                say('sync failed: %s' % e)
+                say('outbox failed: %s' % e)
+                quiet += 1
             except Exception as e:                    # keep the watcher alive
-                say('sync failed: %r' % e)
-            time.sleep(max(30, args.interval))
+                say('outbox failed: %r' % e)
+                quiet += 1
+
+            time.sleep(outbox_delay(quiet, args.send_interval))
     else:
         sync_once(token, reset=args.reset, max_messages=args.max_messages)
 

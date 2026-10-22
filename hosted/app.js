@@ -1617,14 +1617,22 @@ function buildTouchCard(client, stage, now){
   var actions = document.createElement('div');
   actions.className = 'card-actions';
   var digits = String(client.phone||'').replace(/\D/g,'');
-  /* Two sending routes, chosen by smsSendMode rather than here.
+  /* Three sending routes, chosen by smsSendMode rather than here.
 
-     'provider' sends from the team's own number through send-sms, and the
-     reply comes back to sms-webhook on its own. 'handoff' is the old sms:
-     link to the salesperson's Messages app, whose reply lands on a handset
-     nobody logs. The handoff stays until A2P 10DLC registration clears,
-     because until then the provider route cannot send at all -- and the
-     switchover then happens by itself, with nothing to turn on. */
+     'mac' is the one that actually runs on this book: send-sms writes the
+     text down and the Mac agent sends it out of the Messages app, from the
+     number these contacts already recognise, and the reply comes back
+     through the same agent. It needs that Mac awake, which is why it is a
+     route and not the only route.
+
+     'provider' sends from the team's own 10DLC number and the reply comes
+     back to sms-webhook on its own. It cannot send until registration
+     clears, which on this account it has not.
+
+     'handoff' is the old sms: link to the salesperson's Messages app, whose
+     reply lands on a handset nobody logs and whose send nobody can see. It
+     is the fallback for when the Mac is asleep, and it is the one that
+     produced 637 rows with no delivery state at all. */
   var route = smsSendMode(STATE, client);
   if(route.mode === 'provider'){
     /* Quiet hours are shown here and enforced in send-sms. Both, deliberately:
@@ -1644,6 +1652,23 @@ function buildTouchCard(client, stage, now){
           ? 'Test number. The message is recorded exactly as a real one, but nothing is carried to a phone and ' + firstName(client.name) + ' will not receive it.'
           : 'Sends from ' + STATE.smsNumber.phoneNumber + '. Replies come back here automatically.'},
         [sandbox ? 'Send test text' : 'Send text']));
+    }
+  } else if(route.mode === 'mac'){
+    /* Quiet hours shown here and enforced twice on the way out -- once in
+       send-sms when this is queued, and again when the Mac claims it, because
+       a Mac asleep overnight would otherwise wake up and deliver a batch
+       queued at 8:50pm the following morning. */
+    var macWin = smsSendWindow(client, new Date());
+    if(!macWin.ok){
+      actions.appendChild(h('span',{class:'edited-note',
+        title:'Texting is allowed 8am to 9pm in their local time. Queued now, it would be held until that window opens — this opens again in ' + macWin.hoursUntilOpen + ' hour' + (macWin.hoursUntilOpen === 1 ? '' : 's') + '.'},
+        ['too late there — ' + macWin.reason]));
+    } else {
+      actions.appendChild(h('button',{
+        class:'btn btn-sm btn-primary',
+        'data-action':'send-text','data-cid':client.id,'data-stage':stage,
+        title:'Sends from Messages on your Mac, from your own number — so it arrives in the thread ' + firstName(client.name) + ' already has with you, and their reply comes back here.'},
+        ['Send text']));
     }
   } else if(route.mode === 'handoff'){
     var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
@@ -2281,6 +2306,13 @@ function msgxTouchPanel(c, now){
       '</button>';
   } else if(route.mode === 'provider' && !win.ok){
     action = '<span class="msgx-sub">too late there \u2014 ' + escapeHtml(win.reason) + '</span>';
+  } else if(route.mode === 'mac' && win.ok){
+    action = '<button class="btn btn-sm btn-primary" data-action="send-text" data-cid="' +
+      escapeHtml(c.id) + '" data-stage="' + escapeHtml(touch.stage) +
+      '" title="Sends from Messages on your Mac, from your own number. Their reply comes back here.">' +
+      'Send this touch</button>';
+  } else if(route.mode === 'mac' && !win.ok){
+    action = '<span class="msgx-sub">too late there \u2014 ' + escapeHtml(win.reason) + '</span>';
   } else if(route.mode === 'handoff'){
     var digits = String(c.phone || '').replace(/\D/g, '');
     var href = digits
@@ -2305,8 +2337,14 @@ function msgxTouchPanel(c, now){
      provider route the Send button above already logs it, so offering this
      as well is how one touch gets recorded twice and the sequence skips a
      step. The handoff is the honest case: the draft opened somewhere this
-     app cannot see, and only a person knows whether it went. */
-  var markSentBtn = (route.mode === 'provider')
+     app cannot see, and only a person knows whether it went.
+
+     The Mac route is observed too, and more precisely than the provider one
+     -- the agent reads Apple's own is_delivered back out of the Messages
+     database. So it belongs on the same side of this line as the provider,
+     and leaving it off that side is what stops a single touch being logged
+     twice: once by the send and once by a hand that did not need to. */
+  var markSentBtn = (route.mode === 'provider' || route.mode === 'mac')
     ? ''
     : '<button class="btn btn-sm btn-ghost" data-action="msgx-mark-sent" data-cid="' + cid +
       '" data-stage="' + st + '" title="Records this touch as sent and advances the sequence. ' +
@@ -2424,7 +2462,28 @@ function renderMsgxThread(){
         '<span class="msgx-sub">Opens your Messages app. Logged as unconfirmed \u2014 ' +
           'their reply arrives on your phone.</span>' +
       '</div>';
+  } else if(route.mode === 'mac' && win.ok){
+    composer = msgxTemplateSelect(c) +
+      '<textarea id="msgx-text" rows="2" placeholder="Write back to ' +
+      escapeHtml(firstName(c.name)) + '\u2026"></textarea>' +
+      '<div class="row"><button class="btn btn-sm btn-primary" data-action="msgx-send" data-cid="' +
+      escapeHtml(c.id) + '">Send</button>' +
+      (canDraftReply(c)
+        ? '<button class="btn btn-sm btn-ghost" data-action="msgx-draft" data-cid="' +
+          escapeHtml(c.id) + '" title="Writes a suggested reply into the box for you to edit. ' +
+          'Nothing is sent.">\u2728 Draft a reply</button>'
+        : '') +
+      '<button class="btn btn-sm btn-ghost" data-action="msgx-schedule" data-cid="' +
+        escapeHtml(c.id) + '" title="Queue this for later. Every rule is checked again at send ' +
+        'time, so it will not go out if they reply, opt out, or follow-ups are paused.">' +
+        'Schedule\u2026</button>' +
+      '<span class="msgx-sub">from Messages on your Mac</span></div>';
+  } else if(route.mode === 'mac' && !win.ok){
+    composer = '<div class="msgx-sub">Too late to text them \u2014 ' + escapeHtml(win.reason) +
+      '. Texting runs 8am\u20139pm their time.</div>';
   } else if(route.mode !== 'provider'){
+    /* Reached by 'none' and by a handoff that fell through above. route.reason
+       carries why -- no usable number, or a Mac that stopped answering. */
     composer = '<div class="msgx-sub">' +
       escapeHtml(route.reason || 'This contact cannot be texted.') + '</div>';
   } else if(!win.ok){
@@ -5048,7 +5107,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-d65091a5';
+var BUILD_STAMP = '20261022-9a12731c';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -7992,8 +8051,10 @@ function doSendReply(cid, target, textOverride, onDone){
     if(target){ target.disabled = false; target.textContent = 'Send reply'; }
   };
 
+  var replyRoute = smsSendMode(STATE, client).mode;
   window.GB_SUPABASE.functions.invoke('send-sms', {
-    body: {clientId: cid, text: text, stage: 'custom', variantId: 'custom'}
+    body: {clientId: cid, text: text, stage: 'custom', variantId: 'custom',
+           route: replyRoute === 'mac' ? 'mac' : undefined}
   }).then(function(res){
     var err = res && res.error, data = res && res.data;
     if(err || !data || !data.ok){ restore(); showToast(smsSendError(data, err)); return; }
@@ -8002,23 +8063,44 @@ function doSendReply(cid, target, textOverride, onDone){
       stage: 'custom', variantId: 'custom',
       text: data.sentText || text,
       sentAt: nowISO(), responded: false, respondedAt: null, reviewed: false,
-      channel: 'sms', deliveryStatus: 'sent'
+      /* The server's own word for it. This said 'sent' unconditionally, which
+         was already generous on the provider route and is plainly false on
+         the Mac one, where the agent has not yet picked the row up. */
+      channel: 'sms', deliveryStatus: data.status || 'sent'
     });
     saveState(STATE);
     if(box) box.value = '';
     var mx = el('msgx-text'); if(mx) mx.value = '';
     if(onDone) onDone();
     else openClientModal(cid);   // redraw the thread with the new message in it
-    showToast('Replied to ' + client.name + '.');
+    showToast(data.route === 'mac'
+      ? 'Queued for your Mac \u2014 it sends from Messages within seconds.'
+      : 'Replied to ' + client.name + '.');
   }).catch(function(e){
     restore();
     showToast('Could not send that reply: ' + (e && e.message ? e.message : 'the request failed') + '.');
   });
 }
 
+/* One function for both automatic routes.
+
+   The provider hands the text to a carrier and the Mac hands it to the
+   Messages app, but everything around that is identical -- the double-send
+   guard, adopting the server's row id, the opt-out notice the server
+   appended. The only real difference is what may honestly be claimed
+   afterwards: the provider has accepted the message, while the Mac route has
+   only written it down for an agent that has not polled yet.
+
+   The route is decided HERE rather than carried in from the button that was
+   clicked. A Mac that stopped answering between the render and the click
+   would otherwise still be sent to, because the button was drawn while it
+   was awake -- and the queue it writes to would have nobody draining it.
+   Asking at the moment of the click is what keeps this and the server
+   agreeing about which route is live. */
 function doSendText(cid, stage, target){
   var client = STATE.clients[cid];
   if(!client) return;
+  var route = smsSendMode(STATE, client).mode;
   /* Same double-send guard as the handoff path, and for the same reason: a
      second click while the first request is in flight would send twice.
 
@@ -8041,7 +8123,8 @@ function doSendText(cid, stage, target){
   };
 
   window.GB_SUPABASE.functions.invoke('send-sms', {
-    body: {clientId: cid, text: text, stage: stage, variantId: null}
+    body: {clientId: cid, text: text, stage: stage, variantId: null,
+           route: route === 'mac' ? 'mac' : undefined}
   }).then(function(res){
     /* invoke() resolves with {data, error}. A non-2xx is reported in error,
        but the function's own body -- which carries the reason a send was
@@ -8066,12 +8149,25 @@ function doSendText(cid, stage, target){
       logged.channel = 'sms';
       // Adopting the server's id is what keeps this one row. See above.
       if(data.messageId) logged.id = data.messageId;
+      /* And the server's status, so this row does not read as 'not
+         confirmed' while the server already calls it 'queued'. Two
+         descriptions of one message is the thing the delivery states exist
+         to avoid. */
+      if(data.status) logged.deliveryStatus = data.status;
     }
     saveState(STATE);
     renderAll();
-    showToast(data.real === false
-      ? 'Test message recorded for ' + client.name + ' \u2014 nothing was sent to a phone.'
-      : 'Texted ' + client.name + ' from ' + (data.from || 'your number') + '.', lastSnapshot);
+    /* What can be claimed, and nothing more. On the Mac route NOTHING has
+       been sent at this point: the row is written and the agent has not yet
+       asked for it. Saying "Texted Bob" here would be the old lie with a new
+       mechanism behind it. */
+    showToast(
+      data.route === 'mac'
+        ? 'Queued for your Mac \u2014 it sends from Messages within seconds.'
+        : (data.real === false
+            ? 'Test message recorded for ' + client.name + ' \u2014 nothing was sent to a phone.'
+            : 'Texted ' + client.name + ' from ' + (data.from || 'your number') + '.'),
+      lastSnapshot);
   }).catch(function(e){
     restore();
     showToast('Could not send that text: ' + (e && e.message ? e.message : 'the request failed') + '.');
@@ -8253,7 +8349,7 @@ function renderFocus(){
       (tz.warn ? '<div class="focus-warn">⚠ It’s outside normal hours for ' + escapeHtml(c.name) + ' right now.</div>' : '') +
       '<textarea class="focus-text" id="focus-text" rows="6">' + escapeHtml(text) + '</textarea>' +
       '<div class="focus-acts">' +
-        (focusRoute.mode === 'provider'
+        (focusRoute.mode === 'provider' || focusRoute.mode === 'mac'
           ? '<button class="btn btn-primary btn-lg focus-send" data-action="focus-send-provider">Send &amp; next</button>'
           : focusRoute.mode === 'handoff' && smsHref
           ? '<a class="btn btn-primary btn-lg focus-send" href="' + smsHref + '" data-action="focus-send">Send &amp; next</a>'
@@ -8274,18 +8370,25 @@ function renderFocus(){
     '</div>', true);
 }
 
-/* The provider route inside focus mode.
+/* The answering routes inside focus mode: the provider, and the Mac.
 
    One difference from focusSend, and it is the point of the whole channel:
    this one waits. focusSend advances immediately because it cannot know
    whether Messages ever sent anything, so it logs optimistically and relies
-   on the undo. Here the provider answers, so the queue must not move until it
+   on the undo. Here the server answers, so the queue must not move until it
    has -- advancing first would leave a failed send behind a screen nobody is
    looking at any more, which is the failure this product already has in the
    form of 0 reviews out of 67 sends.
 
    On a refusal it stays on this contact with the reason on screen, because
-   the reasons are all things the person can act on. */
+   the reasons are all things the person can act on.
+
+   The Mac route answers a weaker question than the provider does, and it is
+   worth being clear about: what it confirms is that the text was QUEUED, not
+   that Messages sent it. A Mac that quits Messages a second later fails
+   after this screen has moved on. That failure is not lost -- it lands on the
+   row as send_error and shows in the thread and the delivery states -- but it
+   is not caught here, the way a provider rejection is. */
 function focusSendProvider(target){
   var cur = FOCUS && FOCUS.queue[FOCUS.i];
   var c = cur && STATE.clients[cur.cid];
@@ -8298,8 +8401,10 @@ function focusSendProvider(target){
   }
   if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
 
+  var focusMode = smsSendMode(STATE, c).mode;
   window.GB_SUPABASE.functions.invoke('send-sms', {
-    body: {clientId: cur.cid, text: text, stage: cur.stage, variantId: null}
+    body: {clientId: cur.cid, text: text, stage: cur.stage, variantId: null,
+           route: focusMode === 'mac' ? 'mac' : undefined}
   }).then(function(res){
     var err = res && res.error, data = res && res.data;
     if(err || !data || !data.ok){
@@ -8314,6 +8419,7 @@ function focusSendProvider(target){
       logged.channel = 'sms';
       // The server's row id, so the next save merges rather than duplicating.
       if(data.messageId) logged.id = data.messageId;
+      if(data.status) logged.deliveryStatus = data.status;
     }
     saveState(STATE);
     FOCUS.sent++;

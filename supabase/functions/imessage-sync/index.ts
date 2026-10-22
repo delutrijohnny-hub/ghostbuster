@@ -23,6 +23,13 @@
 // cannot be used -- it expires in an hour and nobody signs a background
 // process in every morning.
 
+/* logic.js for smsSendWindow, and for nothing else.
+   The quiet-hours window is a product rule with a carrier behind it, and the
+   one thing worse than not checking it here would be checking it with a
+   second copy of the rule that drifts from the first. */
+import '../_shared/logic.js';
+const GB = (globalThis as any).GBLogic;
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
@@ -84,6 +91,17 @@ Deno.serve(async (req) => {
   let body: any;
   try { body = await req.json(); } catch { return json({ error: 'Bad JSON' }, 400); }
 
+  /* A queued send that must not go out, with the reason the person will read.
+     Claimed at the same time so no later poll reconsiders it. */
+  const fail = (id: string, why: string) =>
+    db(`/message_log?id=eq.${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        delivery_status: 'failed', send_error: why,
+        claimed_at: new Date().toISOString(),
+      }),
+    });
+
   /* The agent asks which numbers are worth uploading. This is the whole
      privacy design: it learns the client list and keeps everything else at
      home. */
@@ -120,8 +138,181 @@ Deno.serve(async (req) => {
     return json({ ok: true, numbers });
   }
 
+  /* ------------------------------------------------------------------
+     OUTBOX: texts the person typed in Ghost Recall, for this Mac to send.
+
+     A row is ours to send when delivery_status is 'queued' AND provider_id
+     is null. Both halves matter. 637 rows carry no provider_id and no
+     status at all -- the old optimistic "Open in Messages" logs -- and
+     re-sending those would text a chunk of the book a second time with
+     messages from weeks ago. 'queued' is a state nothing else writes.
+
+     claimed_at is stamped before the agent is told about a row, and only
+     unclaimed rows are ever handed out. A run that dies between sending and
+     reporting therefore loses the REPORT, not the message: the row stays
+     claimed and is never sent twice. The regular sync picks the real message
+     up out of chat.db afterwards and links it. A text sent twice cannot be
+     taken back; a text whose status is late can.
+     ------------------------------------------------------------------ */
+  if (body?.action === 'outbox') {
+    const qRes = await db(
+      `/message_log?delivery_status=eq.queued&provider_id=is.null&claimed_at=is.null` +
+      `&select=id,client_id,text,channel,sent_at&order=sent_at.asc&limit=50`);
+    const queued = (await qRes.json().catch(() => [])) || [];
+    if (!Array.isArray(queued) || !queued.length) {
+      return json({ ok: true, sends: [], holding: 0, cancelled: 0 });
+    }
+
+    /* Scoped to THIS org by looking the contacts up rather than trusting the
+       queue rows, which carry no org of their own. A device token for one
+       org must never be handed another org's messages to send. */
+    const ids = [...new Set(queued.map((r: any) => r.client_id))]
+      .map((i) => `"${String(i).replace(/"/g, '')}"`).join(',');
+    const cRes = await db(
+      `/clients?id=in.(${ids})&org_id=eq.${orgId}&ignored=is.false` +
+      `&select=id,name,phone,sms_status,timezone`);
+    const cl = (await cRes.json().catch(() => [])) || [];
+    const byId: Record<string, any> = {};
+    if (Array.isArray(cl)) for (const c of cl) byId[c.id] = c;
+
+    const sends: any[] = [];
+    let holding = 0, cancelled = 0;
+
+    for (const row of queued) {
+      const c = byId[row.client_id];
+      if (!c) continue;                  // another org's, or an ignored contact
+      if (!c.phone) {
+        await fail(row.id, 'That contact has no phone number.');
+        cancelled++;
+        continue;
+      }
+
+      /* An opt-out between typing and sending CANCELS the message. It does
+         not wait, because there is no later time at which texting someone
+         who replied STOP becomes acceptable. */
+      if ((c.sms_status || 'ok') !== 'ok') {
+        await fail(row.id, c.sms_status === 'opted_out'
+          ? 'Not sent: they replied STOP after this was queued.'
+          : 'Not sent: the carrier could not reach that number.');
+        cancelled++;
+        continue;
+      }
+
+      /* Outside 8am-9pm their time it HOLDS: left queued and unclaimed, so a
+         later poll inside the window sends it. This is the case that needs
+         re-checking here rather than only at the moment somebody pressed
+         send -- a Mac asleep overnight wakes up holding a batch queued at
+         8:50pm, and without this check it would deliver all of them at 7am. */
+      const win = GB.smsSendWindow({ timezone: c.timezone || 'America/New_York' }, new Date());
+      if (!win.ok) { holding++; continue; }
+
+      /* The claim, guarded on claimed_at still being null. Two overlapping
+         runs both read the same row above; only one of them gets it back
+         here, and the other sends nothing. */
+      const claim = await db(`/message_log?id=eq.${row.id}&claimed_at=is.null`, {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({ claimed_at: new Date().toISOString() }),
+      });
+      const got = claim.ok ? ((await claim.json().catch(() => [])) || []) : [];
+      if (!got.length) continue;         // somebody else claimed it first
+
+      sends.push({
+        id: row.id, phone: c.phone, name: c.name || '',
+        body: row.text || '', channel: row.channel || 'sms',
+      });
+    }
+
+    return json({ ok: true, sends, holding, cancelled });
+  }
+
+  /* ------------------------------------------------------------------
+     DELIVERY_CHECK: rows still claiming only 'sent', for the Mac to look up.
+
+     Delivery is not instant. Someone whose phone is off receives the message
+     when it comes back on, and Apple flips is_delivered then -- long after
+     the send loop has moved on. These rows are the ones with a guid to look
+     up and no delivery confirmed yet.
+
+     Two days, because a message undelivered after that is not going to be,
+     and because this runs on a clock rather than on demand: an unbounded
+     window would grow into a scan of the whole table every two minutes.
+     ------------------------------------------------------------------ */
+  if (body?.action === 'delivery_check') {
+    const since = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString();
+    const pRes = await db(
+      `/message_log?delivery_status=eq.sent&provider_id=like.imsg:*&sent_at=gte.${since}` +
+      `&select=id,provider_id,client_id&order=sent_at.desc&limit=200`);
+    const rows = (await pRes.json().catch(() => [])) || [];
+    if (!Array.isArray(rows) || !rows.length) return json({ ok: true, pending: [] });
+
+    /* Scoped to this org the same way the outbox is, by looking the contacts
+       up rather than trusting the rows. */
+    const ids = [...new Set(rows.map((r: any) => r.client_id))]
+      .map((i) => `"${String(i).replace(/"/g, '')}"`).join(',');
+    const cRes = await db(`/clients?id=in.(${ids})&org_id=eq.${orgId}&select=id`);
+    const mine = new Set(((await cRes.json().catch(() => [])) || []).map((c: any) => c.id));
+
+    return json({
+      ok: true,
+      pending: rows.filter((r: any) => mine.has(r.client_id))
+                   .map((r: any) => ({ id: r.id, providerId: r.provider_id })),
+    });
+  }
+
+  /* ------------------------------------------------------------------
+     SENT: what actually happened, reported by the Mac.
+
+     The agent reads Apple's own columns back out of chat.db after sending --
+     is_sent, is_delivered, error -- so these states are Apple's answer, not
+     this product's hope. Where the message cannot be found again at all the
+     row is marked 'sent' with no provider_id, which is honest: Messages took
+     it and nothing has confirmed delivery. The ordinary sync links it later.
+     ------------------------------------------------------------------ */
+  if (body?.action === 'sent') {
+    if (!Array.isArray(body?.results)) {
+      return json({ error: 'Expected {action:\'sent\', results:[...]}' }, 400);
+    }
+    let updated = 0, rejected = 0;
+
+    for (const r of body.results.slice(0, 100)) {
+      const id = typeof r?.id === 'string' ? r.id : '';
+      if (!id) { rejected++; continue; }
+
+      /* The id came from this machine, so prove it is one of ours before
+         writing to it. A device token is a long-lived credential and this
+         endpoint can set delivery states. */
+      const own = await db(
+        `/message_log?id=eq.${id}&select=id,client_id,clients!inner(org_id)` +
+        `&clients.org_id=eq.${orgId}&limit=1`);
+      const ok = ((await own.json().catch(() => [])) || []).length;
+      if (!ok) { rejected++; continue; }
+
+      const patch: Record<string, unknown> = {};
+      if (!r?.ok) {
+        patch.delivery_status = 'failed';
+        patch.send_error = String(r?.error || 'The Messages app would not send it.').slice(0, 300);
+      } else if (Number(r?.errorCode || 0) !== 0) {
+        patch.delivery_status = 'failed';
+        patch.send_error = 'Messages reported error ' + Number(r.errorCode) + '.';
+      } else {
+        patch.delivery_status = r?.delivered ? 'delivered' : 'sent';
+        patch.send_error = null;
+        if (typeof r?.guid === 'string' && r.guid) patch.provider_id = 'imsg:' + r.guid;
+        if (typeof r?.at === 'string' && r.at) patch.sent_at = r.at;
+      }
+
+      const up = await db(`/message_log?id=eq.${id}`, {
+        method: 'PATCH', body: JSON.stringify(patch),
+      });
+      if (up.ok) updated++; else rejected++;
+    }
+
+    return json({ ok: rejected === 0, updated, rejected });
+  }
+
   if (body?.action !== 'push' || !Array.isArray(body?.messages)) {
-    return json({ error: "Expected {action:'numbers'} or {action:'push', messages:[...]}" }, 400);
+    return json({ error: "Expected {action:'numbers'|'outbox'|'sent'} or {action:'push', messages:[...]}" }, 400);
   }
 
   /* One lookup for the whole batch rather than per message. The agent sends a
