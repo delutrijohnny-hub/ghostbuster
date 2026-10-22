@@ -1970,6 +1970,14 @@ function sanitizeClient(raw, fallbackId){
       return {
         id: (typeof r.id === 'string' && r.id) ? r.id : uuid(),
         text: r.text,
+        /* Which channel it arrived on, kept rather than dropped.
+
+           Every reply in this account is a text -- sms-webhook and the Mac
+           agent are the only writers and neither sees email -- so 'sms' is
+           what the data says, not a guess. But dropping the field here meant
+           an email reply could never be one, and the two histories would
+           merge at the single point that matters. */
+        channel: r.channel === 'email' ? 'email' : 'sms',
         at: (typeof r.at === 'string' && !isNaN(Date.parse(r.at))) ? r.at : nowISO()
       };
     }) : [],
@@ -3378,7 +3386,16 @@ function conversationThread(client){
   });
   (client.replies || []).forEach(function(r){
     var t = Date.parse(r.at);
-    items.push({dir: 'in', at: r.at, t: isNaN(t) ? 0 : t, text: r.text || '', id: r.id});
+    /* Inbound carries a channel too. Without it every reply reads as a text,
+       so an email reply would appear in the text history -- and the two
+       histories this product keeps apart would quietly merge at the one
+       point it matters.
+
+       Defaults to sms because that is what they are: replies are written by
+       sms-webhook and the Mac agent, both of which only see texts. The
+       default is a statement about where they come from, not a guess. */
+    items.push({dir: 'in', at: r.at, t: isNaN(t) ? 0 : t, text: r.text || '',
+                channel: r.channel || 'sms', id: r.id});
   });
   /* Notes sit in the sequence, because that is the whole point: "he mentioned
      budget is tight" means something next to the message it followed and very
@@ -3600,7 +3617,11 @@ function conversationList(state, now){
     thread.forEach(function(it){ if(it.dir === 'in') inbound++; });
     rows.push({
       clientId: c.id,
-      unread: unreadCount(c, ((state && state.reads) || {})[c.id]),
+      /* Both channels, summed. The list shows each client ONCE, so its
+         unread number has to be everything unseen from them -- the channel
+         indicators say where. Reading the flat client id here would now
+         always miss, because markers are keyed per channel. */
+      unread: totalChannelUnread(c, (state && state.reads) || {}),
       name: c.name,
       phone: c.phone || '',
       status: c.status,
@@ -3708,6 +3729,70 @@ function nextActionLabel(state, client, now){
   if(prog.complete) return 'Sequence finished';
   if(prog.nextStage) return 'Next: ' + touchLabel(prog.nextStage).toLowerCase();
   return 'Nothing due';
+}
+
+/* Everything unseen from one person, across both channels.
+
+   The queue shows each client once, so its count has to cover both -- the
+   per-channel numbers live on the channel tabs, where they answer a
+   different question. */
+function totalChannelUnread(client, reads){
+  var r = reads || {};
+  var n = 0;
+  MESSAGE_CHANNELS.forEach(function(ch){
+    n += channelUnread(client, r[readKey(client.id, ch)], ch);
+  });
+  return n;
+}
+
+/* One channel's history, and nothing else.
+
+   Text and email are separate conversations with the same person. Mixing
+   them reads as one thread and invites answering in the medium they did not
+   use -- and on email it is worse, because an email reply belongs to a
+   thread with a subject, not to a stream of bubbles.
+
+   Notes are in neither. They are internal, and the one thing that must
+   never happen is a note being read as something the client received. */
+var MESSAGE_CHANNELS = ['sms', 'email'];
+
+function channelThread(client, channel){
+  var want = channel === 'email' ? 'email' : 'sms';
+  return conversationThread(client).filter(function(it){
+    if(it.dir === 'note') return false;
+    return (it.channel || 'sms') === want;
+  });
+}
+
+/* Unread on ONE channel.
+
+   Reading the text history must not mark email read: they are different
+   conversations and the counts have to be able to disagree. Takes the read
+   marker for that channel rather than looking it up, so the caller cannot
+   accidentally pass the other one. */
+function channelUnread(client, readAt, channel){
+  var since = readAt ? Date.parse(readAt) : 0;
+  if(isNaN(since)) since = 0;
+  var n = 0;
+  channelThread(client, channel).forEach(function(it){
+    if(it.dir === 'in' && it.t > since) n++;
+  });
+  return n;
+}
+
+/* The key a per-channel read marker is stored under.
+
+   One function so the browser and the loader cannot disagree about the
+   shape. Rows written before channels existed carry no channel and mean
+   "text", which is what every reply in this account is. */
+function readKey(clientId, channel){
+  return String(clientId) + '|' + (channel === 'email' ? 'email' : 'sms');
+}
+
+/* When anything last happened on one channel, either direction. */
+function channelActivity(client, channel){
+  var items = channelThread(client, channel);
+  return items.length ? items[items.length - 1].at : null;
 }
 
 /* The rules that decide what to do next, in ONE place.
@@ -8290,6 +8375,10 @@ var __LOGIC_EXPORTS__ = {
   filterConversationsBy: filterConversationsBy,
   conversationCounts: conversationCounts,
   conversationSignal: conversationSignal, initialsFor: initialsFor, dueSplit: dueSplit,
+  channelThread: channelThread, channelUnread: channelUnread,
+  totalChannelUnread: totalChannelUnread,
+  channelActivity: channelActivity, readKey: readKey,
+  MESSAGE_CHANNELS: MESSAGE_CHANNELS,
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
   appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,

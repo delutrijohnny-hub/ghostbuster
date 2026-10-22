@@ -7408,7 +7408,13 @@ console.log('\n--- unread ---');
   const ago = (h) => new Date(Date.now() - h*3600000).toISOString();
   const mk = (defs, reads) => {
     const st = GB.buildDefaultState();
-    st.clients = {}; st.reads = reads || {};
+    st.clients = {};
+    /* Read markers are per channel now. These fixtures are all text, so the
+       plain {clientId: when} they are written with is translated through
+       readKey -- the same function the loader uses, so a fixture cannot
+       drift from the real key shape. */
+    st.reads = {};
+    Object.keys(reads || {}).forEach(k => { st.reads[GB.readKey(k, 'sms')] = reads[k]; });
     defs.forEach(d => {
       st.clients[d.id] = GB.sanitizeClient({
         id:d.id, name:d.name, phone:'213555010'+d.id.slice(-1),
@@ -7487,7 +7493,7 @@ console.log('\n--- unread ---');
        reading. */
     const at = new Date(Date.now() - 3*3600000).toISOString();
     const st = GB.buildDefaultState();
-    st.clients = {}; st.reads = {c1: at};
+    st.clients = {}; st.reads = {}; st.reads[GB.readKey('c1','sms')] = at;
     st.clients.c1 = GB.sanitizeClient({
       id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
       status:'Booked', messageLog: [], replies: [{id:'r1', text:'hi', at: at}]
@@ -7502,14 +7508,24 @@ console.log('\n--- unread ---');
     assert.strictEqual(GB.totalUnread(null, new Date()), 0);
   });
 
-  test('opening a conversation is what marks it read', () => {
+  test('opening a conversation marks ONE channel read, for one user', () => {
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    /* Follow the case to its break, not a byte count. A fixed slice means
+       adding a comment inside the handler fails the test for no reason --
+       which is exactly what happened the first time. */
     const start = app.indexOf("case 'msgx-open':");
-    const block = app.slice(start, start + 220);
-    assert.ok(/markConversationRead\(cid\)/.test(block),
+    const block = app.slice(start, app.indexOf('break;', start));
+    assert.ok(/markConversationRead\(cid,/.test(block),
       'opening a thread does not mark it read, so the badge never clears');
+    /* And it must name a channel. Marking both would clear an unseen email
+       because somebody opened the texts -- the exact failure the channel
+       split exists to prevent. */
+    assert.ok(/markConversationRead\(cid,\s*UI\.msgxChannel\)/.test(block),
+      'opening a thread marks every channel read, not just the one on screen');
     assert.ok(/user_id: STATE\.userId/.test(app),
       'the read marker is written without a user, so it belongs to nobody');
+    assert.ok(/onConflict: 'user_id,client_id,channel'/.test(app),
+      'the read marker is not keyed per channel, so one overwrites the other');
   });
 }
 
@@ -15555,6 +15571,108 @@ console.log('\n--- per-contact wording ---');
     const c = GB.sanitizeClient(GB.sanitizeClient(
       {id: 'c1', name: 'T', messageTexts: {monday: 'kept across reloads'}}));
     assert.strictEqual(c.messageTexts.monday, 'kept across reloads');
+  });
+}
+
+console.log('\n--- text and email are separate conversations ---');
+{
+  const mk = () => GB.sanitizeClient({id:'c1', name:'T', messageLog:[
+    {id:'t1', stage:'welcome', channel:'sms',   text:'texted you',  sentAt:'2026-10-01T10:00:00Z'},
+    {id:'e1', stage:'email',   channel:'email', text:'emailed you', sentAt:'2026-10-02T10:00:00Z'},
+    {id:'t2', stage:'monday',  channel:'sms',   text:'texted again', sentAt:'2026-10-04T10:00:00Z'}
+  ], replies:[
+    {id:'r1', at:'2026-10-03T10:00:00Z', text:'replied by text'}
+  ], threadNotes:[
+    {id:'n1', body:'internal', author:'E', at:'2026-10-05T10:00:00Z'}
+  ]});
+
+  test('each channel shows only its own messages', () => {
+    /* Mixing them reads as one conversation and invites answering in the
+       medium they never used. On email it is worse: an email belongs to a
+       thread with a subject, not to a stream of bubbles. */
+    const c = mk();
+    assert.deepStrictEqual(GB.channelThread(c, 'sms').map(i => i.text),
+      ['texted you', 'replied by text', 'texted again']);
+    assert.deepStrictEqual(GB.channelThread(c, 'email').map(i => i.text),
+      ['emailed you']);
+  });
+
+  test('an internal note is in neither channel', () => {
+    // The one thing that must never happen is a note read as something the
+    // client received.
+    const c = mk();
+    GB.MESSAGE_CHANNELS.forEach(ch => {
+      assert.ok(!GB.channelThread(c, ch).some(i => i.dir === 'note'),
+        'a note leaked into the ' + ch + ' history');
+      assert.ok(!GB.channelThread(c, ch).some(i => i.text === 'internal'));
+    });
+  });
+
+  test('an inbound reply says which channel it arrived on', () => {
+    /* Without this every reply reads as a text, so an email reply would
+       appear in the text history -- the two histories merging at the one
+       point it matters. */
+    const c = mk();
+    const inbound = GB.conversationThread(c).filter(i => i.dir === 'in');
+    assert.ok(inbound.length, 'the fixture produced no reply');
+    inbound.forEach(i => assert.strictEqual(i.channel, 'sms'));
+  });
+
+  test('an email reply lands in email, not in the text history', () => {
+    const c = GB.sanitizeClient({id:'c1', name:'T',
+      replies:[{id:'r', at:'2026-10-03T10:00:00Z', text:'by email', channel:'email'}]});
+    assert.deepStrictEqual(GB.channelThread(c, 'email').map(i => i.text), ['by email']);
+    assert.deepStrictEqual(GB.channelThread(c, 'sms'), []);
+  });
+
+  test('reading one channel does not mark the other read', () => {
+    /* They are different conversations and the counts have to be able to
+       disagree. One read marker for both would clear an unseen email
+       because somebody opened the texts. */
+    const c = GB.sanitizeClient({id:'c1', name:'T', replies:[
+      {id:'r1', at:'2026-10-03T10:00:00Z', text:'by text'},
+      {id:'r2', at:'2026-10-03T11:00:00Z', text:'by email', channel:'email'}
+    ]});
+    const readTextOnly = '2026-10-03T10:30:00Z';
+    assert.strictEqual(GB.channelUnread(c, readTextOnly, 'sms'), 0,
+      'the text reply was still unread after reading texts');
+    assert.strictEqual(GB.channelUnread(c, null, 'email'), 1,
+      'the email reply was marked read by reading the texts');
+  });
+
+  test('your own sends never make a channel unread', () => {
+    /* Unread means THEY said something you have not seen. Counting your own
+       outgoing messages would light up every thread you touched as needing
+       attention -- and the fixture above could not catch it, because it had
+       no outgoing messages after the read marker at all. */
+    const c = GB.sanitizeClient({id:'c1', name:'T',
+      replies:[{id:'r', at:'2026-10-01T10:00:00Z', text:'their reply'}],
+      messageLog:[
+        {id:'m1', stage:'welcome', channel:'sms', text:'before', sentAt:'2026-10-01T09:00:00Z'},
+        {id:'m2', stage:'monday',  channel:'sms', text:'after',  sentAt:'2026-10-02T09:00:00Z'}
+      ]});
+    const readEverything = '2026-10-03T00:00:00Z';
+    assert.strictEqual(GB.channelUnread(c, readEverything, 'sms'), 0);
+
+    // And with nothing read, only the one inbound counts -- not the two sends.
+    assert.strictEqual(GB.channelUnread(c, null, 'sms'), 1,
+      'outgoing messages were counted as unread');
+  });
+
+  test('read markers are keyed per channel, by one shared function', () => {
+    // One function so the browser and the loader cannot disagree on shape.
+    assert.strictEqual(GB.readKey('c1', 'sms'), 'c1|sms');
+    assert.strictEqual(GB.readKey('c1', 'email'), 'c1|email');
+    assert.notStrictEqual(GB.readKey('c1', 'sms'), GB.readKey('c1', 'email'));
+    // Anything unrecognised is text, which is what every reply here is.
+    assert.strictEqual(GB.readKey('c1', undefined), 'c1|sms');
+  });
+
+  test('last activity is per channel', () => {
+    const c = mk();
+    assert.strictEqual(GB.channelActivity(c, 'sms'), '2026-10-04T10:00:00Z');
+    assert.strictEqual(GB.channelActivity(c, 'email'), '2026-10-02T10:00:00Z');
+    assert.strictEqual(GB.channelActivity(GB.sanitizeClient({id:'x', name:'X'}), 'sms'), null);
   });
 }
 

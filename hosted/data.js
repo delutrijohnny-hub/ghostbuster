@@ -1005,11 +1005,16 @@ async function loadState(){
      different things, and a shared marker would hide a reply from whoever
      did not open it. Degrades to empty, which reads as "nothing read yet"
      and so shows every reply rather than hiding any. */
+  /* Keyed per channel, through readKey, so the browser and this loader
+     cannot drift on the shape. Rows written before the column existed carry
+     'sms', which is what every reply in the system is. */
   var readsRes = await sb.from('conversation_reads')
-    .select('client_id, last_read_at');
+    .select('client_id, channel, last_read_at');
   state.reads = {};
   ((readsRes && readsRes.data) || []).forEach(function(row){
-    if(row && row.client_id) state.reads[row.client_id] = row.last_read_at;
+    if(row && row.client_id){
+      state.reads[readKey(row.client_id, row.channel || 'sms')] = row.last_read_at;
+    }
   });
 
   /* Who wrote a note, by name.

@@ -96,7 +96,13 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   dlvOpen:null,
   // Which right-column sections are folded open. The two that hold
   // history start closed; the rest are not collapsible at all.
-  msgxSections:{activity:false, more:false}};
+  msgxSections:{activity:false, more:false},
+  // Which channel's conversation is on screen: 'sms', 'email' or 'notes'.
+  msgxChannel:'sms',
+  /* Unsent drafts, keyed by contact AND channel. Switching tabs or clients
+     must not throw away something half-typed -- that is somebody's words,
+     and losing them is worse than any amount of layout polish. */
+  drafts:{}};
 
 var lastSnapshot = null; // for toast Undo
 
@@ -1754,7 +1760,7 @@ function renderThreadsTab(){
      choosing a conversation. An auto-selected one stays unread until it is
      actually picked, which is the honest reading of "have you seen this". */
   if(UI.tab === 'threads' && UI.threadCid && UI.msgxOpened === UI.threadCid){
-    markConversationRead(UI.threadCid);
+    markConversationRead(UI.threadCid, UI.msgxChannel);
     var r2 = conversationList(STATE, new Date());
     var u2 = r2.reduce(function(n, r){ return n + r.unread; }, 0);
     var badge = el('threads-count');
@@ -1776,17 +1782,22 @@ function renderThreadsTab(){
    Local state moves first so the badge responds immediately -- a count that
    waits for a round trip reads as broken. If the write fails the marker is
    simply stale, which shows a reply again rather than hiding one. */
-function markConversationRead(cid){
+function markConversationRead(cid, channel){
   if(!cid || !STATE) return;
+  /* ONE channel, never both. Text and email are separate conversations and
+     clearing an unseen email because somebody opened the texts is the exact
+     failure the split exists to prevent. */
+  var ch = channel === 'email' ? 'email' : 'sms';
+  var key = readKey(cid, ch);
   var at = new Date().toISOString();
   STATE.reads = STATE.reads || {};
-  if(STATE.reads[cid] && Date.parse(STATE.reads[cid]) >= Date.parse(at)) return;
-  STATE.reads[cid] = at;
+  if(STATE.reads[key] && Date.parse(STATE.reads[key]) >= Date.parse(at)) return;
+  STATE.reads[key] = at;
   if(!STATE.userId || !window.GB_SUPABASE) return;
   try{
     window.GB_SUPABASE.from('conversation_reads')
-      .upsert({user_id: STATE.userId, client_id: cid, last_read_at: at},
-              {onConflict: 'user_id,client_id'})
+      .upsert({user_id: STATE.userId, client_id: cid, channel: ch, last_read_at: at},
+              {onConflict: 'user_id,client_id,channel'})
       .then(function(){}, function(){});
   }catch(e){ /* a read marker is never worth breaking the page for */ }
 }
@@ -1920,6 +1931,48 @@ function deliveryDetail(c, it, ds, ev){
     }).join('') + ask + '</div>';
 }
 
+/* Half-typed words, kept across every switch.
+
+   Keyed by contact AND channel, because they are different conversations:
+   a reply started to one person must not reappear addressed to the next,
+   and a text draft must not surface in an email box.
+
+   Held in memory only. A draft is not a message and does not belong in the
+   message history; losing it on a reload is survivable, losing it on a tab
+   click would not be. */
+function draftKey(cid, chan){
+  return String(cid || '') + '|' + (chan || 'sms');
+}
+
+function stashDraft(){
+  if(!UI.threadCid) return;
+  var k = draftKey(UI.threadCid, UI.msgxChannel);
+  var d = {};
+  var t = el('msgx-text');  if(t) d.text = t.value;
+  var b = el('msgx-email'); if(b) d.body = b.value;
+  var j = el('msgx-subj');  if(j) d.subject = j.value;
+  var n = el('msgx-note');  if(n) d.note = n.value;
+  var anything = Object.keys(d).some(function(x){ return (d[x] || '').trim(); });
+  if(anything) UI.drafts[k] = d; else delete UI.drafts[k];
+}
+
+function restoreDraft(){
+  if(!UI.threadCid) return;
+  var d = UI.drafts[draftKey(UI.threadCid, UI.msgxChannel)];
+  if(!d) return;
+  /* Applied AFTER the touch pre-fill, so what somebody typed wins over what
+     the sequence suggested. A draft is the more recent intent. */
+  var t = el('msgx-text');  if(t && d.text !== undefined) t.value = d.text;
+  var b = el('msgx-email'); if(b && d.body !== undefined) b.value = d.body;
+  var j = el('msgx-subj');  if(j && d.subject !== undefined) j.value = d.subject;
+  var n = el('msgx-note');  if(n && d.note !== undefined) n.value = d.note;
+}
+
+function clearDraft(cid, chan){
+  delete UI.drafts[draftKey(cid === undefined ? UI.threadCid : cid,
+                            chan === undefined ? UI.msgxChannel : chan)];
+}
+
 function msgxTemplateSelect(c){
   var opts = cadenceTouches().map(function(stage, i){
     return '<option value="' + escapeHtml(stage) + '">Touch ' + (i + 1) + ' \u00b7 ' +
@@ -2038,9 +2091,16 @@ function renderMsgxThread(){
     box.innerHTML = '<div class="msgx-empty">Pick a conversation to read it.</div>';
     return;
   }
-  var thread = conversationThread(c);
   var route = smsSendMode(STATE, c);
   var win = smsSendWindow(c, new Date());
+
+  /* Only the channel on screen. Notes are their own view: internal, never
+     sent, and kept out of both histories so one can never be read as
+     something the client received. */
+  var viewChan = UI.msgxChannel || 'sms';
+  var thread = viewChan === 'notes'
+    ? conversationThread(c).filter(function(it){ return it.dir === 'note'; })
+    : channelThread(c, viewChan);
 
   var bubbles = thread.map(function(it){
     /* A note must be unmistakable. Full width, its own colour, and the words
@@ -2143,20 +2203,29 @@ function renderMsgxThread(){
      A contact who opted out, or whose number is not textable, is exactly the
      one somebody needs to leave context on. Tying notes to the ability to
      send would remove them precisely when they matter most. */
-  var mode = UI.msgxMode || (UI.msgxNote === true ? 'note' : 'reply');
-  var noteMode = mode === 'note';
-  var emailMode = mode === 'email';
+  /* The channel IS the tab. Reply-vs-Email used to be a mode on the
+     composer while both histories shared one scroll, which made the choice
+     about what you were writing rather than which conversation you were in.
+     They are different conversations with the same person. */
+  var chan = UI.msgxChannel || 'sms';
+  var noteMode = chan === 'notes';
+  var emailMode = chan === 'email';
   /* Email is offered only where there is an address to use. A tab that opens
      a composer addressed to nobody is a tab that wastes the click. */
   var emailable = !!(c.email && canEmail(c));
+  var unreadSms = channelUnread(c, (STATE.reads || {})[readKey(c.id, 'sms')], 'sms');
+  var unreadEmail = channelUnread(c, (STATE.reads || {})[readKey(c.id, 'email')], 'email');
+  function chanTab(key, label, count, extra){
+    return '<button class="msgx-mode' + (chan === key ? ' on' : '') + (extra || '') +
+      '" data-action="msgx-channel" data-channel="' + key + '">' + escapeHtml(label) +
+      (count ? '<span class="chan-n">' + count + '</span>' : '') + '</button>';
+  }
   var modeTabs =
     '<div class="msgx-modes">' +
-      '<button class="msgx-mode' + (mode === 'reply' ? ' on' : '') + '" data-action="msgx-mode" data-mode="reply">Reply</button>' +
-      (emailable
-        ? '<button class="msgx-mode' + (emailMode ? ' on' : '') +
-          '" data-action="msgx-mode" data-mode="email">Email</button>'
-        : '') +
-      '<button class="msgx-mode note' + (noteMode ? ' on' : '') + '" data-action="msgx-mode" data-mode="note">Internal note</button>' +
+      chanTab('sms', 'Text', unreadSms) +
+      (emailable || channelThread(c, 'email').length
+        ? chanTab('email', 'Email', unreadEmail) : '') +
+      chanTab('notes', 'Notes', 0, ' note') +
     '</div>';
   if(emailMode){
     /* The Gmail handoff, same shape as the Messages one and labelled with
@@ -2227,6 +2296,8 @@ function renderMsgxThread(){
     var tbox = el('msgx-text');
     if(tbox && !tbox.value){ tbox.value = ptouch.prefill; UI.msgxPrefilled = pkey; }
   }
+
+  restoreDraft();
 
   var scroller = el('msgx-msgs');
   if(scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -4718,7 +4789,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-29a5b538';
+var BUILD_STAMP = '20261021-70c09131';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -5589,6 +5660,7 @@ document.addEventListener('click', function(ev){
       if(!msubj && !mbody){ showToast('Nothing to send yet.'); break; }
       window.open(gmailComposeUrl(mec.email, msubj, mbody, businessEmailAccount(STATE)), '_blank');
       markSentOnChannel(cid, 'email', (msubj ? msubj + '\n\n' : '') + mbody, 'email');
+      clearDraft(cid, 'email');
       if(subjEl) subjEl.value = '';
       if(bodyEl) bodyEl.value = '';
       renderThreadsTab();
@@ -6161,6 +6233,7 @@ document.addEventListener('click', function(ev){
       window.open('sms:' + (hdigits.length === 10 ? '+1' + hdigits : '+' + hdigits) +
                   '&body=' + encodeURIComponent(htext), '_blank');
       markSentOnChannel(cid, 'custom', htext, 'sms');
+      clearDraft(cid, 'sms');
       if(hbox) hbox.value = '';
       renderThreadsTab();
       showToast('Draft opened in Messages \u2014 logged as unconfirmed until you send it.');
@@ -6192,9 +6265,14 @@ document.addEventListener('click', function(ev){
       renderThreadsTab();
       break;
     case 'msgx-open':
+      /* Stash BEFORE the selection moves. stashDraft keys on UI.threadCid,
+         so running it after the switch filed the previous contact's
+         half-typed reply under the NEW one -- and opening Nick showed
+         Julia's words in the box addressed to him. Order is the whole fix. */
+      stashDraft();
       UI.threadCid = cid;
       UI.msgxOpened = cid;          // somebody chose this one
-      markConversationRead(cid);
+      markConversationRead(cid, UI.msgxChannel);
       renderThreadsTab();
       break;
     case 'msgx-back':
@@ -6204,6 +6282,17 @@ document.addEventListener('click', function(ev){
     case 'msgx-send':
       doMsgxSend(cid, target);
       break;
+    case 'msgx-channel': {
+      var newChan = target.getAttribute('data-channel') || 'sms';
+      /* The draft for the channel being LEFT is kept before the switch, so
+         half-typed words survive moving between tabs. */
+      stashDraft();
+      UI.msgxChannel = newChan;
+      UI.msgxNote = newChan === 'notes';
+      if(newChan !== 'notes') markConversationRead(UI.threadCid, newChan);
+      renderThreadsTab();
+      break;
+    }
     case 'msgx-mode':
       UI.msgxMode = target.getAttribute('data-mode');
       // Kept in step so anything still reading the old flag stays correct.
