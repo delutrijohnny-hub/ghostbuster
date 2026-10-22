@@ -15762,6 +15762,87 @@ console.log('\n--- appearance: colour maths ---');
   });
 }
 
+console.log('\n--- appearance: presets and derived tokens ---');
+{
+  test('every preset is readable before anybody touches it', () => {
+    /* A shipped preset that fails contrast is worse than no preset: it
+       arrives looking endorsed. */
+    Object.keys(GB.THEME_PRESETS).forEach(k => {
+      const w = GB.themeWarnings(GB.THEME_PRESETS[k].colors);
+      assert.deepStrictEqual(w, [], 'preset "' + k + '" ships unreadable: ' +
+        w.map(x => x.pair.label + ' at ' + x.ratio).join(', '));
+    });
+  });
+
+  test('every preset defines every colour, and all of them are real', () => {
+    Object.keys(GB.THEME_PRESETS).forEach(k => {
+      const p = GB.THEME_PRESETS[k];
+      assert.ok(p.label && p.label.length, k + ' has no name to show');
+      GB.THEME_FIELDS.forEach(f => {
+        assert.ok(GB.hexToRgb(p.colors[f]), k + ' has no usable ' + f);
+      });
+    });
+  });
+
+  test('a malformed theme degrades to the default, never to a blank page', () => {
+    /* This comes back from a database column a future version may have
+       written differently. Unreadable input must not cost somebody the app. */
+    ['nonsense', null, undefined, 42, [], {mode:'sideways'}].forEach(v => {
+      const t = GB.sanitizeTheme(v);
+      GB.THEME_FIELDS.forEach(f => assert.ok(GB.hexToRgb(t.colors[f]),
+        'field ' + f + ' was unusable after sanitising ' + JSON.stringify(v)));
+    });
+    assert.strictEqual(GB.sanitizeTheme({mode:'sideways'}).mode, 'system');
+  });
+
+  test('one bad colour in a custom theme does not poison the others', () => {
+    const t = GB.sanitizeTheme({preset:'custom', colors:
+      {accent:'#00ff00', bg:'not-a-colour', card:'#ffffff'}});
+    assert.strictEqual(t.colors.accent, '#00ff00', 'a good value was discarded');
+    assert.strictEqual(t.colors.bg, GB.THEME_PRESETS['default'].colors.bg,
+      'a bad value did not fall back to the default');
+  });
+
+  test('derived tokens follow the surface they are derived from', () => {
+    /* Borders and faint text are computed, so they stay a fixed step from
+       whatever surface was chosen. Hard-coding them is how a custom theme
+       ends up with one panel still wearing the old palette. */
+    const light = GB.themeTokens({preset:'default'});
+    const dark  = GB.themeTokens({preset:'midnight'});
+    assert.notStrictEqual(light['--border'], dark['--border'],
+      'the border did not change with the theme');
+    assert.notStrictEqual(light['--ink-faint'], dark['--ink-faint']);
+    // and a border must be visible against its own card, not equal to it
+    assert.notStrictEqual(light['--border'], light['--card']);
+    assert.notStrictEqual(dark['--border'], dark['--card']);
+  });
+
+  test('the accent reaches every place it is supposed to', () => {
+    const t = GB.themeTokens({preset:'custom', colors:
+      Object.assign({}, GB.THEME_PRESETS['default'].colors, {accent:'#00aaff'})});
+    assert.strictEqual(t['--red'], '#00aaff', 'the accent did not become the accent token');
+    assert.ok(t['--red-dark'] && t['--red-dark'] !== '#00aaff', 'no darker accent derived');
+    assert.ok(t['--red-soft'] && t['--red-soft'] !== '#00aaff', 'no soft accent derived');
+  });
+
+  test('a dark background derives darker chrome, not lighter', () => {
+    const dark = GB.themeTokens({preset:'midnight'});
+    assert.ok(GB.relLuminance(dark['--border']) > GB.relLuminance(dark['--card']),
+      'on a dark theme the border should lift off the card, not sink into it');
+    const light = GB.themeTokens({preset:'default'});
+    assert.ok(GB.relLuminance(light['--border']) < GB.relLuminance(light['--card']),
+      'on a light theme the border should be darker than the card');
+  });
+
+  test('mixing is safe on nonsense and clamps its range', () => {
+    assert.strictEqual(GB.mixHex('nope', '#ffffff', 0.5), null);
+    assert.strictEqual(GB.mixHex('#000000', '#ffffff', 0), '#000000');
+    assert.strictEqual(GB.mixHex('#000000', '#ffffff', 1), '#ffffff');
+    assert.strictEqual(GB.mixHex('#000000', '#ffffff', 5), '#ffffff', 'the range was not clamped');
+    assert.strictEqual(GB.mixHex('#000000', '#ffffff', -3), '#000000');
+  });
+}
+
 console.log('\n--- the priority queue ---');
 {
   const now = new Date('2026-10-21T16:00:00Z');       // midday New York

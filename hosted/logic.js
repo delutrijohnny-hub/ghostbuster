@@ -3871,6 +3871,107 @@ function themeWarnings(theme){
   return out;
 }
 
+/* Blend two colours. Used to DERIVE the secondary surfaces -- borders,
+   hovers, tinted backgrounds -- from the handful somebody actually picks.
+
+   Asking for nine colours is a form somebody abandons; asking for five and
+   working out the rest is a theme they finish. It also keeps the derived
+   states coherent: a border is always the same step away from its surface,
+   whatever surface they chose. */
+function mixHex(a, b, t){
+  var ca = hexToRgb(a), cb = hexToRgb(b);
+  if(!ca || !cb) return null;
+  var k = Math.max(0, Math.min(1, t));
+  return rgbToHex({
+    r: ca.r + (cb.r - ca.r) * k,
+    g: ca.g + (cb.g - ca.g) * k,
+    b: ca.b + (cb.b - ca.b) * k
+  });
+}
+
+/* The colours a person picks. Everything else is derived from these. */
+var THEME_FIELDS = ['accent', 'sidebar', 'sidebar-ink', 'bg', 'card', 'ink', 'ink-soft',
+                    'bubble', 'bubble-ink'];
+
+var THEME_PRESETS = {
+  'default': {
+    label: 'Ghost Recall', mode: 'light',
+    colors: {accent:'#dc2f4a', sidebar:'#14161f', 'sidebar-ink':'#f2f3f7',
+             bg:'#f3f4f8', card:'#ffffff', ink:'#14161f', 'ink-soft':'#545a70',
+             bubble:'#dc2f4a', 'bubble-ink':'#ffffff'}
+  },
+  'midnight': {
+    label: 'Midnight', mode: 'dark',
+    /* #d63350 rather than the #f4566f this theme used: white text on that
+       lighter coral is 3.28:1, below AA, and the preset test caught it
+       before it shipped. Darkened to 4.72 and the hue is unchanged. */
+    colors: {accent:'#d63350', sidebar:'#0b0d11', 'sidebar-ink':'#e8eaf2',
+             bg:'#0f1116', card:'#171a21', ink:'#e8eaf2', 'ink-soft':'#a1a7bb',
+             bubble:'#d63350', 'bubble-ink':'#ffffff'}
+  },
+  'slate': {
+    label: 'Slate', mode: 'light',
+    /* #2470cc, not #2a78d6: white on the lighter blue is 4.42, just under
+       AA. These near-misses are exactly why the preset test exists -- by
+       eye all three of these looked fine. */
+    colors: {accent:'#2470cc', sidebar:'#1b2430', 'sidebar-ink':'#eef2f7',
+             bg:'#f1f4f8', card:'#ffffff', ink:'#16202b', 'ink-soft':'#4f5d6e',
+             bubble:'#2470cc', 'bubble-ink':'#ffffff'}
+  },
+  'forest': {
+    label: 'Forest', mode: 'light',
+    /* #0e7f5a, not #0f8b62: 4.29 against white, under AA. */
+    colors: {accent:'#0e7f5a', sidebar:'#12231d', 'sidebar-ink':'#eaf4ef',
+             bg:'#f2f6f3', card:'#ffffff', ink:'#122019', 'ink-soft':'#4b5f55',
+             bubble:'#0e7f5a', 'bubble-ink':'#ffffff'}
+  }
+};
+
+/* A theme, with anything missing or malformed replaced by the default.
+
+   Loose on input deliberately: this comes back from a database column that
+   a future version may have written differently, and an unreadable theme
+   must degrade to the standard one rather than to a blank page. */
+function sanitizeTheme(raw){
+  var base = THEME_PRESETS['default'];
+  var r = (raw && typeof raw === 'object') ? raw : {};
+  var mode = (r.mode === 'dark' || r.mode === 'light' || r.mode === 'system') ? r.mode : 'system';
+  var presetKey = THEME_PRESETS[r.preset] ? r.preset : (r.preset === 'custom' ? 'custom' : 'default');
+  var src = (presetKey === 'custom' ? (r.colors || {}) : THEME_PRESETS[presetKey].colors);
+  var colors = {};
+  THEME_FIELDS.forEach(function(f){
+    colors[f] = hexToRgb(src[f]) ? rgbToHex(hexToRgb(src[f])) : base.colors[f];
+  });
+  return {mode: mode, preset: presetKey, colors: colors};
+}
+
+/* The CSS variables a theme produces.
+
+   Derived values are computed from the picked ones so every state stays in
+   step: a border is a fixed step from its surface, a soft accent is the
+   accent at low opacity over the card. Hard-coding them instead is how a
+   custom theme ends up with one panel still wearing the old palette. */
+function themeTokens(theme){
+  var t = sanitizeTheme(theme);
+  var c = t.colors;
+  var dark = relLuminance(c.bg) < 0.35;
+  return {
+    '--bg': c.bg,
+    '--card': c.card,
+    '--ink': c.ink,
+    '--ink-soft': c['ink-soft'],
+    '--ink-faint': mixHex(c['ink-soft'], c.card, 0.42),
+    '--border': mixHex(c.card, c.ink, dark ? 0.14 : 0.10),
+    '--red': c.accent,
+    '--red-dark': mixHex(c.accent, '#000000', 0.25),
+    '--red-soft': mixHex(c.card, c.accent, dark ? 0.22 : 0.12),
+    '--bubble': c.bubble,
+    '--bubble-ink': c['bubble-ink'],
+    '--sidebar': c.sidebar,
+    '--sidebar-ink': c['sidebar-ink']
+  };
+}
+
 /* The rules that decide what to do next, in ONE place.
 
    Scattering these across the components that render them is how a badge
@@ -8527,6 +8628,8 @@ var __LOGIC_EXPORTS__ = {
   totalChannelUnread: totalChannelUnread,
   channelActivity: channelActivity, readKey: readKey,
   MESSAGE_CHANNELS: MESSAGE_CHANNELS,
+  mixHex: mixHex, THEME_PRESETS: THEME_PRESETS, THEME_FIELDS: THEME_FIELDS,
+  sanitizeTheme: sanitizeTheme, themeTokens: themeTokens,
   hexToRgb: hexToRgb, rgbToHex: rgbToHex, relLuminance: relLuminance,
   contrastRatio: contrastRatio, readableInk: readableInk,
   themeWarnings: themeWarnings, CONTRAST_MIN: CONTRAST_MIN,

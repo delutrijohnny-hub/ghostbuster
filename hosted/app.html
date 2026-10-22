@@ -258,7 +258,11 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
     --ink-soft: #a1a7bb;
     --ink-faint: #6b7189;
     --border: #262a35;
-    --red: #f4566f;
+    /* Darkened from the lighter coral this used to be: white on it was
+       3.28:1, and this accent carries white text on primary buttons and
+       on outgoing message bubbles. Now 4.72; the hue is unchanged. The
+       preset test caught the identical mistake in Midnight. */
+    --red: #d63350;
     --red-dark: #c33a51;
     --red-soft: #3a1c23;
     --green: #2fbc8a;
@@ -272,7 +276,7 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 :root[data-theme="dark"]{
   --bg: #0f1116; --card: #171a21; --ink: #e8eaf2; --ink-soft: #a1a7bb;
   --ink-faint: #6b7189; --border: #262a35;
-  --red: #f4566f; --red-dark: #c33a51; --red-soft: #3a1c23;
+  --red: #d63350; --red-dark: #a3203a; --red-soft: #3a1c23;
   --green: #2fbc8a; --green-soft: #12312a; --amber: #e0a33c; --amber-soft: #33270f;
   --black: #0b0d11; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
 }
@@ -1941,9 +1945,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-07a7cf88"></script>
-<script src="data.js?v=20261021-07a7cf88"></script>
-<script src="app.js?v=20261021-07a7cf88"></script>
-<script src="auth.js?v=20261021-07a7cf88"></script>
+<script src="logic.js?v=20261021-49c65a2c"></script>
+<script src="data.js?v=20261021-49c65a2c"></script>
+<script src="app.js?v=20261021-49c65a2c"></script>
+<script src="auth.js?v=20261021-49c65a2c"></script>
 </body>
 </html>
