@@ -86,7 +86,8 @@ var UI = {tab:'calls', statsRange:'today', callsSearch:'', touchFilter:'', touch
   // re-render never retypes over somebody mid-sentence.
   msgxPrefilled:null,
   // Which of the four questions the list is answering.
-  msgxFilter:'all',
+  // Opens on the work. 'All' is a contact list; this is a queue.
+  msgxFilter:'action',
   // The conversation somebody actually chose, as opposed to one the
   // desktop layout auto-selected. Only the former counts as read.
   msgxOpened:null,
@@ -1732,8 +1733,14 @@ function renderThreadsTab(){
   /* Chips and rows come from ONE array. Counting the chips from the client
      book instead would let a badge say 11 while the list shows 10, with no
      way to tell which one lied. */
-  renderMsgxFilters(conversationCounts(rows));
-  renderMsgxList(filterConversationsBy(rows, UI.msgxFilter, UI.msgxQuery), waiting, rows.length);
+  /* One derivation feeds the chips and the list, so a count and the rows
+     under it cannot disagree. */
+  var queue = priorityQueue(STATE, new Date());
+  var pcounts = priorityCounts(queue, STATE, new Date());
+  renderMsgxFilters({action: pcounts.action, upcoming: pcounts.upcoming,
+                     waiting: pcounts.waiting, all: rows.length});
+
+  renderLeftColumn(queue, rows, waiting);
   renderMsgxThread();
   renderMsgxProfile();
 
@@ -1767,9 +1774,12 @@ function renderThreadsTab(){
     if(badge) badge.textContent = u2 ? '(' + u2 + ')' : '';
     // Redraw the row so its unread pill clears with the badge, rather than
     // the two disagreeing until the next render.
-    renderMsgxFilters(conversationCounts(r2));
-    renderMsgxList(filterConversationsBy(r2, UI.msgxFilter, UI.msgxQuery),
-                   r2.filter(function(r){ return r.awaitingReply; }).length, r2.length);
+    var q2 = priorityQueue(STATE, new Date());
+    renderMsgxFilters({action: q2.length,
+                       upcoming: priorityCounts(q2, STATE, new Date()).upcoming,
+                       waiting: q2.filter(function(r){ return r.group === 'needs_response'; }).length,
+                       all: r2.length});
+    renderLeftColumn(q2, r2, r2.filter(function(r){ return r.awaitingReply; }).length);
   }
 }
 
@@ -1804,13 +1814,83 @@ function markConversationRead(cid, channel){
 
 function renderMsgxFilters(counts){
   var box = el('msgx-filters'); if(!box) return;
-  var labels = {needs: 'Needs', waiting: 'Waiting', unread: 'Unread', all: 'All'};
+  var labels = {action: 'Action', upcoming: 'Calls', waiting: 'Waiting', all: 'All'};
   var cur = UI.msgxFilter || 'all';
-  box.innerHTML = CONVERSATION_FILTERS.map(function(f){
+  box.innerHTML = ['action','upcoming','waiting','all'].map(function(f){
     return '<button data-action="msgx-filter" data-filter="' + f + '"' +
       (f === cur ? ' class="on"' : '') + '>' + escapeHtml(labels[f]) +
       ' <span class="n">' + (counts[f] || 0) + '</span></button>';
   }).join('');
+}
+
+/* The queue, in the groups the brief names, each with its count.
+
+   Headings rather than a flat list because the groups mean different
+   things: an appointment about to be missed and a routine follow-up are
+   not two sizes of the same job. Reading down a list of 18 with no
+   structure, they look like they are.
+
+   Rows carry the SPECIFIC reason -- "Call in 45 min, not confirmed" rather
+   than "due" -- so the list can be worked without opening anything to find
+   out why it is there. */
+/* Which list the left column is showing, in ONE place.
+
+   This routing existed twice -- once on the main render and once in the
+   read-marking redraw below it -- and two copies of a branch are two things
+   to keep in step. One of them already drifted far enough that a filter
+   change redrew the old flat list.
+
+   Called, never recursive: the redraw path needs the LIST rebuilt, not the
+   whole tab, and calling renderThreadsTab from inside itself is a stack
+   overflow with a nice comment on it. */
+function renderLeftColumn(queue, rows, waiting){
+  var f = UI.msgxFilter || 'action';
+  if(f === 'action' || f === 'waiting'){
+    var shown = f === 'waiting'
+      ? queue.filter(function(r){ return r.group === 'needs_response'; })
+      : queue;
+    renderPriorityQueue(filterConversations(shown, UI.msgxQuery));
+  } else if(f === 'upcoming'){
+    renderPriorityQueue(filterConversations(upcomingCalls(STATE, new Date()), UI.msgxQuery));
+  } else {
+    renderMsgxList(filterConversations(rows, UI.msgxQuery), waiting, rows.length);
+  }
+}
+
+function renderPriorityQueue(rows){
+  var box = el('msgx-list'); if(!box) return;
+  if(!rows.length){
+    box.innerHTML = '<div class="msgx-empty">Nothing needs you right now.</div>';
+    return;
+  }
+  var html = '', lastGroup = null;
+  rows.forEach(function(r){
+    if(r.group !== lastGroup){
+      var n = rows.filter(function(x){ return x.group === r.group; }).length;
+      html += '<div class="pq-head"><span>' +
+        escapeHtml(PRIORITY_LABELS[r.group] || r.group) +
+        '</span><b>' + n + '</b></div>';
+      lastGroup = r.group;
+    }
+    var tone = r.group === 'call_at_risk' ? 'urgent'
+             : r.group === 'needs_response' ? 'urgent'
+             : r.group === 'confirmation_due' ? 'due'
+             : r.group === 'missed' ? 'stop' : '';
+    html += '<button class="msgx-row pq-row' +
+      (r.clientId === UI.threadCid ? ' active' : '') +
+      '" data-action="msgx-open" data-cid="' + escapeHtml(r.clientId) + '">' +
+      '<span class="r-av' + (tone ? ' ' + tone : '') + '">' +
+        escapeHtml(initialsFor(r.name)) + '</span>' +
+      '<span class="r-body">' +
+        '<span class="r-top"><span class="r-name">' + escapeHtml(r.name) + '</span>' +
+        (r.channel === 'email'
+          ? '<span class="r-chan">email</span>' : '') +
+        '</span>' +
+        '<span class="pq-reason ' + tone + '">' + escapeHtml(r.reason) + '</span>' +
+        (r.alsoCount ? '<span class="pq-also">+' + r.alsoCount + ' more</span>' : '') +
+      '</span></button>';
+  });
+  box.innerHTML = html;
 }
 
 function renderMsgxList(rows, waiting, total){
@@ -4789,7 +4869,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261021-70c09131';
+var BUILD_STAMP = '20261021-1991c6d2';
 
 /* Which settings section to scroll to once the modal is up.
 

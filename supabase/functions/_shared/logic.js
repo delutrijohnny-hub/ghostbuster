@@ -3816,7 +3816,12 @@ var PRIORITY_LABELS = {
   needs_response:   'Needs your response',
   confirmation_due: 'Confirmation due',
   missed:           'Missed appointment',
-  follow_up_due:    'Follow-up due'
+  follow_up_due:    'Follow-up due',
+  /* Not a priority group -- it is the heading for the Upcoming calls
+     filter, which answers "what is coming" rather than "what needs doing".
+     It lives here so every heading the queue can render has a phrase, and
+     the raw key can never leak onto the screen. */
+  upcoming:         'Upcoming'
 };
 
 /* Confirmed means THEY said yes.
@@ -3922,6 +3927,39 @@ function priorityQueue(state, now){
     var gb = PRIORITY_RULES.groups.indexOf(b.group);
     if(ga !== gb) return ga - gb;
     if(a.sort !== b.sort) return a.sort - b.sort;
+    return a.clientId < b.clientId ? -1 : (a.clientId > b.clientId ? 1 : 0);
+  });
+  return rows;
+}
+
+/* Every appointment still ahead, soonest first.
+
+   A different question from the queue: the queue is what needs doing, this
+   is what is coming. A confirmed call needing nothing from anybody belongs
+   here and nowhere else.
+
+   Past appointments are excluded rather than shown as overdue -- an
+   appointment that has happened is a fact, and whether it went well is the
+   attendance question, which lives on the contact. */
+function upcomingCalls(state, now){
+  now = now || new Date();
+  var rows = [];
+  Object.keys((state && state.clients) || {}).forEach(function(cid){
+    var c = state.clients[cid];
+    if(!c || c.ignored) return;
+    var mins = minutesUntil(c.callDateTime, now);
+    if(mins === null || mins <= 0) return;
+    rows.push({
+      clientId: c.id, name: c.name, phone: c.phone || '', status: c.status,
+      callAt: c.callDateTime, minsUntil: mins,
+      confirmed: appointmentConfirmed(c),
+      reason: 'Call in ' + waitedLabel(mins) +
+        (appointmentConfirmed(c) ? ' \u00b7 Confirmed' : ' \u00b7 Not confirmed'),
+      group: 'upcoming'
+    });
+  });
+  rows.sort(function(a, b){
+    if(a.minsUntil !== b.minsUntil) return a.minsUntil - b.minsUntil;
     return a.clientId < b.clientId ? -1 : (a.clientId > b.clientId ? 1 : 0);
   });
   return rows;
@@ -8380,6 +8418,7 @@ var __LOGIC_EXPORTS__ = {
   channelActivity: channelActivity, readKey: readKey,
   MESSAGE_CHANNELS: MESSAGE_CHANNELS,
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
+  upcomingCalls: upcomingCalls,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
   appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,
   nextActionLabel: nextActionLabel,

@@ -15786,6 +15786,42 @@ console.log('\n--- the priority queue ---');
     assert.deepStrictEqual(GB.priorityQueue(st([done]), now), []);
   });
 
+  test('upcoming calls lists what is coming, not what needs doing', () => {
+    /* A different question from the queue. A confirmed call that needs
+       nothing from anybody belongs here and in no other filter. */
+    const confirmed = mk({id:'a', name:'Confirmed', status:'Confirmed', callDateTime: inMin(600)});
+    const rows = GB.upcomingCalls(st([confirmed]), now);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].confirmed, true);
+    assert.ok(/Confirmed/.test(rows[0].reason));
+    /* It may still be in the action queue -- a confirmed call can have an
+       unsent touch, and that is work. What it must NOT be is at risk: that
+       group exists for appointments nobody has heard back about. */
+    const q = GB.priorityQueue(st([confirmed]), now);
+    assert.ok(!q.some(r => r.group === 'call_at_risk'),
+      'a confirmed appointment was listed as at risk');
+  });
+
+  test('a call that has already happened is not upcoming', () => {
+    /* It is a fact, not a plan. Whether it went well is the attendance
+       question and it lives on the contact. */
+    const past = mk({id:'a', callDateTime: inMin(-60)});
+    assert.deepStrictEqual(GB.upcomingCalls(st([past]), now), []);
+  });
+
+  test('upcoming calls are soonest first, with a stable tie-break', () => {
+    const clients = [
+      mk({id:'bbb', callDateTime: inMin(120)}),
+      mk({id:'aaa', callDateTime: inMin(120)}),
+      mk({id:'soon', callDateTime: inMin(10)})
+    ];
+    const forward = GB.upcomingCalls(st(clients), now).map(r => r.clientId);
+    const reversed = GB.upcomingCalls(st(clients.slice().reverse()), now).map(r => r.clientId);
+    assert.deepStrictEqual(forward, ['soon', 'aaa', 'bbb']);
+    assert.deepStrictEqual(reversed, forward,
+      'the list reordered because the clients loaded in a different order');
+  });
+
   test('the counts come from the same rows the queue renders', () => {
     const clients = [
       mk({id:'a', callDateTime: inMin(30)}),
@@ -15802,10 +15838,16 @@ console.log('\n--- the priority queue ---');
     assert.strictEqual(counts.upcoming, 2, 'upcoming counts every future call');
   });
 
-  test('every group has a label somebody can read', () => {
-    GB.PRIORITY_RULES.groups.forEach(g => {
+  test('every group the queue can render has a readable heading', () => {
+    /* The priority groups AND 'upcoming', which the Calls filter renders
+       through the same list. Without its label the raw key leaked onto the
+       screen as "UPCOMING 5" -- caught in a browser, not by this test,
+       because the test only walked the priority groups. */
+    GB.PRIORITY_RULES.groups.concat(['upcoming']).forEach(g => {
       assert.ok(GB.PRIORITY_LABELS[g] && GB.PRIORITY_LABELS[g].length,
         g + ' has no heading');
+      assert.ok(!/_/.test(GB.PRIORITY_LABELS[g]),
+        g + ' renders its raw key rather than a phrase');
     });
   });
 }

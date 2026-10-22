@@ -1338,6 +1338,22 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .msgx-head h4{margin:0;font-size:14px;}
 .msgx-sub{color:var(--ink-faint);font-size:11.5px;}
 
+/* Group headings, because an appointment about to be missed and a routine
+   follow-up are not two sizes of the same job -- and in a flat list of 18
+   they look like they are. */
+.pq-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:9px 12px 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--ink-faint);}
+.pq-head b{font-weight:800;color:var(--ink-soft);}
+.pq-row .pq-reason{display:block;font-size:12px;margin-top:2px;color:var(--ink-soft);}
+.pq-row .pq-reason.urgent{color:var(--red);font-weight:600;}
+.pq-row .pq-reason.due{color:var(--amber);font-weight:600;}
+.pq-row .pq-reason.stop{color:var(--ink-faint);}
+.pq-row .pq-also{display:inline-block;margin-top:3px;font-size:10px;
+  color:var(--ink-faint);}
+.pq-row .r-chan{font-size:9.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;color:var(--ink-faint);
+  background:var(--border);border-radius:999px;padding:1px 6px;}
 .msgx-rows{padding:0;}
 /* A row is an avatar and a body. The separator is faint rather than a full
    rule: 172 hard lines down a column is a table, and this is a list of
@@ -1886,9 +1902,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261021-70c09131"></script>
-<script src="data.js?v=20261021-70c09131"></script>
-<script src="app.js?v=20261021-70c09131"></script>
-<script src="auth.js?v=20261021-70c09131"></script>
+<script src="logic.js?v=20261021-1991c6d2"></script>
+<script src="data.js?v=20261021-1991c6d2"></script>
+<script src="app.js?v=20261021-1991c6d2"></script>
+<script src="auth.js?v=20261021-1991c6d2"></script>
 </body>
 </html>
