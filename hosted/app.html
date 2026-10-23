@@ -805,6 +805,37 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .vp-w-rate{flex:0 0 44px;text-align:right;}
 .vp-w-n{flex:0 0 150px;color:var(--muted);font-size:11.5px;}
 .vp-w-text{flex:1 1 auto;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* The handoff button exists only where it is the useful one.
+
+   Sending through the Mac is right at a desk and wrong in a pocket: that Mac
+   may be asleep or in another building, while the phone in your hand already
+   has Messages on it. So the draft handoff comes back below the width where
+   the workspace restacks -- the same 860px -- and stays out of the way above
+   it, where the Mac route confirms delivery and this cannot. */
+.phone-only{display:none;}
+@media (max-width: 860px){
+  .phone-only{display:inline-flex;}
+}
+
+/* The header has to fit on one row of a phone.
+
+   Four things sat in a flex-wrap row -- the mark, the wordmark, End of day,
+   Add client and Menu -- and at 375px they took two rows and 210px of a
+   812px screen before any work appeared. The mark alone identifies the app
+   on a device this size; the wordmark is the first thing that can go, and
+   the buttons tighten rather than shrink their hit targets. */
+@media (max-width: 560px){
+  /* `header.app-header` throughout, not `.app-header`: the base rules are
+     written that way, which makes them MORE specific than a bare class, so a
+     plain .app-header override loses no matter how late it appears. The
+     wordmark hid and the wrapping did not, which is what that looks like. */
+  header.app-header{padding:10px 12px;gap:8px;flex-wrap:nowrap;}
+  header.app-header .brand h1{display:none;}
+  header.app-header .brand{margin-right:auto;min-width:0;}
+  header.app-header .btn{padding:8px 10px;font-size:13px;white-space:nowrap;}
+  header.app-header .logo-mark{width:28px;height:28px;}
+}
+
 /* On a phone the Texts tab is a messaging screen, not a dashboard.
 
    The day-progress header and the alerts strip are global: they sit above
@@ -2024,9 +2055,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261022-b89ed06e"></script>
-<script src="data.js?v=20261022-b89ed06e"></script>
-<script src="app.js?v=20261022-b89ed06e"></script>
-<script src="auth.js?v=20261022-b89ed06e"></script>
+<script src="logic.js?v=20261023-e9d77532"></script>
+<script src="data.js?v=20261023-e9d77532"></script>
+<script src="app.js?v=20261023-e9d77532"></script>
+<script src="auth.js?v=20261023-e9d77532"></script>
 </body>
 </html>

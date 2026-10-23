@@ -1722,6 +1722,19 @@ function buildTouchCard(client, stage, now){
         'data-action':'send-text','data-cid':client.id,'data-stage':stage,
         title:'Sends from Messages on your Mac, from your own number — so it arrives in the thread ' + firstName(client.name) + ' already has with you, and their reply comes back here.'},
         ['Send text']));
+      /* And the handoff, on a phone.
+
+         The Mac route is the right default at a desk and the wrong one in a
+         pocket: that Mac may be asleep, at home, or simply not where you
+         are, while the phone in your hand has Messages on it already.
+         Offered as WELL rather than instead, because when the Mac is awake
+         it remains the better route -- it confirms delivery and a handoff
+         never can. */
+      actions.appendChild(h('a',{class:'btn btn-sm phone-only',
+        href: smsHrefFor(client, text),
+        'data-action':'open-sms','data-cid':client.id,'data-stage':stage,
+        title:'Opens Messages on this device instead. Logged as unconfirmed, because nothing here can see whether you pressed send.'},
+        ['Open in Messages']));
     }
   } else if(route.mode === 'handoff'){
     var smsHref = digits ? ('sms:' + (digits.length===10?'+1'+digits:'+'+digits) + '&body=' + encodeURIComponent(text)) : '#';
@@ -2364,7 +2377,11 @@ function msgxTouchPanel(c, now){
     action = '<button class="btn btn-sm btn-primary" data-action="send-text" data-cid="' +
       escapeHtml(c.id) + '" data-stage="' + escapeHtml(touch.stage) +
       '" title="Sends from Messages on your Mac, from your own number. Their reply comes back here.">' +
-      'Send this touch</button>';
+      'Send this touch</button>' +
+      '<a class="btn btn-sm phone-only" href="' + escapeHtml(smsHrefFor(c, touch.text)) +
+      '" data-action="open-sms" data-cid="' + escapeHtml(c.id) +
+      '" data-stage="' + escapeHtml(touch.stage) +
+      '" title="Opens Messages on this device instead. Logged as unconfirmed.">Open in Messages</a>';
   } else if(route.mode === 'mac' && !win.ok){
     action = '<span class="msgx-sub">too late there \u2014 ' + escapeHtml(win.reason) + '</span>';
   } else if(route.mode === 'handoff'){
@@ -2531,6 +2548,9 @@ function renderMsgxThread(){
         escapeHtml(c.id) + '" title="Queue this for later. Every rule is checked again at send ' +
         'time, so it will not go out if they reply, opt out, or follow-ups are paused.">' +
         'Schedule\u2026</button>' +
+      '<button class="btn btn-sm phone-only" data-action="msgx-handoff-send" data-cid="' +
+        escapeHtml(c.id) + '" title="Opens Messages on this device with what you have typed. ' +
+        'Logged as unconfirmed.">Open in Messages</button>' +
       '<span class="msgx-sub">from Messages on your Mac</span></div>';
   } else if(route.mode === 'mac' && !win.ok){
     composer = '<div class="msgx-sub">Too late to text them \u2014 ' + escapeHtml(win.reason) +
@@ -5161,7 +5181,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261022-b89ed06e';
+var BUILD_STAMP = '20261023-e9d77532';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -8152,6 +8172,18 @@ function doSendReply(cid, target, textOverride, onDone){
    was awake -- and the queue it writes to would have nobody draining it.
    Asking at the moment of the click is what keeps this and the server
    agreeing about which route is live. */
+/* The sms: draft link, in one place.
+
+   Three sites were each rebuilding this by hand. A link that is right in two
+   of them and wrong in the third is the kind of bug that only appears for
+   contacts whose number is shaped unusually. */
+function smsHrefFor(client, text){
+  var digits = String((client && client.phone) || '').replace(/\D/g, '');
+  if(!digits) return '#';
+  var e164 = digits.length === 10 ? '+1' + digits : '+' + digits;
+  return 'sms:' + e164 + '&body=' + encodeURIComponent(text || '');
+}
+
 function doSendText(cid, stage, target){
   var client = STATE.clients[cid];
   if(!client) return;
