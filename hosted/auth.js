@@ -17,6 +17,7 @@ function gbShowSignedIn(){
   document.getElementById('app-root').classList.remove('hidden');
 }
 function gbShowSignedOut(){
+  if(window.gbAssistantStop) window.gbAssistantStop();
   document.getElementById('app-root').classList.add('hidden');
   document.getElementById('signin-screen').classList.remove('hidden');
 }
@@ -27,7 +28,8 @@ async function gbBoot(session){
   if(gbBooted) return; // already ran init() once this page load; auth events can fire more than once
   gbBooted = true;
   try{
-    await init(); // from app.js — awaits loadState() (data.js), then renderAll()
+    await init();
+    if(window.gbAssistantStart) window.gbAssistantStart(); // from app.js — awaits loadState() (data.js), then renderAll()
   }catch(e){
     console.error('Ghost Recall: failed to load your data', e);
     document.getElementById('signin-error').textContent =
