@@ -3260,7 +3260,8 @@ console.log('\n--- a dead calendar connection says so ---');
        The DOM stub is a noop proxy, so rendered markup cannot be read back to
        catch this. It is checkable statically, and worth checking for every
        button rather than just this one. */
-    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8') + '\n' +
+      fs.readFileSync(path.join(__dirname, 'hosted', 'assistant.js'), 'utf8');
     const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
 
     const used = new Set();
@@ -3281,7 +3282,7 @@ console.log('\n--- a dead calendar connection says so ---');
 
     const handled = new Set();
     for (const m of app.matchAll(/case '([a-z0-9-]+)'/g)) handled.add(m[1]);
-    for (const m of app.matchAll(/=== '([a-z0-9-]+)'/g)) handled.add(m[1]);
+    for (const m of app.matchAll(/(?:===|!==) '([a-z0-9-]+)'/g)) handled.add(m[1]);
 
     assert.ok(used.size > 50, 'the scan found almost no buttons — has the markup style changed?');
     assert.ok(used.has('sync-calendar-now'), 'sanity: the calendar notice\'s own action should be found');
