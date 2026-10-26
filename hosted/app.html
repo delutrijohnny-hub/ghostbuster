@@ -1723,6 +1723,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   .container{padding:10px;}
 }
 </style>
+<link rel="stylesheet" href="assistant.css?v=20261026-pilot1">
 </head>
 <body>
 
@@ -1803,6 +1804,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <div class="slime-drip" aria-hidden="true"></div>
 
 <nav class="tabs" aria-label="Sections">
+  <button class="tab-btn hidden" id="tab-btn-assistant" data-action="tab" data-tab="assistant">My assistant</button>
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
   <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
   <button class="tab-btn" data-action="tab" data-tab="threads">Texts <span id="threads-count"></span></button>
@@ -1854,6 +1856,20 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
     <button class="btn btn-sm" data-action="copy-remaining">Copy all <span id="remaining-count">0</span> remaining</button>
   </div>
 
+
+  <section class="tab-panel" id="tab-assistant" aria-label="My assistant">
+    <div class="assistant-shell">
+      <h2>Your next best steps</h2>
+      <p class="assistant-note">Private pilot · Suggestions and drafts for you to review.</p>
+      <div id="assistant-brief"></div>
+      <h3>Ask about my day</h3>
+      <label for="assistant-question">What should we focus on?</label>
+      <textarea id="assistant-question" maxlength="2000" placeholder="What should I tackle first, and how can I simplify my workflow?"></textarea>
+      <p class="assistant-note">Sends the displayed summary, up to 20 priorities and 10 open tasks to the existing AI service. Advice uses loaded data; it cannot change records or send messages.</p>
+      <button class="btn btn-green" data-action="assistant-ask">Ask assistant</button>
+      <div id="assistant-answer" role="status" aria-live="polite"></div>
+    </div>
+  </section>
 
   <div class="tab-panel active" id="tab-calls">
     <div id="recent-replies"></div>
@@ -2057,9 +2073,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261026-9d4c0655"></script>
-<script src="data.js?v=20261026-9d4c0655"></script>
-<script src="app.js?v=20261026-9d4c0655"></script>
-<script src="auth.js?v=20261026-9d4c0655"></script>
+<script src="logic.js?v=20261026-pilot1"></script>
+<script src="data.js?v=20261026-pilot1"></script>
+<script src="app.js?v=20261026-pilot1"></script>
+<script src="assistant.js?v=20261026-pilot1"></script>
+<script src="auth.js?v=20261026-pilot1"></script>
 </body>
 </html>

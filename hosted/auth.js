@@ -17,6 +17,7 @@ function gbShowSignedIn(){
   document.getElementById('app-root').classList.remove('hidden');
 }
 function gbShowSignedOut(){
+  if(typeof clearAssistant === 'function') clearAssistant();
   document.getElementById('app-root').classList.add('hidden');
   document.getElementById('signin-screen').classList.remove('hidden');
 }

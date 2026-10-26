@@ -1248,6 +1248,7 @@ function renderAll(){
   renderPendingInvites();
   renderTeamTab();
   renderOwnerTab();
+  if(typeof window.renderAssistant === 'function') window.renderAssistant();
   renderClosedTab();
   renderDeadTab();
   var eodCount = computeEndOfDayItems(STATE).length;
@@ -5190,7 +5191,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261026-9d4c0655';
+var BUILD_STAMP = '20261026-pilot1';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -8721,6 +8722,7 @@ function noteCalendarReturn(){
 
 async function init(){
   STATE = await loadState();
+  if(typeof window.initAssistant === 'function') window.initAssistant();
   /* The row is authoritative: it is what follows somebody to a new device,
      where the local mirror does not exist. */
   if(STATE && STATE.theme) applyTheme(STATE.theme);
