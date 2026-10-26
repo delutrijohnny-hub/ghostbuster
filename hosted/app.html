@@ -805,17 +805,19 @@ table.vp-table tr.leader td{background:var(--green-soft);}
 .vp-w-rate{flex:0 0 44px;text-align:right;}
 .vp-w-n{flex:0 0 150px;color:var(--muted);font-size:11.5px;}
 .vp-w-text{flex:1 1 auto;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-/* The handoff button exists only where it is the useful one.
+/* The handoff button, at every width.
 
-   Sending through the Mac is right at a desk and wrong in a pocket: that Mac
-   may be asleep or in another building, while the phone in your hand already
-   has Messages on it. So the draft handoff comes back below the width where
-   the workspace restacks -- the same 860px -- and stays out of the way above
-   it, where the Mac route confirms delivery and this cannot. */
-.phone-only{display:none;}
-@media (max-width: 860px){
-  .phone-only{display:inline-flex;}
-}
+   It was gated to phones on the reasoning that the Mac route is better at a
+   desk. True, but it assumed the Mac route works -- and on this account it
+   has not yet put a single message in front of a client. Hiding the one
+   route that is known to work, on the machine where the work is actually
+   done, left somebody unable to send on a Monday morning with 62 texts due.
+
+   A button that is sometimes there is also worse than one that always is:
+   you cannot build a habit around it. Both routes are offered everywhere now
+   and the Mac one stays primary, because when it works it confirms delivery
+   and this cannot. */
+.handoff-btn{display:inline-flex;}
 
 /* The header has to fit on one row of a phone.
 
@@ -2055,9 +2057,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261023-e9d77532"></script>
-<script src="data.js?v=20261023-e9d77532"></script>
-<script src="app.js?v=20261023-e9d77532"></script>
-<script src="auth.js?v=20261023-e9d77532"></script>
+<script src="logic.js?v=20261026-9d4c0655"></script>
+<script src="data.js?v=20261026-9d4c0655"></script>
+<script src="app.js?v=20261026-9d4c0655"></script>
+<script src="auth.js?v=20261026-9d4c0655"></script>
 </body>
 </html>

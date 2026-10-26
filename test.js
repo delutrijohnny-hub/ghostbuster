@@ -6770,7 +6770,7 @@ console.log('\n--- what the setup panel says is true ---');
 console.log('\n--- the day\'s cards on Today ---');
 
 {
-  const prefKey = (uid) => 'gr-ui:text-today-open:' + uid;
+  const prefKey = (uid) => 'gr-ui:text-today-open-v2:' + uid;
   const reset = (uid) => {
     sandbox.localStorage.clear();
     const st = GBFull.buildDefaultState();

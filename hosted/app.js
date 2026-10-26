@@ -1189,12 +1189,21 @@ function writeUiPref(name, val){
    the choice is kept: folding it is a personal way of working (you live in
    the workspace instead), not a decision to make on everybody's behalf. */
 function textTodayOpen(){
-  if(UI.textTodayOpen === null) UI.textTodayOpen = readUiPref('text-today-open', true);
+  /* Key bumped to -v2 deliberately, which resets everyone to open ONCE.
+
+     Before 22 October this fold reset on every page load, so hiding the
+     cards never stuck. Making it stick was right, but it also meant a single
+     click of "Hide the cards" -- or one made weeks ago, or by somebody
+     sharing the machine -- silently hid the day's work for good. That is a
+     bad way to find out, on a Monday with 62 texts due and somebody asking
+     where their reminders went. The preference keeps working from here; this
+     just clears the one state nobody chose on purpose. */
+  if(UI.textTodayOpen === null) UI.textTodayOpen = readUiPref('text-today-open-v2', true);
   return UI.textTodayOpen;
 }
 function setTextTodayOpen(v){
   UI.textTodayOpen = !!v;
-  writeUiPref('text-today-open', UI.textTodayOpen);
+  writeUiPref('text-today-open-v2', UI.textTodayOpen);
 }
 
 /* Which tab is open, on the body, so the stylesheet can reach it.
@@ -1730,7 +1739,7 @@ function buildTouchCard(client, stage, now){
          Offered as WELL rather than instead, because when the Mac is awake
          it remains the better route -- it confirms delivery and a handoff
          never can. */
-      actions.appendChild(h('a',{class:'btn btn-sm phone-only',
+      actions.appendChild(h('a',{class:'btn btn-sm handoff-btn',
         href: smsHrefFor(client, text),
         'data-action':'open-sms','data-cid':client.id,'data-stage':stage,
         title:'Opens Messages on this device instead. Logged as unconfirmed, because nothing here can see whether you pressed send.'},
@@ -2378,7 +2387,7 @@ function msgxTouchPanel(c, now){
       escapeHtml(c.id) + '" data-stage="' + escapeHtml(touch.stage) +
       '" title="Sends from Messages on your Mac, from your own number. Their reply comes back here.">' +
       'Send this touch</button>' +
-      '<a class="btn btn-sm phone-only" href="' + escapeHtml(smsHrefFor(c, touch.text)) +
+      '<a class="btn btn-sm handoff-btn" href="' + escapeHtml(smsHrefFor(c, touch.text)) +
       '" data-action="open-sms" data-cid="' + escapeHtml(c.id) +
       '" data-stage="' + escapeHtml(touch.stage) +
       '" title="Opens Messages on this device instead. Logged as unconfirmed.">Open in Messages</a>';
@@ -2548,7 +2557,7 @@ function renderMsgxThread(){
         escapeHtml(c.id) + '" title="Queue this for later. Every rule is checked again at send ' +
         'time, so it will not go out if they reply, opt out, or follow-ups are paused.">' +
         'Schedule\u2026</button>' +
-      '<button class="btn btn-sm phone-only" data-action="msgx-handoff-send" data-cid="' +
+      '<button class="btn btn-sm handoff-btn" data-action="msgx-handoff-send" data-cid="' +
         escapeHtml(c.id) + '" title="Opens Messages on this device with what you have typed. ' +
         'Logged as unconfirmed.">Open in Messages</button>' +
       '<span class="msgx-sub">from Messages on your Mac</span></div>';
@@ -5181,7 +5190,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261023-e9d77532';
+var BUILD_STAMP = '20261026-9d4c0655';
 
 /* Which settings section to scroll to once the modal is up.
 
