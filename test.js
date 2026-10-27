@@ -13,7 +13,24 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-const GB = require('./logic.js');
+/* The TRACKED copies are the ones under test.
+
+   hosted/logic.js and hosted/app.js are what Vercel serves and what git
+   carries. The root logic.js / app.js are a local-only desktop build and are
+   gitignored, so a fresh clone has neither -- and this suite could not start
+   at all there: `require('./logic.js')` threw MODULE_NOT_FOUND before the
+   first test ran. A test suite that only runs on one laptop is not a test
+   suite. Loading the shipped copies also removes a whole class of lie: the
+   suite can no longer pass against a file the browser never sees.
+
+   The mirror assertions below still check the root copies -- when they exist.
+   On a clean checkout they are skipped out loud, never silently. */
+const LOGIC_JS = path.join(__dirname, 'hosted', 'logic.js');
+const APP_JS   = path.join(__dirname, 'hosted', 'app.js');
+const ROOT_LOGIC_JS = path.join(__dirname, 'logic.js');
+const ROOT_APP_JS   = path.join(__dirname, 'app.js');
+
+const GB = require('./hosted/logic.js');
 
 /* "h o'clock today, in the timezone the fixture's client actually lives in."
 
@@ -64,8 +81,8 @@ function atHourInZone(hour, tz, base) {
   console.log('  ok  - atHourInZone anchors to the client timezone, not the machine');
 })();
 
-const logicSrc = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
-const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+const logicSrc = fs.readFileSync(LOGIC_JS, 'utf8');
+const appSrc = fs.readFileSync(APP_JS, 'utf8');
 const code = logicSrc + '\n' + appSrc;
 
 // node --check equivalent: make sure both files still parse as valid JS together.
@@ -282,10 +299,14 @@ function assertDue(actual, expected) {
 // silently once already: uuid() and recordEvent() were added to one copy and
 // the deployed build shipped without them.
 {
-  const a = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
-  const b = fs.readFileSync(path.join(__dirname, 'hosted', 'logic.js'), 'utf8');
-  assert.strictEqual(a, b, 'logic.js and hosted/logic.js have drifted — run: cp logic.js hosted/logic.js');
-  console.log('  ok  - logic.js and hosted/logic.js are byte-identical');
+  if(!fs.existsSync(ROOT_LOGIC_JS)){
+    console.log('  skip- no root logic.js here (gitignored local build); hosted/logic.js is under test directly');
+  } else {
+    const a = fs.readFileSync(ROOT_LOGIC_JS, 'utf8');
+    const b = fs.readFileSync(LOGIC_JS, 'utf8');
+    assert.strictEqual(a, b, 'logic.js and hosted/logic.js have drifted — run: cp hosted/logic.js logic.js');
+    console.log('  ok  - logic.js and hosted/logic.js are byte-identical');
+  }
 }
 
 /* app.js needs the same guard, and did not have it.
@@ -303,10 +324,14 @@ function assertDue(actual, expected) {
    the stubs above existed. A copy that cannot be loaded is a copy that gets
    quietly abandoned. */
 {
-  const a = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
-  const b = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  assert.strictEqual(a, b, 'app.js and hosted/app.js have drifted — run: cp hosted/app.js app.js');
-  console.log('  ok  - app.js and hosted/app.js are byte-identical');
+  if(!fs.existsSync(ROOT_APP_JS)){
+    console.log('  skip- no root app.js here (gitignored local build); hosted/app.js is under test directly');
+  } else {
+    const a = fs.readFileSync(ROOT_APP_JS, 'utf8');
+    const b = fs.readFileSync(APP_JS, 'utf8');
+    assert.strictEqual(a, b, 'app.js and hosted/app.js have drifted — run: cp hosted/app.js app.js');
+    console.log('  ok  - app.js and hosted/app.js are byte-identical');
+  }
 }
 
 // The Edge Function shares logic.js rather than reimplementing the cadence.
@@ -315,10 +340,10 @@ function assertDue(actual, expected) {
 // A third copy of computeDue would be considerably worse: it decides what gets
 // sent to real people, unattended.
 {
-  const a = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const a = fs.readFileSync(LOGIC_JS, 'utf8');
   const b = fs.readFileSync(path.join(__dirname, 'supabase', 'functions', '_shared', 'logic.js'), 'utf8');
   assert.strictEqual(a, b,
-    'logic.js and supabase/functions/_shared/logic.js have drifted — run: cp logic.js supabase/functions/_shared/logic.js');
+    'hosted/logic.js and supabase/functions/_shared/logic.js have drifted — run: cp hosted/logic.js supabase/functions/_shared/logic.js');
   console.log('  ok  - the Edge Function shares the same logic.js, byte for byte');
 }
 
@@ -3361,7 +3386,7 @@ test('no source file names one customer\'s domain in its logic', () => {
   // The cheapest possible guard against this whole class of bug. A mention in
   // a COMMENT is fine — explaining the history is useful; a mention in code
   // that runs is one business's details deciding another's behaviour.
-  const files = ['logic.js', 'hosted/data.js', 'hosted/app.js',
+  const files = ['hosted/logic.js', 'hosted/data.js', 'hosted/app.js',
                  path.join('supabase','functions','_shared','parse.ts')];
   files.forEach(rel => {
     const code = codeOnly(fs.readFileSync(path.join(__dirname, rel), 'utf8'));
@@ -11192,7 +11217,7 @@ console.log('\n--- the team view ---');
     assert.strictEqual(m.touchesPerCall, 0.9);
     assert.strictEqual(GB.teamMemberState(row({pastCalls:0}), now).touchesPerCall, null);
 
-    const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+    const logic = fs.readFileSync(LOGIC_JS, 'utf8');
     const block = logic.slice(logic.indexOf('touchesPerCall:') - 400, logic.indexOf('touchesPerCall:'));
     assert.ok(/not cause|Activity, not cause/i.test(block),
       'the comment no longer warns that this is not a causal figure');
@@ -13559,7 +13584,7 @@ test('the state and the reason never mention it', () => {
   /* It is a coaching signal, not a verdict. Somebody texting at 11pm is still
      working their list, and folding this into the state would hide the thing
      the state is for. */
-  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const logic = fs.readFileSync(LOGIC_JS, 'utf8');
   const fn = logic.slice(logic.indexOf('function teamMemberState'),
                          logic.indexOf('function teamOverview'));
   const stateBlock = fn.slice(0, fn.indexOf('return {'));
@@ -13669,7 +13694,7 @@ test('the backlog never becomes a reply rate', () => {
      That is the exact trap the reply-rate refusal exists to avoid: it would
      read 0% for everyone who has not reviewed, which is a confident claim
      about their copy drawn from nobody having looked. */
-  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const logic = fs.readFileSync(LOGIC_JS, 'utf8');
   const fn = logic.slice(logic.indexOf('function teamMemberState'),
                          logic.indexOf('function teamOverview'));
   /* Behavioural, not a regex over the source: the return object lists
@@ -14901,7 +14926,7 @@ test('typing a name marks it as confirmed', () => {
     'a hand-typed name is not marked, so the next sync silently replaces it '
       + 'with "Unknown" again — the worst shape of this bug, because they fix '
       + 'it, see it fixed, and find it undone days later');
-  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const logic = fs.readFileSync(LOGIC_JS, 'utf8');
   assert.ok(/nameConfirmed: raw\.nameConfirmed === true,/.test(logic),
     'the flag does not survive sanitising');
   const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
@@ -15202,7 +15227,7 @@ test('the best/worst weekday claim is gone', () => {
      construction, and tested against real data it came out at about 1.4
      standard errors. Attendance by time of day replaces it on the team view,
      where bands are listed and never ranked. */
-  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const logic = fs.readFileSync(LOGIC_JS, 'utf8');
   const fn = logic.slice(logic.indexOf('function computeInsights(state){'),
                          logic.indexOf('function computeInsights(state){') + 4000);
   const code = codeOnly(fn);
@@ -15300,7 +15325,7 @@ test('the stage is actually fetched', () => {
 });
 
 test('it rides on the row and shows only once it is a pattern', () => {
-  const logic = fs.readFileSync(path.join(__dirname, 'logic.js'), 'utf8');
+  const logic = fs.readFileSync(LOGIC_JS, 'utf8');
   assert.ok(/noShowsUnchased: Number\(m\.noShowsUnchased\) \|\| 0,/.test(logic),
     'the count is dropped at the state boundary');
   const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
@@ -16111,6 +16136,240 @@ console.log('\n--- appearance: presets and derived tokens ---');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', 1), '#ffffff');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', 5), '#ffffff', 'the range was not clamped');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', -3), '#000000');
+  });
+}
+
+console.log('\n--- the one action queue ---');
+{
+  /* The defect this replaced, stated as a test.
+
+     Four counters answered "what needs doing today" from four derivations.
+     On this fixture, at this instant, they returned 2, 3, 1 and 4. The point
+     of actionQueue is that there is now one number and it says what it
+     counts. The old functions are kept and still tested -- other screens use
+     them -- but nothing labelled "due" may disagree with the queue again. */
+  const now = new Date('2026-10-26T15:00:00Z');       // 11:00 New York
+  const inMin  = (m) => new Date(now.getTime() + m * 60000).toISOString();
+  const agoMin = (m) => new Date(now.getTime() - m * 60000).toISOString();
+  const agoDay = (d) => new Date(now.getTime() - d * 86400000).toISOString();
+  let seq = 0;
+  const mk = (o) => GB.sanitizeClient(Object.assign(
+    {name:'X', phone:'201555' + String(1000 + (++seq)), timezone:'America/New_York',
+     status:'Booked', bookedDate: agoDay(3)}, o));
+  const st = (clients) => {
+    const x = GB.buildDefaultState(); x.senderName = 'J'; x.clients = {};
+    clients.forEach(c => { x.clients[c.id] = c; });
+    return x;
+  };
+  const groups = (rows) => rows.map(r => r.group);
+
+  test('a reply waiting leads the queue', () => {
+    const replied = mk({id:'b', name:'Replied', status:'Confirmed',
+      callDateTime: inMin(60 * 24 * 10),
+      replies:[{id:'r', at: agoMin(90), text:'what time again?'}]});
+    const due = mk({id:'a', name:'Due'});
+    const q = GB.actionQueue(st([due, replied]), now);
+    assert.strictEqual(q[0].clientId, 'b', 'the person waiting on an answer comes first');
+    assert.strictEqual(q[0].group, 'needs_response');
+    assert.strictEqual(q[0].nextAction.label, 'Reply');
+  });
+
+  test('an appointment inside the hour still jumps the reply', () => {
+    /* The contradiction named in ACTION_RULES. The brief says replies first;
+       the rule already here says an imminent unconfirmed call cannot wait.
+       Both hold, at different distances. */
+    const soon = mk({id:'a', name:'Soon', callDateTime: inMin(40)});
+    const replied = mk({id:'b', name:'Replied', status:'Confirmed',
+      callDateTime: inMin(60 * 24 * 10),
+      replies:[{id:'r', at: agoMin(8), text:'can we move it?'}]});
+    const q = GB.actionQueue(st([soon, replied]), now);
+    assert.deepStrictEqual(groups(q), ['call_at_risk', 'needs_response']);
+  });
+
+  test('an appointment four hours out does not jump the reply', () => {
+    const later = mk({id:'a', name:'Later', callDateTime: inMin(200)});
+    const replied = mk({id:'b', name:'Replied', status:'Confirmed',
+      callDateTime: inMin(60 * 24 * 10),
+      replies:[{id:'r', at: agoMin(8), text:'can we move it?'}]});
+    const q = GB.actionQueue(st([later, replied]), now);
+    assert.strictEqual(q[0].group, 'needs_response',
+      'past the imminent window the brief’s order applies');
+  });
+
+  test('quiet hours hold a follow-up instead of counting it as doable', () => {
+    /* The lie the old "texts due today" told: it offered work for somebody
+       it was 5am for, and send-sms would have refused it. */
+    /* Area code 808, not 201. sanitizeClient resolves the timezone from the
+       AREA CODE and only trusts the stored column when somebody has confirmed
+       it by hand -- so a fixture that sets timezone and leaves a New Jersey
+       number is quietly a New Jersey client. Caught by this test failing. */
+    const owl = mk({id:'a', name:'Night Owl', phone:'8085550123',
+                    timezone:'Pacific/Honolulu'});
+    const q = GB.actionQueue(st([owl]), now);
+    assert.strictEqual(q.length, 1, 'the row is kept, not hidden');
+    assert.strictEqual(q[0].eligible, false);
+    assert.ok(/where they are/.test(q[0].holdReason || ''),
+      'a held row must say why: ' + q[0].holdReason);
+    const counts = GB.actionQueueCounts(q);
+    assert.strictEqual(counts.tasks, 0, 'held work is not a task you can do');
+    assert.strictEqual(counts.held, 1);
+  });
+
+  test('tasks and people are counted separately and never confused', () => {
+    /* One human who owes you a reply AND has a follow-up due is two
+       reasons and one person. "52 due" and "35 need attention" were this
+       distinction going unmade. */
+    const both = mk({id:'a', name:'Both',
+      replies:[{id:'r', at: agoMin(200), text:'sorry, been busy'}]});
+    const q = GB.actionQueue(st([both]), now);
+    const counts = GB.actionQueueCounts(q);
+    assert.strictEqual(counts.clients, 1, 'one person');
+    assert.strictEqual(q.length, 1, 'one row, worst reason shown');
+    assert.ok(q[0].alsoCount >= 1, 'and it says there is more behind it');
+  });
+
+  test('an opt-out never appears as sendable work', () => {
+    const out = mk({id:'a', name:'Stopped', smsStatus:'opted_out'});
+    const rows = GB.actionQueue(st([out]), now)
+      .filter(r => r.group !== 'needs_response');
+    assert.deepStrictEqual(rows, [], 'opted out is not follow-up work');
+  });
+
+  test('paused follow-ups stay out of the queue', () => {
+    const paused = mk({id:'a', name:'Paused',
+      automationPausedUntil: inMin(60 * 48)});
+    const rows = GB.actionQueue(st([paused]), now)
+      .filter(r => r.group === 'follow_up_due');
+    assert.deepStrictEqual(rows, [], 'a pause the user set must be honoured');
+  });
+
+  test('an archived contact is not work', () => {
+    assert.deepStrictEqual(
+      GB.actionQueue(st([mk({id:'a', ignored:true, callDateTime: inMin(10)})]), now), []);
+  });
+
+  test('a past appointment is never an upcoming one', () => {
+    /* Reported from the live app: a call that had already happened sat under
+       "Upcoming". call_at_risk requires minutes REMAINING, so a past
+       appointment can only ever reach the queue as missed work. */
+    const past = mk({id:'a', name:'Yesterday', callDateTime: agoMin(60 * 26)});
+    const q = GB.actionQueue(st([past]), now);
+    assert.ok(!q.some(r => r.group === 'call_at_risk'),
+      'a past appointment must not be queued as one to confirm');
+    assert.deepStrictEqual(GB.upcomingCalls(st([past]), now), [],
+      'and it must not appear in upcoming calls either');
+  });
+
+  test('a confirmed appointment is not an appointment to confirm', () => {
+    const ok = mk({id:'a', name:'Yes', status:'Confirmed', callDateTime: inMin(45)});
+    assert.ok(!GB.actionQueue(st([ok]), now).some(r => r.group === 'call_at_risk'));
+  });
+
+  test('being reminded is not the same as having confirmed', () => {
+    /* 'Reminded' is a fact about us. Reading it as confirmation is how an
+       unconfirmed appointment stops being flagged because somebody chased it. */
+    const nudged = mk({id:'a', name:'Nudged', status:'Reminded', callDateTime: inMin(30)});
+    assert.ok(GB.actionQueue(st([nudged]), now).some(r => r.group === 'call_at_risk'));
+  });
+
+  test('the queue never offers a send the send path would refuse', () => {
+    /* The invariant that makes this one source of truth rather than a fifth
+       opinion: every eligible cadence row must pass the same gate send-sms
+       and the scheduler enforce. */
+    const book = [
+      mk({id:'a', name:'Plain'}),
+      mk({id:'b', name:'Owl', phone:'8085550125', timezone:'Pacific/Honolulu'}),
+      mk({id:'c', name:'Stopped', smsStatus:'opted_out'}),
+      mk({id:'d', name:'Paused', automationPausedUntil: inMin(60 * 48)}),
+      mk({id:'e', name:'NoPhone', phone:'555'}),
+      mk({id:'f', name:'Soon', callDateTime: inMin(30)}),
+      mk({id:'g', name:'Done', status:'Completed'})
+    ];
+    const state = st(book);
+    const q = GB.actionQueue(state, now);
+    q.forEach(r => {
+      if(r.group === 'needs_response' || r.group === 'call_at_risk') return;
+      if(!r.eligible) return;
+      const check = GB.scheduledSendCheck(state.clients[r.clientId], now);
+      assert.ok(check.ok,
+        r.name + ' is offered as doable work but the send path refuses it: ' + check.reason);
+    });
+  });
+
+  test('a contact with no usable number is not quietly dropped into nothing', () => {
+    /* It must not be offered as a text -- and it must not be invisible
+       either. It is a data problem, and that is where it belongs. */
+    const bad = mk({id:'a', name:'NoPhone', phone:'555'});
+    const state = st([bad]);
+    assert.deepStrictEqual(
+      GB.actionQueue(state, now).filter(r => r.group === 'follow_up_due'), []);
+    assert.ok(/phone/i.test(GB.scheduledSendCheck(state.clients.a, now).reason || ''),
+      'the reason it cannot be texted must be stated somewhere');
+  });
+
+  test('every eligible row carries a reason, a time kind and one action', () => {
+    const book = [
+      mk({id:'a', name:'Plain'}),
+      mk({id:'b', name:'Soon', callDateTime: inMin(30)}),
+      mk({id:'c', name:'Replied', status:'Confirmed', callDateTime: inMin(60*24*9),
+          replies:[{id:'r', at: agoMin(30), text:'hi'}]})
+    ];
+    const q = GB.actionQueue(st(book), now);
+    assert.ok(q.length >= 3);
+    q.forEach(r => {
+      assert.ok(r.reason && r.reason.length > 3, r.name + ' has no reason');
+      assert.ok(r.nextAction && r.nextAction.label, r.name + ' has no next action');
+      assert.ok(GB.ACTION_GROUPS.indexOf(r.group) !== -1, r.name + ' has an unknown group');
+      assert.ok(GB.ACTION_GROUP_LABELS[r.group], r.group + ' has no human label');
+    });
+  });
+
+  test('ordering is stable whatever order the book arrives in', () => {
+    const book = [
+      mk({id:'a', name:'A'}), mk({id:'b', name:'B'}),
+      mk({id:'c', name:'C', callDateTime: inMin(90)}),
+      mk({id:'d', name:'D', status:'Confirmed', callDateTime: inMin(60*24*8),
+          replies:[{id:'r', at: agoMin(20), text:'hi'}]})
+    ];
+    const fwd = GB.actionQueue(st(book), now).map(r => r.clientId);
+    const rev = GB.actionQueue(st(book.slice().reverse()), now).map(r => r.clientId);
+    assert.deepStrictEqual(fwd, rev);
+  });
+
+  test('a reply suppresses the routine nudge but keeps the person in the queue', () => {
+    /* computeDue already holds the automated touches after a reply. What
+       matters here is that they do not then disappear altogether: the reply
+       is the work now. */
+    const replied = mk({id:'a', name:'Wrote Back',
+      messageLog:[{id:'m', channel:'sms', stage:'welcome', text:'hi',
+                   sentAt: agoMin(120), deliveryStatus:'delivered'}],
+      replies:[{id:'r', at: agoMin(60), text:'interested, send details'}]});
+    const q = GB.actionQueue(st([replied]), now);
+    assert.strictEqual(q.length, 1);
+    assert.strictEqual(q[0].group, 'needs_response',
+      'the reply is the job, not the next scripted touch');
+  });
+
+  test('actionQueueNow and actionQueueHeld partition the queue exactly', () => {
+    const book = [mk({id:'a', name:'Plain'}),
+                  mk({id:'b', name:'Owl', phone:'8085550124',
+                      timezone:'Pacific/Honolulu'})];
+    const q = GB.actionQueue(st(book), now);
+    assert.strictEqual(GB.actionQueueNow(q).length + GB.actionQueueHeld(q).length, q.length);
+    assert.ok(GB.actionQueueNow(q).every(r => r.eligible));
+    assert.ok(GB.actionQueueHeld(q).every(r => !r.eligible && r.holdReason));
+  });
+
+  test('an empty book is an empty queue, not an error', () => {
+    assert.deepStrictEqual(GB.actionQueue(st([]), now), []);
+    const counts = GB.actionQueueCounts([]);
+    assert.strictEqual(counts.tasks, 0);
+    assert.strictEqual(counts.clients, 0);
+  });
+
+  test('a missing state never throws', () => {
+    assert.deepStrictEqual(GB.actionQueue(null, now), []);
+    assert.deepStrictEqual(GB.actionQueue({}, now), []);
   });
 }
 

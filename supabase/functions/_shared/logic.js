@@ -4169,6 +4169,268 @@ function priorityQueue(state, now){
   return rows;
 }
 
+/* ====================== THE ACTION QUEUE ======================
+
+   One list. Everything on screen that claims to say what needs doing is a
+   view of this, and nothing recounts it from the client book.
+
+   Before this there were four answers to the same question. Asked of one
+   five-contact fixture at one instant they came back 2, 3, 1 and 4:
+
+     Today "Due now"      dueSplit over conversationList
+     Today "texts due"     getTextTodayList
+     "N need attention"    rankByGhostScore -- a SCORE band
+     Texts "Action"        priorityQueue
+
+   They disagreed for real reasons, which is the point: each had picked up a
+   rule the others never heard about. getTextTodayList knows one relationship
+   text per person per day, the revival cap, the graveyard rule, and that two
+   client rows can be one human. priorityQueue knows a reply waiting is work.
+   conversationList knows the send window. rankByGhostScore was answering a
+   different question altogether while sitting next to the others as though
+   it were not.
+
+   So this re-derives none of it. The cadence rows ARE getTextTodayList --
+   the day's send list and the day's queue cannot disagree when they are the
+   same array -- and eligibility IS scheduledSendCheck, the gate the
+   scheduler and send-sms already enforce. Replies, unconfirmed calls and
+   missed calls are added on top, because the cadence has no stage for them.
+
+   A row that is real work but not doable yet keeps its place with
+   eligible:false and a reason, rather than vanishing. "Nothing to do" and
+   "nothing you can do until 8am where they are" are different days. */
+
+var ACTION_GROUPS = ['needs_response', 'call_at_risk', 'confirmation_due',
+                     'missed', 'follow_up_due'];
+
+/* Replies first, which reorders what priorityQueue did.
+
+   priorityQueue led with call_at_risk. A person who wrote to you and is
+   waiting is a commitment already made; an unconfirmed appointment is one
+   the cadence is already chasing on its own, unattended, whether or not
+   anybody reads this list. Ordering by who is actually waiting on a human
+   is the brief, and it costs the reminders nothing -- they do not depend on
+   being seen here to go out. */
+var ACTION_GROUP_LABELS = {
+  needs_response:   'Replies needing you',
+  call_at_risk:     'Appointments to confirm',
+  confirmation_due: 'Confirmation reminders due',
+  missed:           'Missed appointments',
+  follow_up_due:    'Follow-ups due'
+};
+
+/* callAtRiskMin  -- how far ahead an unconfirmed appointment starts nagging.
+   callImminentMin -- how close it has to be to jump the whole queue.
+
+   The second one settles a genuine contradiction rather than splitting a
+   difference. The brief asks for replies first. The rule already in this
+   codebase, written with its reasoning and covered by a test, says an
+   unconfirmed call soon outranks an unanswered reply -- because a reply can
+   be answered in ten minutes and an appointment nobody confirmed cannot be
+   un-missed. Both are right about different distances.
+
+   So the brief's order is the default, and an appointment inside the hour
+   takes the top. Past an hour, the person waiting on an answer leads.
+   Flagged for Johnny: if he wants replies first even at ten minutes to the
+   call, set this to 0 and the ordering is his. */
+var ACTION_RULES = { callAtRiskMin: 240, callImminentMin: 60 };
+
+/* The single next action for a row, named as a verb somebody can do.
+
+   One action, not a row of equally weighted buttons: deciding what to do is
+   the job this list exists to have already done. */
+function actionQueueNextAction(group, row){
+  if(group === 'needs_response') return {kind: 'reply',   label: 'Reply'};
+  if(group === 'call_at_risk')   return {kind: 'confirm', label: 'Confirm the time'};
+  if(group === 'missed')         return {kind: 'send',    label: 'Follow up'};
+  if(group === 'confirmation_due') return {kind: 'send',  label: 'Send the reminder'};
+  return {kind: 'send', label: 'Send the follow-up'};
+}
+
+function actionQueue(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  /* A half-built state is a real case: this runs from a render that can fire
+     before loadState has finished, and getTextTodayList reads state.clients
+     without guarding. An empty queue is the honest answer; a thrown
+     TypeError takes the screen down. */
+  if(!state || !state.clients) return [];
+  var cand = {};                       // clientId -> [candidate, ...]
+
+  function push(cid, c){
+    if(!cand[cid]) cand[cid] = [];
+    cand[cid].push(c);
+  }
+
+  /* 1. They spoke last and nobody has answered.
+
+     Taken from conversationList so "waiting" means exactly what the inbox
+     means by it, notes excluded. Always eligible: a person is waiting, and
+     whether it is a civilised hour to write back is a fact the row carries
+     rather than a reason to hide them. */
+  var convRows = conversationList(state, now);
+  convRows.forEach(function(r){
+    if(!r.awaitingReply) return;
+    var c = clients[r.clientId];
+    if(!c) return;
+    var waited = r.lastT ? Math.max(0, Math.round((now.getTime() - r.lastT) / 60000)) : 0;
+    push(r.clientId, {
+      group: 'needs_response',
+      reason: 'Reply waiting · ' + waitedLabel(waited),
+      at: r.lastAt || null, atKind: 'replied',
+      channel: r.lastChannel || 'sms',
+      eligible: true, hold: false, holdReason: null,
+      sort: -waited
+    });
+  });
+
+  /* 2. Cadence work, as the send list itself.
+
+     getTextTodayList is the day's work. Eligibility on top of it is
+     scheduledSendCheck, so a row in this queue is a row send-sms would
+     accept -- except for `hold`, which is quiet hours and means later today
+     rather than never. Anything else scheduledSendCheck refuses is work
+     that is handled, paused or unsendable, and the brief says keep it out of
+     the default list; it is still reachable as a data problem, which is
+     where an unusable phone number belongs. */
+  getTextTodayList(state, now, '').forEach(function(it){
+    var c = it.client;
+    if(!c) return;
+    var stage = it.stage;
+    var group = (stage === 'dayof' || stage === 'hourbefore') ? 'confirmation_due'
+              : (stage === 'noshow') ? 'missed'
+              : 'follow_up_due';
+    var check = scheduledSendCheck(c, now);
+    if(!check.ok && !check.hold) return;
+    var lastAt = lastContactAt(c);
+    var quiet = lastAt ? Math.round((now.getTime() - Date.parse(lastAt)) / 60000) : null;
+    var mins = minutesUntil(c.callDateTime, now);
+    push(c.id, {
+      group: group,
+      reason: group === 'confirmation_due' ? 'Confirmation reminder due'
+            : group === 'missed' ? 'Missed the call · follow up'
+            : (quiet === null ? 'Follow-up due'
+                              : 'Follow-up due · quiet ' + waitedLabel(quiet)),
+      at: group === 'missed' || group === 'confirmation_due'
+            ? (c.callDateTime || null) : lastAt,
+      atKind: group === 'missed' || group === 'confirmation_due'
+            ? 'appointment' : 'last_contact',
+      channel: 'sms',
+      stage: stage,
+      eligible: !!check.ok,
+      hold: !check.ok && !!check.hold,
+      holdReason: check.ok ? null : check.reason,
+      sort: mins === null ? 0 : mins
+    });
+  });
+
+  /* 3. An appointment close enough that being unconfirmed still matters.
+
+     Separate from the cadence: the reminder may already have gone out and
+     still not have been answered, and "we sent one" is a fact about us.
+     Confirmed means THEY said yes. */
+  Object.keys(clients).forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    if(isOthersLead(c, (state && state.myCalendars) || [])) return;
+    var mins = minutesUntil(c.callDateTime, now);
+    if(mins === null || mins <= 0 || mins > ACTION_RULES.callAtRiskMin) return;
+    if(appointmentConfirmed(c) || stopsCadence(c.status)) return;
+    push(cid, {
+      group: 'call_at_risk',
+      reason: 'Call in ' + waitedLabel(mins) + ' · Not confirmed',
+      at: c.callDateTime, atKind: 'appointment',
+      channel: 'sms',
+      eligible: true, hold: false, holdReason: null,
+      sort: mins
+    });
+  });
+
+  /* Worst reason wins, the rest are counted. Somebody reading one line
+     should still be able to see there is more behind it. */
+  var rows = [];
+  Object.keys(cand).forEach(function(cid){
+    var c = clients[cid];
+    var list = cand[cid];
+    list.sort(function(a, b){
+      return ACTION_GROUPS.indexOf(a.group) - ACTION_GROUPS.indexOf(b.group);
+    });
+    var top = list[0];
+    rows.push({
+      clientId: cid,
+      name: c.name,
+      phone: c.phone || '',
+      status: c.status,
+      smsStatus: c.smsStatus || 'ok',
+      timezone: c.timezone || null,
+      group: top.group,
+      reason: top.reason,
+      stage: top.stage || null,
+      channel: top.channel || 'sms',
+      at: top.at || null,
+      atKind: top.atKind || null,
+      callAt: c.callDateTime || null,
+      eligible: top.eligible,
+      hold: top.hold,
+      holdReason: top.holdReason,
+      nextAction: actionQueueNextAction(top.group, top),
+      alsoCount: list.length - 1,
+      sort: top.sort
+    });
+  });
+
+  /* Group order, then urgency inside it, then the id as a stable tie-break.
+     Without the id two equally urgent rows can swap places between renders,
+     and a list that reorders itself while being read is one somebody loses
+     their place in. */
+  function rank(r){
+    /* An appointment inside the hour is the one thing that cannot wait for
+       anything else on this list. See ACTION_RULES.callImminentMin. */
+    if(r.group === 'call_at_risk' && r.sort !== null &&
+       r.sort <= ACTION_RULES.callImminentMin) return -1;
+    return ACTION_GROUPS.indexOf(r.group);
+  }
+  rows.sort(function(a, b){
+    var ga = rank(a), gb = rank(b);
+    if(ga !== gb) return ga - gb;
+    if(a.sort !== b.sort) return a.sort - b.sort;
+    return a.clientId < b.clientId ? -1 : (a.clientId > b.clientId ? 1 : 0);
+  });
+  return rows;
+}
+
+/* The counts, from the rows, saying what each one counts.
+
+   Four numbers on one screen that were all called some variant of "due" is
+   how 52, 24, 35 and 63 ended up side by side. These are deliberately named
+   for their unit: `tasks` are jobs, `clients` are people, and the two are
+   never interchangeable -- one person can owe you a reply AND have a
+   follow-up due, which is two tasks and one human. */
+function actionQueueCounts(rows){
+  var all = rows || [];
+  var out = {tasks: 0, held: 0, clients: 0, byGroup: {}};
+  var seen = {};
+  ACTION_GROUPS.forEach(function(g){ out.byGroup[g] = 0; });
+  all.forEach(function(r){
+    if(r.eligible) out.tasks++; else out.held++;
+    if(r.eligible) out.byGroup[r.group] = (out.byGroup[r.group] || 0) + 1;
+    if(!seen[r.clientId]){ seen[r.clientId] = true; out.clients++; }
+  });
+  return out;
+}
+
+/* The focused view: what can actually be done now. Today renders this. */
+function actionQueueNow(rows){
+  return (rows || []).filter(function(r){ return r.eligible; });
+}
+
+/* Real work that is simply not yet doable, with the reason attached. Shown
+   as its own small line rather than mixed into the day's count, because a
+   number somebody cannot act on is one they learn to ignore. */
+function actionQueueHeld(rows){
+  return (rows || []).filter(function(r){ return !r.eligible; });
+}
+
 /* Who to work next, without losing your place.
 
    Two cases, and the second is the one that matters. Normally "next" is the
@@ -8711,6 +8973,10 @@ var __LOGIC_EXPORTS__ = {
   upcomingCalls: upcomingCalls,
   nextInQueue: nextInQueue,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
+  ACTION_GROUPS: ACTION_GROUPS, ACTION_GROUP_LABELS: ACTION_GROUP_LABELS,
+  ACTION_RULES: ACTION_RULES, actionQueue: actionQueue,
+  actionQueueCounts: actionQueueCounts, actionQueueNow: actionQueueNow,
+  actionQueueHeld: actionQueueHeld, actionQueueNextAction: actionQueueNextAction,
   appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,
   nextActionLabel: nextActionLabel,
   lastContactAt: lastContactAt, clientSource: clientSource,
