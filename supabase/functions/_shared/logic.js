@@ -4700,14 +4700,33 @@ function assistantDataFindings(state, now){
    Where the two disagree the assistant would be describing a different
    account from the one on screen, which is the failure mode worth guarding
    hardest: it would be confident, specific and wrong. */
-function assistantStateFromRows(clientRows, inboundRows, viewerTz){
-  var state = {clients: {}, reads: {}, myCalendars: [],
+function assistantStateFromRows(clientRows, inboundRows, viewerTz, myCalendars){
+  /* myCalendars is NOT optional in practice, whatever the signature says.
+     isOthersLead returns false for everybody when it is empty -- "nothing to
+     compare against yet" -- so leaving it out silently counts every
+     colleague's booking as your own work. That is a quiet over-count, not an
+     error, which is the kind that survives. */
+  var state = {clients: {}, reads: {},
+               myCalendars: Array.isArray(myCalendars) ? myCalendars : [],
                viewerTimezone: viewerTz || 'UTC'};
   (clientRows || []).forEach(function(row){
     if(!row || !row.id) return;
     state.clients[row.id] = sanitizeClient({
       id: row.id, name: row.name, phone: row.phone, email: row.email,
       googleEventId: row.google_event_id, status: row.status,
+      /* organizerEmail is the field isOthersLead reads. Leaving it out made
+         every booking look unattributed, so a colleague's lead counted as
+         yours even once the calendars were being loaded -- two defects
+         stacked, and the second was invisible behind the first. */
+      organizerEmail: row.organizer_email || null,
+      eventTitle: row.event_title || null,
+      emailStatus: row.email_status || 'ok',
+      youtubeLink: row.youtube_link,
+      nameConfirmed: !!row.name_confirmed,
+      automationPausedNote: row.automation_paused_note || '',
+      /* Internal notes live in their own table and are never sent. The empty
+         array matters anyway: conversationThread reads it. */
+      threadNotes: [],
       callDateTime: row.call_date_time, bookedDate: row.booked_date,
       timezone: row.timezone, timezoneConfirmed: !!row.timezone_confirmed,
       notes: row.notes, recap: row.recap, ignored: !!row.ignored,
@@ -4729,6 +4748,10 @@ function assistantStateFromRows(clientRows, inboundRows, viewerTz){
           id: m.id, channel: m.channel || 'sms', stage: m.stage,
           variantId: m.variant_key, text: m.text, sentAt: m.sent_at,
           responded: !!m.responded, respondedAt: m.responded_at,
+          /* Read from the row, as loadState reads it. Omitted, sanitizeClient
+             falls back to !!responded -- a reasonable default for old data and
+             the wrong answer for a row that has the flag. */
+          reviewed: !!m.reviewed,
           /* Written by the webhooks and the agent, never by a browser.
              Dropping it here would turn every unconfirmed send into a
              confirmed one in the assistant's eyes. */

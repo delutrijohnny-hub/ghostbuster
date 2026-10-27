@@ -98,15 +98,49 @@ Deno.serve(async (req) => {
     const clients = await rest(
       `clients?user_id=eq.${encodeURIComponent(user.id)}` +
       `&select=id,name,phone,email,status,call_date_time,booked_date,timezone,timezone_confirmed,` +
+      `organizer_email,event_title,email_status,youtube_link,name_confirmed,automation_paused_note,` +
       `notes,recap,ignored,close_outcome,sms_status,automation_paused_until,snoozed_until,` +
       `skipped_stages,reschedules,reschedule_count,stalled_since,manually_added,google_event_id,` +
       `conversation_summary,conversation_summary_at,conversation_summary_through,` +
-      `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,delivery_status)` +
+      `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,reviewed,delivery_status)` +
       `&order=id&limit=1001`);
 
     if (clients.length > 1000) {
       return json({error: 'This account is larger than the pilot supports. No partial summary was produced, because a partial one would read as a complete one.'}, 422);
     }
+
+    /* The two things loadState sets that this used to skip, and both of them
+       change what the queue contains.
+
+       myCalendars decides isOthersLead: a booking organised by a colleague
+       that happens to sit on your calendar is not yours to follow up. With an
+       empty array isOthersLead returns false for EVERYBODY -- "nothing to
+       compare against yet" -- so the assistant counted 62 of his teammates'
+       bookings as his own work and reported 20 jobs where the screen said 11.
+       Caught by the first briefing ever run against the real book, by exactly
+       the comparison the panel exists to survive.
+
+       The sequence, pipeline and terminology are module-level globals inside
+       logic.js, set once by loadState. computeDue reads ACTIVE_SEQUENCE. This
+       account uses the default cadence today, so that half changed nothing
+       yet -- which is precisely why it had to be fixed now rather than after
+       somebody customises their follow-ups and the assistant starts quietly
+       describing a cadence they do not run. */
+    const [calRows, settingsRows] = await Promise.all([
+      rest(`google_oauth_tokens?user_id=eq.${encodeURIComponent(user.id)}&select=calendar_id`)
+        .catch(() => []),
+      rest(`app_settings?user_id=eq.${encodeURIComponent(user.id)}&select=sequence,pipeline,terminology`)
+        .catch(() => [])
+    ]);
+    const myCalendars = (calRows || [])
+      .map((r: any) => r.calendar_id).filter(Boolean);
+    const settings = (settingsRows || [])[0] || {};
+    /* Same order loadState uses, and ALWAYS called -- passing null resets each
+       one to its default, so a stale global cannot survive between requests
+       on a warm instance. */
+    GB.setPipeline(Array.isArray(settings.pipeline) && settings.pipeline.length ? settings.pipeline : null);
+    GB.setTerminology(settings.terminology || null);
+    GB.setSequence(Array.isArray(settings.sequence) && settings.sequence.length ? settings.sequence : null);
 
     const ids = new Set(clients.map((c: any) => c.id));
     const inbound: any[] = [];
@@ -126,7 +160,7 @@ Deno.serve(async (req) => {
        and therefore cannot check. assistantStateFromRows also drops any
        inbound row whose contact is outside the owner-filtered set, which is
        the one path by which team data could otherwise reach this pilot. */
-    const state = GB.assistantStateFromRows(clients, inbound, viewerTimezone);
+    const state = GB.assistantStateFromRows(clients, inbound, viewerTimezone, myCalendars);
 
     const now = new Date();
     const answer = mode === 'optimize'

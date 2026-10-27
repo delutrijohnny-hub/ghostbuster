@@ -16624,6 +16624,68 @@ console.log('\n--- the private assistant, deterministic part ---');
     assert.strictEqual(s.viewerTimezone, 'America/New_York');
   });
 
+  test('the assistant mapping carries every field loadState does', () => {
+    /* The over-count had two causes stacked: the calendars were not loaded,
+       AND organizer_email was never mapped onto the client at all -- so even
+       once the calendars arrived, isOthersLead saw an unattributed booking
+       and let it through. The second was invisible behind the first.
+
+       Comparing the two field lists is cheap and catches the whole class.
+       The assistant describes the same account the screen does, so a field
+       the screen reads and the assistant does not is a quiet divergence
+       waiting to happen. */
+    const dataSrc = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+    const loadBlock = dataSrc.slice(dataSrc.indexOf('state.clients[row.id] = {'),
+                                    dataSrc.indexOf('var seedNeeded'));
+    const logicSrcNow = fs.readFileSync(LOGIC_JS, 'utf8');
+    const mapBlock = logicSrcNow.slice(logicSrcNow.indexOf('function assistantStateFromRows'),
+                                       logicSrcNow.indexOf('/* The day, as one structure.'));
+    /* The field names loadState assigns, then checked for presence ANYWHERE
+       in the mapping rather than at the start of a line -- several are
+       written on shared lines (`id: row.id, name: row.name, ...`) and a
+       line-anchored match reports them missing when they are not. */
+    const inLoad = new Set(
+      (loadBlock.match(/^\s*([a-zA-Z][a-zA-Z0-9]*)\s*:/gm) || [])
+        .map(m => m.trim().replace(/\s*:$/, '')));
+    /* loadState's own bookkeeping, not a field on a client record. */
+    const notAClientField = new Set(['lastSync', 'user_id', 'variant_key', 'text']);
+    const missing = [...inLoad].filter(f =>
+      !notAClientField.has(f) && !new RegExp('\\b' + f + '\\s*:').test(mapBlock));
+    assert.deepStrictEqual(missing, [],
+      'assistantStateFromRows drops ' + missing.join(', ') + ' \u2014 the assistant would ' +
+      'be describing a different account from the one on screen');
+  });
+
+  test('a colleague\u2019s booking is not counted as your work', () => {
+    /* The first briefing ever run against the real book said "20 jobs across
+       43 people" while the screen beside it said 11. The cause: the endpoint
+       built its state with myCalendars defaulted to [], and isOthersLead
+       returns FALSE for everybody when it has nothing to compare against --
+       so 62 of his teammates' bookings, sitting on his calendar, were counted
+       as his own follow-ups.
+
+       It over-counted rather than erroring, which is why it needed a human
+       looking at two numbers to find it. */
+    const rows = [
+      {id:'mine',   name:'Mine',   phone:'2015551111', status:'Booked',
+       booked_date: agoD(4), organizer_email:'me@example.com'},
+      {id:'theirs', name:'Theirs', phone:'2015552222', status:'Booked',
+       booked_date: agoD(4), organizer_email:'colleague@example.com'}
+    ];
+    const withCals = GB.assistantStateFromRows(rows, [], 'UTC', ['me@example.com']);
+    assert.deepStrictEqual(withCals.myCalendars, ['me@example.com'],
+      'myCalendars was not carried onto the state');
+    const queued = GB.actionQueue(withCals, now).map(r => r.clientId);
+    assert.ok(queued.indexOf('mine') !== -1, 'your own booking fell out of the queue');
+    assert.ok(queued.indexOf('theirs') === -1,
+      'a colleague\u2019s booking is being counted as your work');
+
+    // And the shape of the bug: omit the calendars and the colleague returns.
+    const without = GB.assistantStateFromRows(rows, [], 'UTC');
+    assert.ok(GB.actionQueue(without, now).map(r => r.clientId).indexOf('theirs') !== -1,
+      'this fixture no longer demonstrates the over-count, so the test above proves nothing');
+  });
+
   test('an inbound row for a contact outside the set is dropped, not orphaned', () => {
     /* The one path by which another account's data could reach this pilot:
        a message filter that matched more than the owner filter did. */
@@ -16690,6 +16752,23 @@ console.log('\n--- the assistant endpoint and panel, as written ---');
       'the flag and the key are not BOTH required');
     const guard = fn.slice(fn.indexOf('function aiEnabled'), fn.indexOf('Deno.serve'));
     assert.ok(!/\|\|/.test(guard), 'the AI gate uses OR somewhere, so one condition alone enables it');
+  });
+
+  test('the endpoint loads everything loadState loads that changes the queue', () => {
+    /* Two module-level inputs decide what computeDue and getTextTodayList
+       return, and neither is a parameter: ACTIVE_SEQUENCE, and the calendars
+       isOthersLead compares against. Skipping either makes the assistant
+       describe a different account from the one on screen -- confidently. */
+    assert.ok(/google_oauth_tokens\?user_id=eq\./.test(fn),
+      'the endpoint never loads the calendars, so isOthersLead has nothing to ' +
+      'compare against and every colleague\u2019s booking counts as the pilot\u2019s work');
+    assert.ok(/assistantStateFromRows\(clients, inbound, viewerTimezone, myCalendars\)/.test(fn),
+      'the calendars are loaded but not passed through');
+    ['setPipeline', 'setTerminology', 'setSequence'].forEach(f => {
+      assert.ok(new RegExp('GB\\.' + f + '\\(').test(fn),
+        'the endpoint never calls ' + f + ', so it uses the built-in cadence ' +
+        'rather than this account\u2019s');
+    });
   });
 
   test('the endpoint holds no service-role key and filters by owner', () => {
