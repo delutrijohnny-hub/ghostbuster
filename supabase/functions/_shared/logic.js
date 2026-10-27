@@ -4476,6 +4476,14 @@ function actionQueueHeld(rows){
 
 var ASSISTANT_RECENT_DAYS = 30;
 
+/* How close two appointments have to be before two records describing them
+   look like one booking entered twice rather than a client returning.
+
+   Two days, not more: a no-show rebooked five days later is a genuine
+   return, and on this book that is the common case. Two days, not fewer:
+   a duplicate import can land either side of midnight in another timezone. */
+var DUPLICATE_WINDOW_DAYS = 2;
+
 /* How much of the history this is actually looking at.
 
    A briefing that silently covers 30 days reads as a briefing about
@@ -4569,49 +4577,111 @@ function assistantDataFindings(state, now){
       {count: stale.length, statuses: ['Booked', 'Confirmed', 'Reminded']});
   }
 
-  /* 3. Two records, one phone. Flagged, never merged: the same number can
-        legitimately belong to a rebooked contact, which is how rebooked and
-        followup know who somebody is. */
-  var byPhone = {};
-  ids.forEach(function(cid){
-    var c = clients[cid];
-    if(!c || c.ignored) return;
-    var k = phoneKey(c.phone || '');
-    if(k.length < 10) return;
-    (byPhone[k] = byPhone[k] || []).push(cid);
-  });
-  var phoneDupes = [];
-  Object.keys(byPhone).forEach(function(k){ if(byPhone[k].length > 1) phoneDupes.push(byPhone[k]); });
-  if(phoneDupes.length){
-    var flat = [];
-    phoneDupes.forEach(function(g){ g.forEach(function(id){ flat.push(id); }); });
-    add('possible_duplicate_phone', flat,
-      phoneDupes.length + ' phone ' + (phoneDupes.length === 1 ? 'number is' : 'numbers are') +
-        ' shared by more than one contact, covering ' + flat.length + ' records. ' +
-        'Review them; a rebooked contact legitimately has two rows, so these are not merged automatically.',
-      {groups: phoneDupes.length, records: flat.length}, 'possible');
+  /* 3 & 4. Two records, one person -- and which KIND of two.
+
+     This used to flag every shared number and every shared name, which on
+     the live book meant 8 phone groups and 9 name groups: 17 alarms, of
+     which 2 were real. Seven of the phone pairs were the same client coming
+     back weeks or months later, which is not a mistake -- it is what two
+     rows on one number are FOR, and how rebooked and followup know who
+     somebody is. A check that cries wolf fifteen times teaches people to
+     ignore it the sixteenth, which is the time it matters.
+
+     The distinguishing fact is the gap between the APPOINTMENTS, not the
+     records. The same booking entered twice sits on the same day. A client
+     returning sits weeks later, usually with the first call resolved. So
+     records within DUPLICATE_WINDOW_DAYS of each other are a possible
+     duplicate; anything further apart is a repeat booking, and is reported
+     as the normal thing it is rather than as a problem.
+
+     Still never merged automatically, and still 'possible': two people can
+     share a phone in a household, and a fast rebook after a no-show can land
+     inside the window. */
+  function groupBy(keyOf){
+    var out = {};
+    ids.forEach(function(cid){
+      var c = clients[cid];
+      if(!c || c.ignored) return;
+      var k = keyOf(c);
+      if(!k) return;
+      (out[k] = out[k] || []).push(cid);
+    });
+    return Object.keys(out).map(function(k){ return out[k]; })
+      .filter(function(g){ return g.length > 1; });
   }
 
-  /* 4. Same name, different records. Weaker evidence than a phone match and
-        said so: two people really can share a name. */
-  var byName = {};
-  ids.forEach(function(cid){
-    var c = clients[cid];
-    if(!c || c.ignored) return;
-    var n = String(c.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    if(!n) return;
-    (byName[n] = byName[n] || []).push(cid);
-  });
-  var nameDupes = [];
-  Object.keys(byName).forEach(function(k){ if(byName[k].length > 1) nameDupes.push(byName[k]); });
-  if(nameDupes.length){
-    var nflat = [];
-    nameDupes.forEach(function(g){ g.forEach(function(id){ nflat.push(id); }); });
-    add('possible_duplicate_name', nflat,
-      nameDupes.length + ' ' + (nameDupes.length === 1 ? 'name is' : 'names are') +
-        ' used by more than one contact. Names are not identifiers and two people can share one, ' +
-        'so this is weaker evidence than a shared number — check before doing anything.',
-      {groups: nameDupes.length, records: nflat.length}, 'possible');
+  function anchorMs(c){
+    var t = Date.parse(c.callDateTime || '');
+    if(!isNaN(t)) return t;
+    t = Date.parse(c.bookedDate || '');
+    return isNaN(t) ? null : t;
+  }
+
+  /* Two records describe one booking when their appointments sit within the
+     window -- or when neither has a date to tell them apart, which is the
+     case a date rule cannot answer and must not quietly pass. */
+  function looksLikeSameBooking(group){
+    for(var i = 0; i < group.length; i++){
+      for(var j = i + 1; j < group.length; j++){
+        var a = anchorMs(clients[group[i]]), b = anchorMs(clients[group[j]]);
+        if(a === null || b === null) return true;
+        if(Math.abs(a - b) <= DUPLICATE_WINDOW_DAYS * 86400000) return true;
+      }
+    }
+    return false;
+  }
+
+  /* Reported ONCE per contact, whichever signal found them.
+
+     The first version ran the two passes independently, so the same four
+     rebookings were announced twice -- once because they share a number and
+     again because they share a name -- which is the duplicate noise this
+     whole change exists to remove, reintroduced by the fix for it. */
+  var alreadyFlagged = {};
+  var repeatIds = {};
+
+  function classify(groups, kind, what, weaker){
+    var dupes = [], flat = [];
+    groups.forEach(function(g){
+      if(g.every(function(id){ return alreadyFlagged[id]; })) return;
+      if(looksLikeSameBooking(g)){
+        dupes.push(g);
+        g.forEach(function(id){ alreadyFlagged[id] = true; flat.push(id); });
+      } else {
+        g.forEach(function(id){ repeatIds[id] = true; });
+      }
+    });
+    if(!dupes.length) return;
+    add(kind, flat,
+      dupes.length + ' ' + (dupes.length === 1 ? 'pair of records looks' : 'sets of records look') +
+        ' like the same booking entered twice \u2014 same ' + what + ', appointments within ' +
+        DUPLICATE_WINDOW_DAYS + ' days of each other' +
+        (weaker ? '. Names are not identifiers and two people can share one, so check before doing anything.'
+                : '. Review them; nothing is merged automatically.'),
+      {groups: dupes.length, records: flat.length, windowDays: DUPLICATE_WINDOW_DAYS},
+      'possible');
+  }
+
+  classify(groupBy(function(c){
+    var k = phoneKey(c.phone || '');
+    return k.length >= 10 ? k : null;
+  }), 'possible_duplicate_phone', 'number', false);
+
+  classify(groupBy(function(c){
+    return String(c.name || '').trim().toLowerCase().replace(/\s+/g, ' ') || null;
+  }), 'possible_duplicate_name', 'name', true);
+
+  /* The returns, counted once and stated as normal. Worth saying rather than
+     staying silent about: it tells somebody the check looked at these and
+     decided they are fine, which is the difference between a quiet check and
+     one that missed them. */
+  var repeats = Object.keys(repeatIds).filter(function(id){ return !alreadyFlagged[id]; });
+  if(repeats.length){
+    add('repeat_booking', repeats,
+      repeats.length + ' ' + (repeats.length === 1 ? 'record belongs' : 'records belong') +
+        ' to contacts who have booked with you more than once, far enough apart to be a return ' +
+        'rather than a duplicate. Nothing to do \u2014 two rows is how a rebooking is meant to look.',
+      {records: repeats.length, windowDays: DUPLICATE_WINDOW_DAYS});
   }
 
   /* 5. Sends with nothing behind them. The pile that makes "did I text
@@ -9619,6 +9689,7 @@ var __LOGIC_EXPORTS__ = {
   assistantBriefing: assistantBriefing, assistantWorkflowReview: assistantWorkflowReview,
   assistantStateFromRows: assistantStateFromRows,
   ASSISTANT_RECENT_DAYS: ASSISTANT_RECENT_DAYS,
+  DUPLICATE_WINDOW_DAYS: DUPLICATE_WINDOW_DAYS,
   ACTION_RULES: ACTION_RULES, actionQueue: actionQueue,
   actionQueueCounts: actionQueueCounts, actionQueueNow: actionQueueNow,
   actionQueueHeld: actionQueueHeld, actionQueueNextAction: actionQueueNextAction,

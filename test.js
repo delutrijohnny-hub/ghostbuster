@@ -16587,25 +16587,96 @@ console.log('\n--- the private assistant, deterministic part ---');
   });
 
   test('duplicates are flagged for review and never declared the same person', () => {
-    const book = [mk({id:'a', name:'Pat Ray', phone:'7575551234'}),
-                  mk({id:'b', name:'Pat Ray', phone:'7575551234'})];
+    const book = [mk({id:'a', name:'Pat Ray', phone:'7575551234', callDateTime: inD(5)}),
+                  mk({id:'b', name:'Pat Ray', phone:'7575551234', callDateTime: inD(5)})];
     const f = GB.assistantDataFindings(st(book), now);
     const phone = f.find(x => x.kind === 'possible_duplicate_phone');
-    const name  = f.find(x => x.kind === 'possible_duplicate_name');
-    assert.ok(phone && name, 'both signals should be reported: ' + kinds(f).join(','));
+    assert.ok(phone, 'the duplicate was not reported: ' + kinds(f).join(','));
     assert.strictEqual(phone.confidence, 'possible');
+    assert.ok(/nothing is merged automatically/.test(phone.detail), phone.detail);
+  });
+
+  test('a client who books again is not a duplicate', () => {
+    /* Seven of the eight shared-number groups on the live book were this:
+       the same person returning weeks or months later, which is what two rows
+       on one number are FOR. Flagging them taught the check to be ignored. */
+    const book = [mk({id:'a', name:'Kristy Amann', phone:'2702370142',
+                      status:'Completed', callDateTime: agoD(78)}),
+                  mk({id:'b', name:'Kristy Amann', phone:'2702370142',
+                      status:'Completed', callDateTime: agoD(64)})];
+    const f = GB.assistantDataFindings(st(book), now);
+    assert.ok(!f.some(x => /possible_duplicate/.test(x.kind)),
+      'a fourteen-day gap is being called a duplicate: ' + kinds(f).join(','));
+    const repeat = f.find(x => x.kind === 'repeat_booking');
+    assert.ok(repeat, 'the return was not reported as normal either');
+    assert.ok(/Nothing to do/.test(repeat.detail), repeat.detail);
+  });
+
+  test('the same booking entered twice IS a duplicate', () => {
+    /* Leticia Isambo on the live book: two records one day apart, both
+       completed, one message each. */
+    const book = [mk({id:'a', name:'Leticia Isambo', phone:'5635555301',
+                      status:'Completed', callDateTime: agoD(91)}),
+                  mk({id:'b', name:'Leticia Isambo', phone:'5635555301',
+                      status:'Completed', callDateTime: agoD(90)})];
+    const f = GB.assistantDataFindings(st(book), now);
+    assert.ok(f.some(x => x.kind === 'possible_duplicate_phone'),
+      'one day apart is not being treated as the same booking: ' + kinds(f).join(','));
+  });
+
+  test('a split record with no number is caught by name', () => {
+    /* Cassandra Salamone: same name, same appointment date, one row holding
+       the phone and 34 messages and the other holding neither. The phone
+       check cannot see this one. */
+    const book = [mk({id:'a', name:'Cassandra Salamone', phone:'',
+                      status:'Rescheduled', callDateTime: agoD(34)}),
+                  mk({id:'b', name:'Cassandra Salamone', phone:'7865558387',
+                      status:'Rescheduled', callDateTime: agoD(34)})];
+    const f = GB.assistantDataFindings(st(book), now);
+    const name = f.find(x => x.kind === 'possible_duplicate_name');
+    assert.ok(name, 'the split record was missed: ' + kinds(f).join(','));
     assert.strictEqual(name.confidence, 'possible');
-    assert.ok(/not merged automatically/.test(phone.detail), phone.detail);
     assert.ok(/two people can share one/.test(name.detail), name.detail);
   });
 
-  test('a shared number alone is weaker evidence than it looks, and says so', () => {
-    /* A rebooked contact legitimately holds two rows on one number -- that is
-       how rebooked and followup know who somebody is. Half this book shares a
-       phone, so "merge by number" would be destructive. */
+  test('one contact is reported once, not once per signal', () => {
+    /* The first version ran the phone and name passes independently, so the
+       same returning clients were announced twice -- the duplicate noise this
+       change exists to remove, reintroduced by the fix for it. */
+    const book = [mk({id:'a', name:'Jules Straker', phone:'7575550097',
+                      status:'No-show', callDateTime: agoD(25)}),
+                  mk({id:'b', name:'Jules Straker', phone:'7575550097',
+                      status:'Rescheduled', callDateTime: agoD(20)})];
+    const f = GB.assistantDataFindings(st(book), now);
+    assert.strictEqual(f.filter(x => x.kind === 'repeat_booking').length, 1,
+      'the same contacts are reported by both the phone and the name pass');
+    const seen = {};
+    f.filter(x => /duplicate|repeat_booking/.test(x.kind)).forEach(x => {
+      x.clientIds.forEach(id => {
+        assert.ok(!seen[id], id + ' appears in more than one duplicate finding');
+        seen[id] = true;
+      });
+    });
+  });
+
+  test('records with no dates at all are still flagged, not quietly passed', () => {
+    /* The case a date rule cannot answer. Failing open here would hide a
+       duplicate behind missing data. */
+    const book = [mk({id:'a', name:'No Dates', phone:'9195550000',
+                      callDateTime: null, bookedDate: null}),
+                  mk({id:'b', name:'No Dates', phone:'9195550000',
+                      callDateTime: null, bookedDate: null})];
+    const f = GB.assistantDataFindings(st(book), now);
+    assert.ok(f.some(x => x.kind === 'possible_duplicate_phone'),
+      'two undated records on one number slipped through: ' + kinds(f).join(','));
+  });
+
+  test('a shared number is never more than possible evidence', () => {
+    /* Two people really can share a phone -- a household, a work line. The
+       finding is 'possible' whatever the dates say, and nothing is merged. */
     const f = GB.assistantDataFindings(st([
-      mk({id:'a', name:'One', phone:'3015559999'}),
-      mk({id:'b', name:'Two', phone:'3015559999'})]), now);
+      mk({id:'a', name:'One', phone:'3015559999', callDateTime: inD(4)}),
+      mk({id:'b', name:'Two', phone:'3015559999', callDateTime: inD(4)})]), now);
     assert.strictEqual(f.find(x => x.kind === 'possible_duplicate_phone').confidence, 'possible');
   });
 
