@@ -2223,10 +2223,26 @@ function hasSentStage(client, stage){ return client.messageLog.some(function(m){
 // recent one marks the start of "this appointment" as distinct from the one
 // that was booked before it.
 function appointmentSetAt(client){
-  var rs = client.reschedules || [];
-  if(!rs.length) return null;
-  var last = Date.parse(rs[rs.length - 1]);
-  return isNaN(last) ? null : last;
+  var rs = (client && client.reschedules) || [];
+  var latest = null;
+  for(var i = 0; i < rs.length; i++){
+    var e = rs[i];
+    /* The live column is timestamptz[], so entries arrive as strings. An
+       object shape is accepted too, because this guard failing OPEN is the
+       expensive direction: a single unparseable entry used to make the whole
+       function return null, which falls back to hasSentStage -- and that is
+       exactly the "day-of sent in August for a September call" bug this
+       exists to prevent, silently reinstated. */
+    var t = NaN;
+    if(typeof e === 'string' || typeof e === 'number') t = Date.parse(e);
+    else if(e && typeof e === 'object') t = Date.parse(e.at || e.to || e.when || '');
+    if(!isNaN(t) && (latest === null || t > latest)) latest = t;
+  }
+  /* The LATEST parseable entry, not the last element. Arrays here should be
+     chronological and taking the maximum costs nothing if they are -- while
+     one out-of-order entry would otherwise move the appointment's anchor
+     backwards and let a stale reminder count as current. */
+  return latest;
 }
 
 /* Has this stage been sent FOR THE CURRENT APPOINTMENT?
@@ -4169,6 +4185,772 @@ function priorityQueue(state, now){
   return rows;
 }
 
+/* ====================== THE ACTION QUEUE ======================
+
+   One list. Everything on screen that claims to say what needs doing is a
+   view of this, and nothing recounts it from the client book.
+
+   Before this there were four answers to the same question. Asked of one
+   five-contact fixture at one instant they came back 2, 3, 1 and 4:
+
+     Today "Due now"      dueSplit over conversationList
+     Today "texts due"     getTextTodayList
+     "N need attention"    rankByGhostScore -- a SCORE band
+     Texts "Action"        priorityQueue
+
+   They disagreed for real reasons, which is the point: each had picked up a
+   rule the others never heard about. getTextTodayList knows one relationship
+   text per person per day, the revival cap, the graveyard rule, and that two
+   client rows can be one human. priorityQueue knows a reply waiting is work.
+   conversationList knows the send window. rankByGhostScore was answering a
+   different question altogether while sitting next to the others as though
+   it were not.
+
+   So this re-derives none of it. The cadence rows ARE getTextTodayList --
+   the day's send list and the day's queue cannot disagree when they are the
+   same array -- and eligibility IS scheduledSendCheck, the gate the
+   scheduler and send-sms already enforce. Replies, unconfirmed calls and
+   missed calls are added on top, because the cadence has no stage for them.
+
+   A row that is real work but not doable yet keeps its place with
+   eligible:false and a reason, rather than vanishing. "Nothing to do" and
+   "nothing you can do until 8am where they are" are different days. */
+
+var ACTION_GROUPS = ['needs_response', 'call_at_risk', 'confirmation_due',
+                     'missed', 'follow_up_due'];
+
+/* Replies first, which reorders what priorityQueue did.
+
+   priorityQueue led with call_at_risk. A person who wrote to you and is
+   waiting is a commitment already made; an unconfirmed appointment is one
+   the cadence is already chasing on its own, unattended, whether or not
+   anybody reads this list. Ordering by who is actually waiting on a human
+   is the brief, and it costs the reminders nothing -- they do not depend on
+   being seen here to go out. */
+var ACTION_GROUP_LABELS = {
+  needs_response:   'Replies needing you',
+  call_at_risk:     'Appointments to confirm',
+  confirmation_due: 'Confirmation reminders due',
+  missed:           'Missed appointments',
+  follow_up_due:    'Follow-ups due'
+};
+
+/* callAtRiskMin  -- how far ahead an unconfirmed appointment starts nagging.
+   callImminentMin -- how close it has to be to jump the whole queue.
+
+   The second one settles a genuine contradiction rather than splitting a
+   difference. The brief asks for replies first. The rule already in this
+   codebase, written with its reasoning and covered by a test, says an
+   unconfirmed call soon outranks an unanswered reply -- because a reply can
+   be answered in ten minutes and an appointment nobody confirmed cannot be
+   un-missed. Both are right about different distances.
+
+   So the brief's order is the default, and an appointment inside the hour
+   takes the top. Past an hour, the person waiting on an answer leads.
+   Flagged for Johnny: if he wants replies first even at ten minutes to the
+   call, set this to 0 and the ordering is his. */
+var ACTION_RULES = { callAtRiskMin: 240, callImminentMin: 60 };
+
+/* The single next action for a row, named as a verb somebody can do.
+
+   One action, not a row of equally weighted buttons: deciding what to do is
+   the job this list exists to have already done. */
+function actionQueueNextAction(group, row){
+  if(group === 'needs_response') return {kind: 'reply',   label: 'Reply'};
+  if(group === 'call_at_risk')   return {kind: 'confirm', label: 'Confirm the time'};
+  if(group === 'missed')         return {kind: 'send',    label: 'Follow up'};
+  if(group === 'confirmation_due') return {kind: 'send',  label: 'Send the reminder'};
+  return {kind: 'send', label: 'Send the follow-up'};
+}
+
+function actionQueue(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  /* A half-built state is a real case: this runs from a render that can fire
+     before loadState has finished, and getTextTodayList reads state.clients
+     without guarding. An empty queue is the honest answer; a thrown
+     TypeError takes the screen down. */
+  if(!state || !state.clients) return [];
+  var cand = {};                       // clientId -> [candidate, ...]
+
+  function push(cid, c){
+    if(!cand[cid]) cand[cid] = [];
+    cand[cid].push(c);
+  }
+
+  /* 1. They spoke last and nobody has answered.
+
+     Taken from conversationList so "waiting" means exactly what the inbox
+     means by it, notes excluded. Always eligible: a person is waiting, and
+     whether it is a civilised hour to write back is a fact the row carries
+     rather than a reason to hide them. */
+  var convRows = conversationList(state, now);
+  convRows.forEach(function(r){
+    if(!r.awaitingReply) return;
+    var c = clients[r.clientId];
+    if(!c) return;
+    var waited = r.lastT ? Math.max(0, Math.round((now.getTime() - r.lastT) / 60000)) : 0;
+    push(r.clientId, {
+      group: 'needs_response',
+      reason: 'Reply waiting · ' + waitedLabel(waited),
+      at: r.lastAt || null, atKind: 'replied',
+      channel: r.lastChannel || 'sms',
+      eligible: true, hold: false, holdReason: null,
+      sort: -waited
+    });
+  });
+
+  /* 2. Cadence work, as the send list itself.
+
+     getTextTodayList is the day's work. Eligibility on top of it is
+     scheduledSendCheck, so a row in this queue is a row send-sms would
+     accept -- except for `hold`, which is quiet hours and means later today
+     rather than never. Anything else scheduledSendCheck refuses is work
+     that is handled, paused or unsendable, and the brief says keep it out of
+     the default list; it is still reachable as a data problem, which is
+     where an unusable phone number belongs. */
+  getTextTodayList(state, now, '').forEach(function(it){
+    var c = it.client;
+    if(!c) return;
+    var stage = it.stage;
+    var group = (stage === 'dayof' || stage === 'hourbefore') ? 'confirmation_due'
+              : (stage === 'noshow') ? 'missed'
+              : 'follow_up_due';
+    /* cadenceApproved: getTextTodayList already asked computeDue whether this
+       stage is due for this contact. Re-deciding that here would drop every
+       no-show recovery and every revival touch -- the recovery book. */
+    var check = scheduledSendCheck(c, now, {cadenceApproved: true});
+    if(!check.ok && !check.hold) return;
+    var lastAt = lastContactAt(c);
+    var quiet = lastAt ? Math.round((now.getTime() - Date.parse(lastAt)) / 60000) : null;
+    var mins = minutesUntil(c.callDateTime, now);
+    push(c.id, {
+      group: group,
+      reason: group === 'confirmation_due' ? 'Confirmation reminder due'
+            : group === 'missed' ? 'Missed the call · follow up'
+            : (quiet === null ? 'Follow-up due'
+                              : 'Follow-up due · quiet ' + waitedLabel(quiet)),
+      at: group === 'missed' || group === 'confirmation_due'
+            ? (c.callDateTime || null) : lastAt,
+      atKind: group === 'missed' || group === 'confirmation_due'
+            ? 'appointment' : 'last_contact',
+      channel: 'sms',
+      stage: stage,
+      eligible: !!check.ok,
+      hold: !check.ok && !!check.hold,
+      holdReason: check.ok ? null : check.reason,
+      sort: mins === null ? 0 : mins
+    });
+  });
+
+  /* 3. An appointment close enough that being unconfirmed still matters.
+
+     Separate from the cadence: the reminder may already have gone out and
+     still not have been answered, and "we sent one" is a fact about us.
+     Confirmed means THEY said yes. */
+  Object.keys(clients).forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    if(isOthersLead(c, (state && state.myCalendars) || [])) return;
+    var mins = minutesUntil(c.callDateTime, now);
+    if(mins === null || mins <= 0 || mins > ACTION_RULES.callAtRiskMin) return;
+    if(appointmentConfirmed(c) || stopsCadence(c.status)) return;
+    push(cid, {
+      group: 'call_at_risk',
+      reason: 'Call in ' + waitedLabel(mins) + ' · Not confirmed',
+      at: c.callDateTime, atKind: 'appointment',
+      channel: 'sms',
+      eligible: true, hold: false, holdReason: null,
+      sort: mins
+    });
+  });
+
+  /* Worst reason wins, the rest are counted. Somebody reading one line
+     should still be able to see there is more behind it. */
+  var rows = [];
+  Object.keys(cand).forEach(function(cid){
+    var c = clients[cid];
+    var list = cand[cid];
+    list.sort(function(a, b){
+      return ACTION_GROUPS.indexOf(a.group) - ACTION_GROUPS.indexOf(b.group);
+    });
+    var top = list[0];
+    rows.push({
+      clientId: cid,
+      name: c.name,
+      phone: c.phone || '',
+      status: c.status,
+      smsStatus: c.smsStatus || 'ok',
+      timezone: c.timezone || null,
+      group: top.group,
+      reason: top.reason,
+      stage: top.stage || null,
+      channel: top.channel || 'sms',
+      at: top.at || null,
+      atKind: top.atKind || null,
+      callAt: c.callDateTime || null,
+      eligible: top.eligible,
+      hold: top.hold,
+      holdReason: top.holdReason,
+      nextAction: actionQueueNextAction(top.group, top),
+      alsoCount: list.length - 1,
+      sort: top.sort
+    });
+  });
+
+  /* Group order, then urgency inside it, then the id as a stable tie-break.
+     Without the id two equally urgent rows can swap places between renders,
+     and a list that reorders itself while being read is one somebody loses
+     their place in. */
+  function rank(r){
+    /* An appointment inside the hour is the one thing that cannot wait for
+       anything else on this list. See ACTION_RULES.callImminentMin. */
+    if(r.group === 'call_at_risk' && r.sort !== null &&
+       r.sort <= ACTION_RULES.callImminentMin) return -1;
+    return ACTION_GROUPS.indexOf(r.group);
+  }
+  rows.sort(function(a, b){
+    var ga = rank(a), gb = rank(b);
+    if(ga !== gb) return ga - gb;
+    if(a.sort !== b.sort) return a.sort - b.sort;
+    return a.clientId < b.clientId ? -1 : (a.clientId > b.clientId ? 1 : 0);
+  });
+  return rows;
+}
+
+/* The counts, from the rows, saying what each one counts.
+
+   Four numbers on one screen that were all called some variant of "due" is
+   how 52, 24, 35 and 63 ended up side by side. These are deliberately named
+   for their unit: `tasks` are jobs, `clients` are people, and the two are
+   never interchangeable -- one person can owe you a reply AND have a
+   follow-up due, which is two tasks and one human. */
+function actionQueueCounts(rows){
+  var all = rows || [];
+  var out = {tasks: 0, held: 0, clients: 0, byGroup: {}};
+  var seen = {};
+  ACTION_GROUPS.forEach(function(g){ out.byGroup[g] = 0; });
+  all.forEach(function(r){
+    if(r.eligible) out.tasks++; else out.held++;
+    if(r.eligible) out.byGroup[r.group] = (out.byGroup[r.group] || 0) + 1;
+    if(!seen[r.clientId]){ seen[r.clientId] = true; out.clients++; }
+  });
+  return out;
+}
+
+/* The focused view: what can actually be done now. Today renders this. */
+function actionQueueNow(rows){
+  return (rows || []).filter(function(r){ return r.eligible; });
+}
+
+/* Real work that is simply not yet doable, with the reason attached. Shown
+   as its own small line rather than mixed into the day's count, because a
+   number somebody cannot act on is one they learn to ignore. */
+function actionQueueHeld(rows){
+  return (rows || []).filter(function(r){ return !r.eligible; });
+}
+
+/* ================= THE GHOST ASSISTANT, DETERMINISTIC PART =================
+
+   Everything here is computed from records the account already holds. No
+   model, no network, nothing leaves the browser or the Edge Function. That
+   is deliberate and it is most of the value: "who needs me, why, and what
+   is wrong with my data" is arithmetic, and arithmetic can be checked.
+
+   The language model, when it is ever switched on, sits ON TOP of this and
+   is told these findings. It never replaces them, because a finding with a
+   client id and a count is something Johnny can verify in ten seconds and a
+   sentence from a model is not.
+
+   Three rules the whole file keeps:
+
+   - Observations and suggestions are different shapes and never mix. An
+     observation carries evidence and the period it was measured over; a
+     suggestion carries a proposed change and its limits.
+   - What is NOT known is stated, not omitted. Snoozes are stored as the
+     current deferral and not as a history, so this cannot say how often
+     something has been postponed -- and says so rather than guessing.
+   - Nothing here claims to know anything about product USAGE. Clicks, time
+     saved, and why a number moved are not in these records. Every finding
+     names the records it came from. */
+
+var ASSISTANT_RECENT_DAYS = 30;
+
+/* How much of the history this is actually looking at.
+
+   A briefing that silently covers 30 days reads as a briefing about
+   everything. Stated up front, with the real span, so a claim like "nobody
+   has replied" can be read as what it is: nobody replied in what I can see. */
+function assistantCoverage(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  var ids = Object.keys(clients);
+  var oldest = null, newest = null, msgs = 0, replies = 0, withThread = 0;
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    var thread = conversationThread(c).filter(function(it){ return it.dir !== 'note'; });
+    if(thread.length) withThread++;
+    thread.forEach(function(it){
+      msgs++;
+      if(it.dir === 'in') replies++;
+      if(oldest === null || it.t < oldest) oldest = it.t;
+      if(newest === null || it.t > newest) newest = it.t;
+    });
+  });
+  var limits = [];
+  if(!ids.length) limits.push('This account has no contacts loaded.');
+  if(!msgs) limits.push('No messages are recorded here, so nothing below can describe a conversation.');
+  if(newest !== null && (now.getTime() - newest) > 7 * 86400000){
+    limits.push('The newest message on record is ' +
+      Math.round((now.getTime() - newest) / 86400000) +
+      ' days old, so recent activity may not have reached this account yet.');
+  }
+  return {
+    asOf: now.toISOString(),
+    clients: ids.length,
+    clientsWithConversation: withThread,
+    messages: msgs,
+    replies: replies,
+    oldestMessageAt: oldest === null ? null : new Date(oldest).toISOString(),
+    newestMessageAt: newest === null ? null : new Date(newest).toISOString(),
+    limits: limits
+  };
+}
+
+/* What is wrong with the records, as checkable claims.
+
+   Each finding carries kind, the contacts it is about, a sentence, and the
+   evidence behind it. `confidence` is 'certain' when the finding is a
+   property of the data itself -- a past appointment with an open status is
+   not a judgement -- and 'possible' when it is a heuristic somebody has to
+   confirm, which is every finding about identity. Nothing here is ever
+   acted on automatically, and two records are never declared the same
+   person. */
+function assistantDataFindings(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  var ids = Object.keys(clients);
+  var out = [];
+
+  function add(kind, clientIds, detail, evidence, confidence){
+    out.push({kind: kind, clientIds: clientIds, detail: detail,
+              evidence: evidence, confidence: confidence || 'certain',
+              source: 'CRM records'});
+  }
+
+  /* 1. Appointments that have happened and were never answered for. These
+        are the ones silently excluded from every show-up rate. */
+  var unlogged = getUnloggedCalls(state, now);
+  if(unlogged.length){
+    add('missing_outcome', unlogged.map(function(u){ return u.client.id; }),
+      unlogged.length + ' past ' + (unlogged.length === 1 ? 'appointment has' : 'appointments have') +
+        ' no outcome recorded. They are left out of your show-up rate until you answer them.',
+      {count: unlogged.length,
+       oldestDaysAgo: unlogged.length ? unlogged[0].daysAgo : 0});
+  }
+
+  /* 2. A past appointment still carrying a status that means it is ahead.
+        Distinct from the above: this one makes the record wrong, not just
+        incomplete, and it is what puts a finished call under "Upcoming". */
+  var stale = [];
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    var d = safeDate(c.callDateTime);
+    if(!d || d.getTime() >= now.getTime()) return;
+    if(['Booked', 'Confirmed', 'Reminded'].indexOf(c.status) === -1) return;
+    stale.push(cid);
+  });
+  if(stale.length){
+    add('past_marked_upcoming', stale,
+      stale.length + ' ' + (stale.length === 1
+        ? 'appointment has already happened but is still marked as if it is ahead'
+        : 'appointments have already happened but are still marked as if they are ahead') + '.',
+      {count: stale.length, statuses: ['Booked', 'Confirmed', 'Reminded']});
+  }
+
+  /* 3. Two records, one phone. Flagged, never merged: the same number can
+        legitimately belong to a rebooked contact, which is how rebooked and
+        followup know who somebody is. */
+  var byPhone = {};
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    var k = phoneKey(c.phone || '');
+    if(k.length < 10) return;
+    (byPhone[k] = byPhone[k] || []).push(cid);
+  });
+  var phoneDupes = [];
+  Object.keys(byPhone).forEach(function(k){ if(byPhone[k].length > 1) phoneDupes.push(byPhone[k]); });
+  if(phoneDupes.length){
+    var flat = [];
+    phoneDupes.forEach(function(g){ g.forEach(function(id){ flat.push(id); }); });
+    add('possible_duplicate_phone', flat,
+      phoneDupes.length + ' phone ' + (phoneDupes.length === 1 ? 'number is' : 'numbers are') +
+        ' shared by more than one contact, covering ' + flat.length + ' records. ' +
+        'Review them; a rebooked contact legitimately has two rows, so these are not merged automatically.',
+      {groups: phoneDupes.length, records: flat.length}, 'possible');
+  }
+
+  /* 4. Same name, different records. Weaker evidence than a phone match and
+        said so: two people really can share a name. */
+  var byName = {};
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored) return;
+    var n = String(c.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if(!n) return;
+    (byName[n] = byName[n] || []).push(cid);
+  });
+  var nameDupes = [];
+  Object.keys(byName).forEach(function(k){ if(byName[k].length > 1) nameDupes.push(byName[k]); });
+  if(nameDupes.length){
+    var nflat = [];
+    nameDupes.forEach(function(g){ g.forEach(function(id){ nflat.push(id); }); });
+    add('possible_duplicate_name', nflat,
+      nameDupes.length + ' ' + (nameDupes.length === 1 ? 'name is' : 'names are') +
+        ' used by more than one contact. Names are not identifiers and two people can share one, ' +
+        'so this is weaker evidence than a shared number — check before doing anything.',
+      {groups: nameDupes.length, records: nflat.length}, 'possible');
+  }
+
+  /* 5. Sends with nothing behind them. The pile that makes "did I text
+        them?" unanswerable. */
+  var unverified = 0, unverifiedClients = {};
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    if(!c) return;
+    (c.messageLog || []).forEach(function(m){
+      var d = deliveryState(m);
+      if(!d.confirmed && d.state !== 'received'){ unverified++; unverifiedClients[cid] = true; }
+    });
+  });
+  if(unverified){
+    add('unconfirmed_sends', Object.keys(unverifiedClients),
+      unverified + ' logged ' + (unverified === 1 ? 'message was' : 'messages were') +
+        ' opened in another app and never confirmed. Opening a draft is not proof it was sent, ' +
+        'so these are neither sent nor failed — they are unknown.',
+      {messages: unverified, contacts: Object.keys(unverifiedClients).length});
+  }
+
+  /* 6. A contact nothing can be texted to. Not a queue problem -- the queue
+        correctly refuses -- but it is why somebody never hears from you. */
+  var noPhone = ids.filter(function(cid){
+    var c = clients[cid];
+    return c && !c.ignored && phoneKey(c.phone || '').length < 10;
+  });
+  if(noPhone.length){
+    add('unusable_phone', noPhone,
+      noPhone.length + ' active ' + (noPhone.length === 1 ? 'contact has' : 'contacts have') +
+        ' no usable phone number, so no text can reach them. They are left out of the texting queue.',
+      {count: noPhone.length});
+  }
+
+  /* 7. Which clock a contact is on, and whether anybody has ever said so.
+        This decides when a reminder goes out, so a guess is load-bearing. */
+  var unconfirmedTz = ids.filter(function(cid){
+    var c = clients[cid];
+    return c && !c.ignored && !c.timezoneConfirmed;
+  });
+  if(unconfirmedTz.length){
+    add('timezone_unconfirmed', unconfirmedTz,
+      unconfirmedTz.length + ' of ' + ids.length + ' contacts have a timezone nobody has confirmed. ' +
+        'It is derived from the area code, which is a good guess and not a fact — a mobile keeps ' +
+        'its area code when somebody moves. Quiet hours and reminder timing both depend on it.',
+      {count: unconfirmedTz.length, of: ids.length, derivedFrom: 'area code'}, 'possible');
+  }
+
+  /* 8. A summary that predates the conversation it describes. Worse than no
+        summary, because it is confident and it will be believed. */
+  var staleSummaries = ids.filter(function(cid){
+    var st = summaryState(clients[cid]);
+    return st && st.stale;
+  });
+  if(staleSummaries.length){
+    add('stale_summary', staleSummaries,
+      staleSummaries.length + ' conversation ' +
+        (staleSummaries.length === 1 ? 'summary is' : 'summaries are') +
+        ' older than the messages they describe. Read the thread, not the summary.',
+      {count: staleSummaries.length});
+  }
+
+  /* 9. Work that is held right now, and why. Not a defect -- it is the
+        queue being honest -- but it belongs in a briefing, because "nothing
+        to do" and "nothing doable until 8am there" are different days. */
+  var held = actionQueueHeld(actionQueue(state, now));
+  if(held.length){
+    add('held_now', held.map(function(r){ return r.clientId; }),
+      held.length + ' ' + (held.length === 1 ? 'job is' : 'jobs are') +
+        ' real but not doable at this moment. Each row says why.',
+      {count: held.length,
+       reasons: held.map(function(r){ return r.holdReason; }).filter(Boolean)});
+  }
+
+  return out;
+}
+
+/* Database rows -> the shape every function in this file expects.
+
+   The Edge Function had this inline, under a comment of mine saying "a
+   second mapping here would be a second truth" -- which it was, sitting in
+   a TypeScript file that the node suite cannot execute and therefore cannot
+   test. Here it is shared, mirrored and covered.
+
+   It is deliberately the same field list loadState builds in the browser.
+   Where the two disagree the assistant would be describing a different
+   account from the one on screen, which is the failure mode worth guarding
+   hardest: it would be confident, specific and wrong. */
+function assistantStateFromRows(clientRows, inboundRows, viewerTz){
+  var state = {clients: {}, reads: {}, myCalendars: [],
+               viewerTimezone: viewerTz || 'UTC'};
+  (clientRows || []).forEach(function(row){
+    if(!row || !row.id) return;
+    state.clients[row.id] = sanitizeClient({
+      id: row.id, name: row.name, phone: row.phone, email: row.email,
+      googleEventId: row.google_event_id, status: row.status,
+      callDateTime: row.call_date_time, bookedDate: row.booked_date,
+      timezone: row.timezone, timezoneConfirmed: !!row.timezone_confirmed,
+      notes: row.notes, recap: row.recap, ignored: !!row.ignored,
+      closeOutcome: row.close_outcome || undefined,
+      smsStatus: row.sms_status || 'ok',
+      automationPausedUntil: row.automation_paused_until || null,
+      snoozedUntil: row.snoozed_until || {},
+      skippedStages: row.skipped_stages || {},
+      reschedules: row.reschedules || [],
+      rescheduleCount: row.reschedule_count,
+      stalledSince: row.stalled_since,
+      manuallyAdded: !!row.manually_added,
+      conversationSummary: row.conversation_summary || '',
+      conversationSummaryAt: row.conversation_summary_at || null,
+      conversationSummaryThrough: row.conversation_summary_through || null,
+      replies: [],
+      messageLog: (row.message_log || []).map(function(m){
+        return {
+          id: m.id, channel: m.channel || 'sms', stage: m.stage,
+          variantId: m.variant_key, text: m.text, sentAt: m.sent_at,
+          responded: !!m.responded, respondedAt: m.responded_at,
+          /* Written by the webhooks and the agent, never by a browser.
+             Dropping it here would turn every unconfirmed send into a
+             confirmed one in the assistant's eyes. */
+          deliveryStatus: m.delivery_status || null
+        };
+      })
+    });
+  });
+  (inboundRows || []).forEach(function(r){
+    if(!r || !r.client_id) return;
+    var c = state.clients[r.client_id];
+    /* A reply whose contact is not in this set is DROPPED, not attached to
+       nobody. It can only mean the row came from outside the owner filter,
+       and quietly keeping it would be the one way team data could reach a
+       personal pilot. */
+    if(!c) return;
+    c.replies.push({id: r.id, at: r.created_at, text: r.body || '',
+                    direction: 'in', channel: 'sms'});
+  });
+  Object.keys(state.clients).forEach(function(cid){
+    state.clients[cid].replies.sort(function(a, b){
+      return Date.parse(a.at) - Date.parse(b.at);
+    });
+  });
+  return state;
+}
+
+/* The day, as one structure.
+
+   Priorities come straight from actionQueue, so the assistant cannot have
+   an opinion about the day that differs from the screen. Anything it says
+   about what to do is the same rows, in the same order, for the same
+   stated reasons. */
+function assistantBriefing(state, now){
+  now = now || new Date();
+  var queue = actionQueue(state, now);
+  var counts = actionQueueCounts(queue);
+  var clients = (state && state.clients) || {};
+  var vz = (state && state.viewerTimezone) || 'UTC';
+
+  var appointments = upcomingCalls(state, now).slice(0, 12).map(function(r){
+    var c = clients[r.clientId] || {};
+    var label = appointmentTimeLabel(r.callAt, c.timezone, vz);
+    return {
+      clientId: r.clientId, name: r.name, at: r.callAt,
+      when: label.text, confirmed: r.confirmed,
+      minutesUntil: r.minsUntil,
+      timezoneConfirmed: !!c.timezoneConfirmed,
+      source: 'clients.call_date_time'
+    };
+  });
+
+  return {
+    asOf: now.toISOString(),
+    coverage: assistantCoverage(state, now),
+    counts: counts,
+    priorities: queue.slice(0, 25).map(function(r){
+      return {
+        clientId: r.clientId, name: r.name, group: r.group,
+        groupLabel: ACTION_GROUP_LABELS[r.group] || r.group,
+        reason: r.reason, at: r.at, atKind: r.atKind,
+        eligible: r.eligible, holdReason: r.holdReason,
+        nextAction: r.nextAction.label,
+        source: r.group === 'needs_response' ? 'their last inbound message'
+              : r.group === 'follow_up_due' || r.group === 'confirmation_due' || r.group === 'missed'
+                ? 'the follow-up cadence'
+              : 'the appointment on the record'
+      };
+    }),
+    appointments: appointments,
+    findings: assistantDataFindings(state, now),
+    readOnly: true
+  };
+}
+
+/* "Why does my dashboard feel so busy", answered from records only.
+
+   Each suggestion is the same five fields, because that is what makes one
+   checkable: what was noticed, the evidence and the period it covers, why
+   it might matter, a concrete change, and what this cannot tell you.
+
+   The last field is not decoration. Three of the questions the brief wants
+   answered -- which follow-ups am I postponing, what is creating work, what
+   should we simplify -- are usage questions, and nothing in these records
+   measures usage. Saying so is the honest answer; inventing a number for it
+   would be the useful-sounding one. */
+function assistantWorkflowReview(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  var ids = Object.keys(clients);
+  var out = [];
+  var cov = assistantCoverage(state, now);
+
+  function suggest(id, noticed, evidence, why, change, limits){
+    out.push({id: id, noticed: noticed, evidence: evidence, whyItMatters: why,
+              proposedChange: change, limits: limits,
+              kind: 'crm_record_observation'});
+  }
+
+  // 1. The unconfirmed pile.
+  var unverified = 0;
+  ids.forEach(function(cid){
+    (clients[cid].messageLog || []).forEach(function(m){
+      var d = deliveryState(m);
+      if(!d.confirmed && d.state !== 'received') unverified++;
+    });
+  });
+  if(unverified >= 25){
+    suggest('unconfirmed_backlog',
+      unverified + ' logged messages have no evidence that they were ever sent.',
+      {metric: 'message_log rows with no provider or agent confirmation',
+       value: unverified, of: cov.messages, period: 'all history on this account'},
+      'Every one of these is a message you cannot tell apart from one that failed, which means ' +
+        '"have I contacted them?" has no answer for those contacts.',
+      'Leave them as unknown and stop the pile growing: sends through the Mac route record a real ' +
+        'delivery state, so the backlog becomes historical rather than ongoing. Do not bulk-mark ' +
+        'them sent — that would replace "unknown" with a claim nothing supports.',
+      ['This counts rows, not conversations. A contact may appear many times.',
+       'It cannot tell you which of them actually arrived.']);
+  }
+
+  // 2. Outcomes nobody answered for.
+  var unlogged = getUnloggedCalls(state, now);
+  if(unlogged.length >= 5){
+    suggest('missing_outcomes',
+      unlogged.length + ' past appointments have no outcome recorded, the oldest ' +
+        unlogged[0].daysAgo + ' days ago.',
+      {metric: 'past appointments whose status is still open',
+       value: unlogged.length, period: 'all history on this account'},
+      'Every show-up and close rate divides by appointments whose outcome is known, so these are ' +
+        'silently excluded. The rates are correct and they describe a smaller book than it looks.',
+      'Answer them in End of day, or from the list on Today. Three clicks each and the rates start ' +
+        'describing the whole book.',
+      ['This cannot tell you what the outcomes were, only that they are missing.']);
+  }
+
+  // 3. Contacts the cadence can never reach.
+  var noPhone = ids.filter(function(cid){
+    var c = clients[cid];
+    return c && !c.ignored && phoneKey(c.phone || '').length < 10;
+  });
+  if(noPhone.length){
+    suggest('unreachable_contacts',
+      noPhone.length + ' active contacts have no usable phone number.',
+      {metric: 'active contacts whose phone has fewer than 10 digits',
+       value: noPhone.length, of: ids.length, period: 'current records'},
+      'They sit in the book looking like leads and no text can ever reach them, so they quietly ' +
+        'lower every rate that divides by contacts.',
+      'Fix the numbers, or archive the ones that are not real. Either answer is better than a ' +
+        'contact that cannot be contacted.',
+      ['A contact may still be reachable by email; this only checks the phone.']);
+  }
+
+  // 4. Timezone confidence, which decides when things send.
+  var unconfirmedTz = ids.filter(function(cid){
+    var c = clients[cid];
+    return c && !c.ignored && !c.timezoneConfirmed;
+  });
+  if(ids.length && unconfirmedTz.length === ids.length){
+    suggest('timezone_all_derived',
+      'Every contact’s timezone is derived from their area code. Nobody has confirmed one.',
+      {metric: 'contacts with timezone_confirmed = false',
+       value: unconfirmedTz.length, of: ids.length, period: 'current records'},
+      'Quiet hours, reminder timing and every appointment time on screen are computed from it. ' +
+        'A mobile keeps its area code when somebody moves, so a guess can be hours out.',
+      'Confirm the zone on the contacts with appointments ahead first — that is the smallest ' +
+        'set where being wrong costs a missed call.',
+      ['This cannot tell you WHICH guesses are wrong, only that none are confirmed.']);
+  }
+
+  // 5. What is postponed right now -- and what cannot be known about it.
+  var snoozedNow = 0, snoozedClients = 0, skipped = 0;
+  ids.forEach(function(cid){
+    var c = clients[cid];
+    var sn = Object.keys(c.snoozedUntil || {}).length;
+    if(sn){ snoozedNow += sn; snoozedClients++; }
+    skipped += Object.keys(c.skippedStages || {}).length;
+  });
+  if(snoozedNow || skipped){
+    suggest('postponed_touches',
+      snoozedNow + ' touches are postponed right now across ' + snoozedClients +
+        ' contacts, and ' + skipped + ' have been skipped for good.',
+      {metric: 'snoozedUntil and skippedStages on the client records',
+       value: snoozedNow, skipped: skipped, period: 'current records only'},
+      'A touch that is postponed every morning is a touch the cadence is wrong about, and a lot of ' +
+        'skips in one stage usually means the template does not fit.',
+      'Look at which STAGE is being postponed. If it is always the same one, change the cadence or ' +
+        'the template rather than deferring it again tomorrow.',
+      ['This is the honest limit: a snooze is stored as the CURRENT deferral, not as a history. ',
+       'So I cannot tell you how many times you have postponed something — only what is ',
+       'postponed today. Counting repeats would need a record that does not exist yet.']);
+  }
+
+  // 6. How much of the screen is counts rather than work.
+  if(cov.clients){
+    suggest('queue_is_the_screen',
+      'Today and Conversations now read from one queue, so the counts on Today and the lists ' +
+        'behind them are the same rows.',
+      {metric: 'actionQueue tasks / held / people',
+       value: actionQueueCounts(actionQueue(state, now)), period: 'this moment'},
+      'Before this there were four derivations answering "what needs doing" and they disagreed. ' +
+        'A number that cannot be reconciled with a list is a number people learn to ignore.',
+      'If a count still surprises you, press it — it opens the exact rows it counted. A count ' +
+        'that cannot be opened is the next thing to remove.',
+      ['This describes the records and the code, not how you use the screen.',
+       'Nothing here measures clicks, time spent or time saved.']);
+  }
+
+  return {
+    asOf: now.toISOString(),
+    coverage: cov,
+    suggestions: out,
+    usageMeasurement: {
+      available: false,
+      note: 'Nothing in this account records product usage — no clicks, no time on screen, ' +
+            'no before-and-after. Every suggestion above is read from CRM records. Questions about ' +
+            'what you actually do with the app cannot be answered from them, and are not guessed at.'
+    },
+    readOnly: true
+  };
+}
+
 /* Who to work next, without losing your place.
 
    Two cases, and the second is the one that matters. Normally "next" is the
@@ -4855,7 +5637,22 @@ function scheduledSendCheck(client, now, opts){
     return {ok: false, reason: 'follow-ups are paused for this contact'};
   }
 
-  if(stopsCadence(client.status)){
+  /* "The sequence finished" is right for a message somebody queued by hand
+     and wrong for one the cadence itself just asked for.
+
+     stopsCadence is true for No-show, Completed and Ghosted -- 150 of the
+     196 contacts on the live book. Two sequence steps exist precisely for
+     those people: the no-show recovery run, and the monthly revival that
+     keeps a cold contact from being forgotten for good. computeDue has
+     already decided the stage is legitimate for this status, so re-asking
+     here would overrule the cadence with a rule the cadence was written to
+     escape -- and silently delete the entire recovery book from the day's
+     work. Caught by a no-show appearing in the send list and not in the
+     queue built from it.
+
+     So callers acting on a stage the cadence approved pass cadenceApproved,
+     and every other gate below and above still applies to them. */
+  if(!opts.cadenceApproved && stopsCadence(client.status)){
     return {ok: false, reason: 'the sequence finished \u2014 status is ' + (client.status || 'set')};
   }
 
@@ -6186,6 +6983,54 @@ function tzLabel(tz, date){
   return '';
 }
 
+
+/* One appointment, one answer, and it says which clock it is on.
+
+   Reported as "a call showing 2:00 PM on Today and 4:00 PM in Calendar with
+   no timezone labels", and both numbers were being printed honestly by code
+   that disagreed about whose day it is. Today rendered fmtTime(d,
+   c.timezone) -- the CLIENT's zone. Calendar rendered toLocaleTimeString
+   with no timeZone at all -- the BROWSER's. On the live book 63 of 196
+   contacts sit outside Eastern, so a third of the appointments had two
+   times, and a Denver client at 2:00 PM MDT is 4:00 PM where Johnny is,
+   which is exactly the pair that was reported.
+
+   tzLabel has existed since the timezone work shipped and was called by
+   nothing, which is why neither number carried an abbreviation. It does now.
+
+   The rule, from the brief: MY timezone is the answer, because the person
+   reading the screen has to decide whether they can be at a desk. Theirs is
+   a label beside it, shown only when it differs -- "3:00 PM EDT" on its own
+   is cleaner than "3:00 PM EDT (3:00 PM EDT for them)", and a redundant
+   second clock trains people to stop reading the first. */
+function appointmentTimeLabel(iso, clientTz, viewerTz, opts){
+  opts = opts || {};
+  var d = safeDate(iso);
+  if(!d) return {mine: '', theirs: '', sameZone: true, text: '', tz: ''};
+  var vz = viewerTz || 'UTC';
+  var cz = clientTz || vz;
+  var mine   = fmtTime(d, vz) + (opts.noLabel ? '' : ' ' + tzLabel(vz, d));
+  var theirs = fmtTime(d, cz) + (opts.noLabel ? '' : ' ' + tzLabel(cz, d));
+  /* Compared by what it READS as, not by the zone name. America/New_York and
+     America/Detroit are different strings and the same clock, and printing
+     "3:00 PM EDT (3:00 PM EDT for them)" because of a string mismatch is the
+     noise this is meant to remove. */
+  var same = (fmtTime(d, vz) === fmtTime(d, cz)) && (tzLabel(vz, d) === tzLabel(cz, d));
+  return {
+    mine: mine.trim(),
+    theirs: theirs.trim(),
+    sameZone: same,
+    tz: tzLabel(vz, d),
+    text: same ? mine.trim() : mine.trim() + ' \u00b7 ' + theirs.trim() + ' for them'
+  };
+}
+
+/* The zone the person reading the screen is in. One place, so a call site
+   cannot quietly fall back to UTC and print a time nobody is living in. */
+function viewerTimezone(){
+  try{ return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+  catch(e){ return 'UTC'; }
+}
 
 var PHONE_RE = /(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
 
@@ -8489,6 +9334,10 @@ function resolveStaleCalls(state, mode, olderThanDays, now){
 function getUnloggedCalls(state, now){
   now = now || new Date();
   var out = [];
+  /* A render can fire before loadState finishes, and the assistant asks this
+     of whatever state it is handed. An empty list is the honest answer; a
+     TypeError takes the screen down. */
+  if(!state || !state.clients) return out;
   Object.keys(state.clients).forEach(function(cid){
     var c = state.clients[cid];
     if(c.ignored) return;
@@ -8711,6 +9560,14 @@ var __LOGIC_EXPORTS__ = {
   upcomingCalls: upcomingCalls,
   nextInQueue: nextInQueue,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
+  ACTION_GROUPS: ACTION_GROUPS, ACTION_GROUP_LABELS: ACTION_GROUP_LABELS,
+  assistantCoverage: assistantCoverage, assistantDataFindings: assistantDataFindings,
+  assistantBriefing: assistantBriefing, assistantWorkflowReview: assistantWorkflowReview,
+  assistantStateFromRows: assistantStateFromRows,
+  ASSISTANT_RECENT_DAYS: ASSISTANT_RECENT_DAYS,
+  ACTION_RULES: ACTION_RULES, actionQueue: actionQueue,
+  actionQueueCounts: actionQueueCounts, actionQueueNow: actionQueueNow,
+  actionQueueHeld: actionQueueHeld, actionQueueNextAction: actionQueueNextAction,
   appointmentConfirmed: appointmentConfirmed, waitedLabel: waitedLabel,
   nextActionLabel: nextActionLabel,
   lastContactAt: lastContactAt, clientSource: clientSource,
@@ -8762,6 +9619,7 @@ var __LOGIC_EXPORTS__ = {
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,
   AREA_CODE_TZ: AREA_CODE_TZ, areaCodeFromPhone: areaCodeFromPhone, timezoneForClient: timezoneForClient,
   resolveClientTimezone: resolveClientTimezone, tzLabel: tzLabel, meetLinkFromEvent: meetLinkFromEvent,
+  appointmentTimeLabel: appointmentTimeLabel, viewerTimezone: viewerTimezone,
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,

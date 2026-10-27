@@ -345,6 +345,36 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
   margin-bottom:-1px;white-space:nowrap;cursor:pointer;transition:color .12s ease,border-color .12s ease;}
 .tab-btn:hover{color:var(--ink);}
 .tab-btn.active{color:var(--ink);border-color:var(--green);}
+/* More: a disclosure, not a second row of tabs.
+
+   position:relative on .tabs would clip the menu against the strip's own
+   overflow-x, so the menu is fixed-free and the strip keeps its scroll by
+   letting the open menu sit above it. */
+.tab-more{position:relative;display:flex;align-items:stretch;}
+.tab-more>summary{list-style:none;display:flex;align-items:center;gap:5px;cursor:pointer;}
+.tab-more>summary::-webkit-details-marker{display:none;}
+.tab-more>summary::after{content:'\25be';font-size:10px;opacity:.7;}
+.tab-more[open]>summary{color:var(--ink);}
+.tab-more-menu{position:absolute;top:100%;right:0;z-index:40;min-width:190px;
+  display:flex;flex-direction:column;align-items:stretch;
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 10px 30px #0000002e;padding:5px;}
+.tab-more-menu .tab-btn{text-align:left;border-bottom:0;margin-bottom:0;
+  padding:9px 11px;border-radius:7px;white-space:nowrap;}
+.tab-more-menu .tab-btn:hover{background:var(--border);}
+.tab-more-menu .tab-btn.active{background:var(--border);color:var(--ink);}
+.tab-more-menu .tab-btn.hidden{display:none;}
+/* On a phone the strip still scrolls, and an absolutely positioned menu
+   scrolls with it. Anchoring left instead of right only pushes it further
+   off the edge, which is what the first attempt did. Fixed to the viewport
+   with a gutter on both sides is the one position that is always reachable,
+   whatever the strip is scrolled to. */
+@media (max-width:560px){
+  .tabs{padding:0 10px;}
+  .tab-btn{padding:11px 10px;font-size:13px;}
+  .tab-more-menu{position:fixed;top:var(--tabs-bottom,92px);left:10px;right:10px;
+    min-width:0;max-height:60vh;overflow:auto;}
+}
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
 
@@ -1482,6 +1512,21 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .pq-row .pq-reason.stop{color:var(--ink-faint);}
 .pq-row .pq-also{display:inline-block;margin-top:3px;font-size:10px;
   color:var(--ink-faint);}
+/* Why a row cannot be worked yet, and the one thing to do when it can.
+   The hold reason is faint and italic because it is a fact about the clock
+   rather than something to act on; the next action reads as the verb it is. */
+.pq-row .pq-hold{display:block;margin-top:2px;font-size:10.5px;font-style:italic;
+  color:var(--ink-faint);}
+.pq-row .pq-next{display:inline-block;margin-top:4px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);
+  background:var(--border);border-radius:999px;padding:1px 7px;}
+/* Ten email links per card became one plus a disclosure. The twisty is small
+   and quiet: it is an escape hatch, not a feature to advertise. */
+.card-emails-more{display:inline-block;margin-left:6px;}
+.card-emails-more>summary{display:inline-block;cursor:pointer;font-size:11px;
+  color:var(--ink-faint);padding:2px 4px;border-radius:6px;}
+.card-emails-more>summary:hover{color:var(--ink-soft);background:var(--border);}
+.card-emails-more[open]>summary{margin-bottom:4px;}
 .pq-row .r-chan{font-size:9.5px;font-weight:700;text-transform:uppercase;
   letter-spacing:.04em;color:var(--ink-faint);
   background:var(--border);border-radius:999px;padding:1px 6px;}
@@ -1723,6 +1768,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   .container{padding:10px;}
 }
 </style>
+<link rel="stylesheet" href="assistant.css?v=20261027-c2a22fff">
 </head>
 <body>
 
@@ -1803,35 +1849,55 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 <div class="slime-drip" aria-hidden="true"></div>
 
 <nav class="tabs" aria-label="Sections">
+  <!-- Four primary destinations, and everything else behind More.
+
+       There were eleven tabs in one scrolling strip, which is a list to read
+       rather than a place to go: Today, All clients, Texts, Text templates,
+       Email templates, Performance, Calendar, Closed, Graveyard, Team,
+       Account health. Seven of those are things you visit occasionally and
+       four are where the work happens.
+
+       Nothing is removed and no key changes. The secondary buttons are the
+       same .tab-btn elements with the same data-tab values, moved inside a
+       <details> so the strip costs no JS state and still works with the
+       keyboard. markActiveTab lights the summary when the open tab lives in
+       here, so "which screen am I on" is never unanswered. -->
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
-  <button class="tab-btn" data-action="tab" data-tab="clients">All <span data-term="contactPlural">clients</span></button>
-  <button class="tab-btn" data-action="tab" data-tab="threads">Texts <span id="threads-count"></span></button>
-  <!-- "Text templates" and "Email templates", named as a pair.
-
-       This was "Messages" next to "Texts" -- synonyms in English for two
-       unrelated screens, one holding conversations and the other holding
-       the library. Calling it Templates fixed that and introduced a smaller
-       version of the same problem, because the tab after it was "Emails",
-       which is also a template library. Saying which kind each one holds is
-       what makes the pair legible.
-
-       The data-tab keys stay 'variants' and 'emails': they are what the
-       bandit and the library call these throughout, and renaming them would
-       reach into saved UI state and the keyboard tab order for nothing
-       anybody can see. -->
-  <button class="tab-btn" data-action="tab" data-tab="variants">Text templates</button>
-  <button class="tab-btn" data-action="tab" data-tab="emails">Email templates</button>
-  <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
+  <!-- "Conversations", not "Texts". The pane holds texts, emails and notes
+       in one thread, and calling it Texts invited somebody to reply to an
+       email in a medium the contact never used. -->
+  <button class="tab-btn" data-action="tab" data-tab="threads">Conversations <span id="threads-count"></span></button>
+  <button class="tab-btn" data-action="tab" data-tab="clients"><span data-term="contactPlural">Clients</span></button>
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
-  <button class="tab-btn" data-action="tab" data-tab="closed">Closed <span id="closed-count"></span></button>
-  <button class="tab-btn" data-action="tab" data-tab="dead"><span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
-  <!-- Only shown to an account that actually manages other people. Hidden
-       entirely rather than shown empty, so nobody sees a tab promising a team
-       view that has no team behind it. -->
-  <button class="tab-btn hidden" id="tab-btn-team" data-action="tab" data-tab="team">Team</button>
-  <!-- Product-owner view across every account, including other businesses.
-       Diagnostics only, never their contacts. Hidden unless the data is there. -->
-  <button class="tab-btn hidden" id="tab-btn-owner" data-action="tab" data-tab="owner">Account health</button>
+
+  <details class="tab-more" id="tab-more">
+    <summary class="tab-btn" id="tab-more-summary">More</summary>
+    <div class="tab-more-menu" role="group" aria-label="Other sections">
+      <!-- "Text templates" and "Email templates", named as a pair.
+
+           This was "Messages" next to "Texts" -- synonyms in English for two
+           unrelated screens, one holding conversations and the other holding
+           the library. Calling it Templates fixed that and introduced a
+           smaller version of the same problem, because the tab after it was
+           "Emails", which is also a template library.
+
+           The data-tab keys stay 'variants' and 'emails': they are what the
+           bandit and the library call these throughout, and renaming them
+           would reach into saved UI state for nothing anybody can see. -->
+      <button class="tab-btn" data-action="tab" data-tab="variants">Text templates</button>
+      <button class="tab-btn" data-action="tab" data-tab="emails">Email templates</button>
+      <button class="tab-btn" data-action="tab" data-tab="weekly">Performance</button>
+      <button class="tab-btn" data-action="tab" data-tab="closed">Closed <span id="closed-count"></span></button>
+      <button class="tab-btn" data-action="tab" data-tab="dead"><span data-term="graveyard">Graveyard</span> <span id="dead-count"></span></button>
+      <!-- Only shown to an account that actually manages other people. Hidden
+           entirely rather than shown empty, so nobody sees a tab promising a
+           team view that has no team behind it. -->
+      <button class="tab-btn hidden" id="tab-btn-team" data-action="tab" data-tab="team">Team</button>
+      <!-- Product-owner view across every account, including other businesses.
+           Diagnostics only, never their contacts. Hidden unless the data is there. -->
+      <button class="tab-btn hidden" id="tab-btn-owner" data-action="tab" data-tab="owner">Account health</button>
+    </div>
+  </details>
 </nav>
 
 <div class="container">
@@ -1856,8 +1922,15 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
 
   <div class="tab-panel active" id="tab-calls">
-    <div id="recent-replies"></div>
-    <div id="unplaced-replies"></div>
+    <!-- Replies used to open this tab, above the day's work.
+
+         They were there for a good reason: a reply seen only by somebody who
+         opens that contact is a reply nobody sees. But the queue now leads
+         with "Replies needing you", so the same fact is in the work itself
+         and the panel above it was the same news twice -- history taking the
+         top of the screen from the thing to do about it.
+
+         It keeps its content and moves below the board. Nothing is removed. -->
     <div id="on-deck"></div>
     <div id="unlogged-calls"></div>
     <!-- Asked where somebody lands coming back from Messages, which is the
@@ -1876,6 +1949,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
         <div class="col-body" id="col-text-today"></div>
       </div>
     </div>
+    <div id="recent-replies"></div>
+    <!-- A reply nothing could be matched to is a data problem, not history,
+         so it stays near the work rather than going to the bottom. -->
+    <div id="unplaced-replies"></div>
     <div class="calls-toolbar">
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>
@@ -2057,9 +2134,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261026-9d4c0655"></script>
-<script src="data.js?v=20261026-9d4c0655"></script>
-<script src="app.js?v=20261026-9d4c0655"></script>
-<script src="auth.js?v=20261026-9d4c0655"></script>
+<script src="logic.js?v=20261027-c2a22fff"></script>
+<script src="data.js?v=20261027-c2a22fff"></script>
+<script src="app.js?v=20261027-c2a22fff"></script>
+<script src="assistant.js?v=20261027-c2a22fff"></script>
+<script src="auth.js?v=20261027-c2a22fff"></script>
 </body>
 </html>

@@ -17,6 +17,10 @@ function gbShowSignedIn(){
   document.getElementById('app-root').classList.remove('hidden');
 }
 function gbShowSignedOut(){
+  /* Tear the assistant down on sign-out, before the app is hidden. It holds
+     one account's findings in the DOM, and leaving them behind a hidden
+     container would survive into whoever signs in next. */
+  if(window.gbAssistantStop) window.gbAssistantStop();
   document.getElementById('app-root').classList.add('hidden');
   document.getElementById('signin-screen').classList.remove('hidden');
 }
@@ -28,6 +32,11 @@ async function gbBoot(session){
   gbBooted = true;
   try{
     await init(); // from app.js — awaits loadState() (data.js), then renderAll()
+    /* After init, because the panel reads STATE for contact names, and
+       deliberately NOT awaited: an assistant that is slow to decide whether
+       it is enrolled must not hold up the CRM behind it. It draws itself
+       when it is ready, or never, and either way the app is already usable. */
+    if(window.gbAssistantStart) window.gbAssistantStart();
   }catch(e){
     console.error('Ghost Recall: failed to load your data', e);
     document.getElementById('signin-error').textContent =
