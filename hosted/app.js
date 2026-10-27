@@ -5395,7 +5395,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261027-c35f91b6c';
+var BUILD_STAMP = '20261027-bffa099cd';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -7103,7 +7103,10 @@ document.addEventListener('click', function(ev){
          Optimistic, like the email path: Ghost Recall cannot see whether Send
          was actually pressed in Messages, so this is logged and undoable
          rather than confirmed beforehand. */
-      if(STATE.clients[cid] && !hasSentStage(STATE.clients[cid], stage)){
+      /* Same rule as doSendText, for the same reason: guarded with
+         hasSentStage this logged nothing for a contact whose call had moved,
+         so the text opened in Messages and left no record of itself. */
+      if(STATE.clients[cid] && !touchAlreadySent(STATE.clients[cid], stage)){
         lastSnapshot = snapshot();
         var smsName = STATE.clients[cid].name, smsSnap = lastSnapshot;
         doMarkSent(cid, stage, true);
@@ -8426,8 +8429,12 @@ function doSendText(cid, stage, target){
      looked while testing the sandbox, where nothing happened and nothing
      explained why. A guard that declines silently is indistinguishable from a
      bug. */
-  if(hasSentStage(client, stage)){
-    showToast('That touch has already been sent to ' + firstName(client.name) + '.');
+  /* Asked the way the cadence asks it. hasSentStage here meant "ever sent",
+     which refused every rescheduled contact whose card the cadence had just
+     offered. See touchAlreadySent. */
+  if(touchAlreadySent(client, stage)){
+    showToast(touchLabel(stage) + ' already went out to ' + firstName(client.name) +
+      ' for this ' + termLower('appointment') + '. Nothing was sent.');
     return;
   }
 

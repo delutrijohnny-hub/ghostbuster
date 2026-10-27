@@ -6242,8 +6242,15 @@ console.log('\n--- a text opened in Messages is recorded ---');
       'the handler no longer records the send');
     assert.ok(!/querySelector/.test(block),
       'the mark is being driven off rendered markup again, which is how this broke');
-    assert.ok(/hasSentStage\(STATE\.clients\[cid\], stage\)/.test(block),
+    /* A STATE-based guard, named for what it asks rather than for how it
+       was first spelled. hasSentStage asked "ever sent", which refused every
+       contact whose appointment had moved -- so the text opened in Messages
+       and was never recorded. touchAlreadySent asks the question the cadence
+       asks: sent for THIS appointment. */
+    assert.ok(/touchAlreadySent\(STATE\.clients\[cid\], stage\)/.test(block),
       'no state-based guard, so a second click would log the touch twice');
+    assert.ok(!/hasSentStage\(/.test(block),
+      'back on "ever sent", which silently stops logging a rescheduled contact');
 
     /* And the write must not sit inside a timer. Comments are stripped
        first: the explanation above this case says the word "setTimeout"
@@ -16246,6 +16253,90 @@ console.log('\n--- appearance: presets and derived tokens ---');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', 1), '#ffffff');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', 5), '#ffffff', 'the range was not clamped');
     assert.strictEqual(GB.mixHex('#000000', '#ffffff', -3), '#000000');
+  });
+}
+
+console.log('\n--- the guard that refused every rescheduled contact ---');
+{
+  const now = new Date('2026-10-26T15:00:00Z');
+  const agoD = (d) => new Date(now.getTime() - d * 86400000).toISOString();
+  const inD  = (d) => new Date(now.getTime() + d * 86400000).toISOString();
+  let seq = 0;
+  const mk = (o) => GB.sanitizeClient(Object.assign(
+    {name:'X', phone:'201555' + String(4000 + (++seq)), timezone:'America/New_York',
+     status:'Booked', bookedDate: agoD(10)}, o));
+  const sent = (stage, daysAgo) => ({id:'m'+stage+daysAgo, channel:'sms', stage:stage,
+    text:'x', sentAt: agoD(daysAgo), deliveryStatus:'delivered'});
+
+  test('a rescheduled contact can be sent the touch their new date is owed', () => {
+    /* The bug, in one assertion. Johnny pressed Send text for a week and got
+       "That touch has already been sent" every time, and nothing ever reached
+       the server -- because the button asked "was this stage EVER sent?"
+       while the cadence that offered the card asked "was it sent for THIS
+       appointment?". 73 contacts on the live book have been rescheduled. */
+    const moved = mk({id:'a', name:'Moved', status:'Rescheduled',
+      callDateTime: inD(6), rescheduleCount: 1,
+      reschedules: [agoD(1)],
+      messageLog: [sent('dayof', 8)]});     // sent for the OLD date
+    assert.strictEqual(GB.hasSentStage(moved, 'dayof'), true,
+      'the fixture must actually have an old send, or this proves nothing');
+    assert.strictEqual(GB.touchAlreadySent(moved, 'dayof'), false,
+      'the send is still blocked for a contact whose appointment moved');
+  });
+
+  test('a touch already sent for THIS appointment is still refused', () => {
+    const c = mk({id:'b', name:'Done', callDateTime: inD(6),
+                  messageLog: [sent('welcome', 1)]});
+    assert.strictEqual(GB.touchAlreadySent(c, 'welcome'), true,
+      'the double-send guard has been removed, not corrected');
+  });
+
+  test('the introduction counts however it was worded', () => {
+    /* welcome / rebooked / followup are one touch wearing three faces. */
+    const c = mk({id:'c', name:'Rebooked', callDateTime: inD(6),
+                  messageLog: [sent('rebooked', 2)]});
+    assert.strictEqual(GB.touchAlreadySent(c, 'welcome'), true,
+      'a rebooked introduction no longer counts as the introduction');
+  });
+
+  test('a one-off typed by hand is never a duplicate touch', () => {
+    const c = mk({id:'d', name:'Custom', callDateTime: inD(6),
+                  messageLog: [sent('custom', 1)]});
+    assert.strictEqual(GB.touchAlreadySent(c, 'custom'), false);
+  });
+
+  test('nothing offered by the day\u2019s list is refused by the button', () => {
+    /* The invariant behind the bug: if the cadence put it on screen, pressing
+       it must reach the server. A guard stricter than the list that produced
+       it is a button that lies about why it did nothing. */
+    const book = [
+      mk({id:'a', name:'Fresh'}),
+      mk({id:'b', name:'Moved', status:'Rescheduled', callDateTime: inD(6),
+          rescheduleCount: 1, reschedules: [agoD(1)], messageLog: [sent('dayof', 8)]}),
+      mk({id:'c', name:'Missed', status:'No-show', callDateTime: agoD(3)}),
+      mk({id:'d', name:'Cold', status:'Ghosted', callDateTime: agoD(60),
+          messageLog: [sent('welcome', 70)]})
+    ];
+    const state = GB.buildDefaultState(); state.senderName = 'J'; state.clients = {};
+    book.forEach(c => { state.clients[c.id] = c; });
+    const offered = GB.getTextTodayList(state, now, '');
+    assert.ok(offered.length >= 2, 'the fixture produced no work to send');
+    offered.forEach(it => {
+      assert.strictEqual(GB.touchAlreadySent(it.client, it.stage), false,
+        it.client.name + ' is offered the ' + it.stage + ' touch and the send button refuses it');
+    });
+  });
+
+  test('neither send path guards with hasSentStage any more', () => {
+    const app = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+    const send = app.slice(app.indexOf('function doSendText('),
+                           app.indexOf('function doSendText(') + 1200);
+    assert.ok(!/hasSentStage\(/.test(send),
+      'doSendText is back on hasSentStage, which refuses every rescheduled contact');
+    assert.ok(/touchAlreadySent\(/.test(send), 'doSendText has no double-send guard at all');
+    assert.strictEqual((app.match(/hasSentStage\(STATE\.clients\[cid\]/g) || []).length, 0,
+      'the handoff still guards its logging with hasSentStage, so a rescheduled ' +
+      'contact opens in Messages and is never recorded');
   });
 }
 

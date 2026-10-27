@@ -8683,6 +8683,36 @@ function cadenceTouches(){
   }).map(function(step){ return step.stage; });
 }
 
+/* Has this touch already gone out FOR THE APPOINTMENT IN FRONT OF US?
+
+   The double-send guard, and it has to ask the same question the cadence
+   asked when it put the card on screen. It did not.
+
+   doSendText guarded with hasSentStage -- "was this stage ever sent?" --
+   while computeDue decides what is due with hasSentStageThisAppointment,
+   "was it sent for THIS appointment?". Those differ for anybody whose call
+   has moved, which is 73 contacts on the live book. The card appeared
+   correctly and the button refused it, with a toast reading "That touch has
+   already been sent to X" -- which reads as information rather than as a
+   refusal, so it was glanced past for a week while Send text looked like it
+   simply did nothing.
+
+   The handoff path had the same guard around its LOGGING, so the same
+   contacts opened in Messages and were never recorded: a text that went out
+   and left no trace, which is its own corner of the unconfirmed pile.
+
+   Delegating to cadenceProgress keeps one rule rather than a third: it
+   already knows that welcome/rebooked/followup are one touch wearing three
+   faces, and it already measures against the current appointment.
+
+   A stage outside the cadence -- a one-off somebody typed -- was never a
+   touch, so it can never be a duplicate touch, and is never blocked. */
+function touchAlreadySent(client, stage){
+  if(!client || !stage) return false;
+  if(cadenceTouches().indexOf(stage) === -1) return false;
+  return cadenceProgress(client).pendingStages.indexOf(stage) === -1;
+}
+
 /* The sequence touch to surface inside a conversation.
 
    The point of putting it here rather than only on Today: a scripted touch
@@ -9583,6 +9613,7 @@ var __LOGIC_EXPORTS__ = {
   upcomingCalls: upcomingCalls,
   nextInQueue: nextInQueue,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
+  touchAlreadySent: touchAlreadySent,
   ACTION_GROUPS: ACTION_GROUPS, ACTION_GROUP_LABELS: ACTION_GROUP_LABELS,
   assistantCoverage: assistantCoverage, assistantDataFindings: assistantDataFindings,
   assistantBriefing: assistantBriefing, assistantWorkflowReview: assistantWorkflowReview,
