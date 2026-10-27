@@ -4300,7 +4300,10 @@ function actionQueue(state, now){
     var group = (stage === 'dayof' || stage === 'hourbefore') ? 'confirmation_due'
               : (stage === 'noshow') ? 'missed'
               : 'follow_up_due';
-    var check = scheduledSendCheck(c, now);
+    /* cadenceApproved: getTextTodayList already asked computeDue whether this
+       stage is due for this contact. Re-deciding that here would drop every
+       no-show recovery and every revival touch -- the recovery book. */
+    var check = scheduledSendCheck(c, now, {cadenceApproved: true});
     if(!check.ok && !check.hold) return;
     var lastAt = lastContactAt(c);
     var quiet = lastAt ? Math.round((now.getTime() - Date.parse(lastAt)) / 60000) : null;
@@ -5117,7 +5120,22 @@ function scheduledSendCheck(client, now, opts){
     return {ok: false, reason: 'follow-ups are paused for this contact'};
   }
 
-  if(stopsCadence(client.status)){
+  /* "The sequence finished" is right for a message somebody queued by hand
+     and wrong for one the cadence itself just asked for.
+
+     stopsCadence is true for No-show, Completed and Ghosted -- 150 of the
+     196 contacts on the live book. Two sequence steps exist precisely for
+     those people: the no-show recovery run, and the monthly revival that
+     keeps a cold contact from being forgotten for good. computeDue has
+     already decided the stage is legitimate for this status, so re-asking
+     here would overrule the cadence with a rule the cadence was written to
+     escape -- and silently delete the entire recovery book from the day's
+     work. Caught by a no-show appearing in the send list and not in the
+     queue built from it.
+
+     So callers acting on a stage the cadence approved pass cadenceApproved,
+     and every other gate below and above still applies to them. */
+  if(!opts.cadenceApproved && stopsCadence(client.status)){
     return {ok: false, reason: 'the sequence finished \u2014 status is ' + (client.status || 'set')};
   }
 
@@ -6448,6 +6466,54 @@ function tzLabel(tz, date){
   return '';
 }
 
+
+/* One appointment, one answer, and it says which clock it is on.
+
+   Reported as "a call showing 2:00 PM on Today and 4:00 PM in Calendar with
+   no timezone labels", and both numbers were being printed honestly by code
+   that disagreed about whose day it is. Today rendered fmtTime(d,
+   c.timezone) -- the CLIENT's zone. Calendar rendered toLocaleTimeString
+   with no timeZone at all -- the BROWSER's. On the live book 63 of 196
+   contacts sit outside Eastern, so a third of the appointments had two
+   times, and a Denver client at 2:00 PM MDT is 4:00 PM where Johnny is,
+   which is exactly the pair that was reported.
+
+   tzLabel has existed since the timezone work shipped and was called by
+   nothing, which is why neither number carried an abbreviation. It does now.
+
+   The rule, from the brief: MY timezone is the answer, because the person
+   reading the screen has to decide whether they can be at a desk. Theirs is
+   a label beside it, shown only when it differs -- "3:00 PM EDT" on its own
+   is cleaner than "3:00 PM EDT (3:00 PM EDT for them)", and a redundant
+   second clock trains people to stop reading the first. */
+function appointmentTimeLabel(iso, clientTz, viewerTz, opts){
+  opts = opts || {};
+  var d = safeDate(iso);
+  if(!d) return {mine: '', theirs: '', sameZone: true, text: '', tz: ''};
+  var vz = viewerTz || 'UTC';
+  var cz = clientTz || vz;
+  var mine   = fmtTime(d, vz) + (opts.noLabel ? '' : ' ' + tzLabel(vz, d));
+  var theirs = fmtTime(d, cz) + (opts.noLabel ? '' : ' ' + tzLabel(cz, d));
+  /* Compared by what it READS as, not by the zone name. America/New_York and
+     America/Detroit are different strings and the same clock, and printing
+     "3:00 PM EDT (3:00 PM EDT for them)" because of a string mismatch is the
+     noise this is meant to remove. */
+  var same = (fmtTime(d, vz) === fmtTime(d, cz)) && (tzLabel(vz, d) === tzLabel(cz, d));
+  return {
+    mine: mine.trim(),
+    theirs: theirs.trim(),
+    sameZone: same,
+    tz: tzLabel(vz, d),
+    text: same ? mine.trim() : mine.trim() + ' \u00b7 ' + theirs.trim() + ' for them'
+  };
+}
+
+/* The zone the person reading the screen is in. One place, so a call site
+   cannot quietly fall back to UTC and print a time nobody is living in. */
+function viewerTimezone(){
+  try{ return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+  catch(e){ return 'UTC'; }
+}
 
 var PHONE_RE = /(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
 
@@ -9028,6 +9094,7 @@ var __LOGIC_EXPORTS__ = {
   OUTCOME_TO_STATUS: OUTCOME_TO_STATUS, setOutcome: setOutcome,
   AREA_CODE_TZ: AREA_CODE_TZ, areaCodeFromPhone: areaCodeFromPhone, timezoneForClient: timezoneForClient,
   resolveClientTimezone: resolveClientTimezone, tzLabel: tzLabel, meetLinkFromEvent: meetLinkFromEvent,
+  appointmentTimeLabel: appointmentTimeLabel, viewerTimezone: viewerTimezone,
   PHONE_RE: PHONE_RE, EMAIL_RE: EMAIL_RE, extractPhone: extractPhone, extractYoutube: extractYoutube,
   extractMeetLink: extractMeetLink, pad2: pad2,
   stripHtml: stripHtml, parseICS: parseICS, isStrategySessionEvent: isStrategySessionEvent,

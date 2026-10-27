@@ -14632,11 +14632,18 @@ test('"when is this call" is answered on the reader’s clock', () => {
       + 'fmtTime defaults to UTC when given nothing, which is why this cannot '
       + 'just delegate to it.');
 
+  /* The headline moved from fmtTimeHere to appointmentTimeLabel(...).mine.
+     Same clock -- the reader's -- and now carrying its zone label, which is
+     what the Calendar disagreement needed. The guard follows the behaviour
+     rather than the spelling: it must be the VIEWER's zone, and it must not
+     be the contact's. */
   const od = codeOnly(app.slice(app.indexOf('var html = \'<div class="ondeck\''),
                                 app.indexOf('<div class="od-actions">')));
-  assert.ok(/fmtTimeHere\(d\)/.test(od),
-    'the On Deck headline is back on the contact’s clock, so it disagrees '
+  assert.ok(/appointmentTimeLabel\([^;]*viewerTimezone\(\)\)\.mine/.test(od),
+    'the On Deck headline is not on the reader’s clock, so it disagrees '
       + 'with the calendar the reader has open');
+  assert.ok(!/fmtTime\(\s*d\s*,\s*c\.timezone\s*\)/.test(od),
+    'the On Deck headline is back on the contact’s clock');
   assert.ok(/their time/.test(od),
     'the contact-clock chip is gone — that is the one that stops somebody '
       + 'texting at 6am and it has to stay');
@@ -14653,6 +14660,66 @@ test('the contact’s clock keeps its label wherever it is shown', () => {
       + 'messages, which is where the contact’s clock actually matters');
   assert.ok(!/od-time">' \+ fmtTime\(d, c\.timezone\)/.test(code),
     'the On Deck headline is unlabelled AND on the contact’s clock again');
+});
+
+test('one appointment gets one answer, and it says which clock', () => {
+  /* The reported pair, reproduced from the live book: America/Denver holds
+     12 of Johnny's contacts with 3 upcoming, and a Denver 12:00 PM is 2:00 PM
+     where he is -- the "2:00 PM on Today, 4:00 PM in Calendar" shape, with
+     neither number labelled. */
+  const iso = '2026-10-27T18:00:00Z';
+  const far = GB.appointmentTimeLabel(iso, 'America/Denver', 'America/New_York');
+  assert.strictEqual(far.mine, '2:00 PM EDT', 'the reader\u2019s clock, labelled');
+  assert.strictEqual(far.theirs, '12:00 PM MDT', 'and theirs, labelled');
+  assert.strictEqual(far.sameZone, false);
+  assert.strictEqual(far.text, '2:00 PM EDT \u00b7 12:00 PM MDT for them');
+});
+
+test('a contact on the same clock is not told twice', () => {
+  const same = GB.appointmentTimeLabel('2026-10-27T18:00:00Z',
+    'America/New_York', 'America/New_York');
+  assert.strictEqual(same.text, '2:00 PM EDT');
+  assert.strictEqual(same.sameZone, true);
+});
+
+test('two zone names that read the same are the same clock', () => {
+  /* Detroit and New York are different strings and one clock. Comparing the
+     names would print "2:00 PM EDT (2:00 PM EDT for them)", and a redundant
+     second clock teaches people to stop reading the first. */
+  const d = GB.appointmentTimeLabel('2026-10-27T18:00:00Z',
+    'America/Detroit', 'America/New_York');
+  assert.strictEqual(d.sameZone, true);
+  assert.strictEqual(d.text, '2:00 PM EDT');
+});
+
+test('the label follows daylight saving rather than being hardcoded', () => {
+  const summer = GB.appointmentTimeLabel('2026-07-15T18:00:00Z',
+    'America/Los_Angeles', 'America/New_York');
+  const winter = GB.appointmentTimeLabel('2026-01-15T18:00:00Z',
+    'America/Los_Angeles', 'America/New_York');
+  assert.ok(/EDT/.test(summer.mine) && /PDT/.test(summer.theirs), summer.text);
+  assert.ok(/EST/.test(winter.mine) && /PST/.test(winter.theirs), winter.text);
+});
+
+test('no appointment is an empty string, never "Invalid Date"', () => {
+  [null, undefined, '', 'not a date'].forEach(bad => {
+    const r = GB.appointmentTimeLabel(bad, 'America/Denver', 'America/New_York');
+    assert.strictEqual(r.text, '', JSON.stringify(bad) + ' produced ' + r.text);
+    assert.strictEqual(r.sameZone, true);
+  });
+});
+
+test('every appointment time on screen goes through the one formatter', () => {
+  /* The defect was two conventions, not one wrong one. A bare
+     toLocaleTimeString with no timeZone silently means the browser's clock,
+     which is how the Calendar ended up disagreeing with Today. */
+  const app = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+  const bare = (app.match(/toLocaleTimeString\(/g) || []).length;
+  assert.strictEqual(bare, 0,
+    'a bare toLocaleTimeString is back in app.js \u2014 it reads the browser clock ' +
+    'with no label, which is the Today-vs-Calendar disagreement');
+  assert.ok(app.indexOf('appointmentTimeLabel(') !== -1,
+    'nothing calls the formatter, so nothing is labelled');
 });
 
 console.log('\n--- does following up first change anything ---');
@@ -16294,6 +16361,49 @@ console.log('\n--- the one action queue ---');
       assert.ok(check.ok,
         r.name + ' is offered as doable work but the send path refuses it: ' + check.reason);
     });
+  });
+
+  test('nothing in the day\u2019s send list falls out of the queue built from it', () => {
+    /* The invariant that was missing, and the bug it would have caught.
+
+       The queue filters getTextTodayList through scheduledSendCheck. That
+       gate refuses anybody whose status stops the cadence -- No-show,
+       Completed, Ghosted -- which is 150 of the 196 contacts on the live
+       book, and which is exactly who the no-show recovery run and the
+       monthly revival touch are FOR. computeDue had already approved those
+       stages; re-deciding it here deleted the whole recovery book from the
+       day's work, silently.
+
+       The suite passed anyway, because the only invariant here ran in one
+       direction: it checked that nothing offered was unsendable, never that
+       nothing sendable was dropped. Both directions now. */
+    const book = [
+      mk({id:'a', name:'Plain'}),
+      mk({id:'b', name:'Missed', status:'No-show', callDateTime: agoMin(60 * 30)}),
+      mk({id:'c', name:'Ghost', status:'Ghosted', callDateTime: agoMin(60 * 24 * 40),
+          messageLog:[{id:'m', channel:'sms', stage:'welcome', text:'hi',
+                       sentAt: agoDay(45), deliveryStatus:'delivered'}]}),
+      mk({id:'d', name:'Owl', phone:'8085550126', timezone:'Pacific/Honolulu'})
+    ];
+    const state = st(book);
+    const sendList = GB.getTextTodayList(state, now, '');
+    const queued = {};
+    GB.actionQueue(state, now).forEach(r => { queued[r.clientId] = r; });
+    sendList.forEach(it => {
+      assert.ok(queued[it.client.id],
+        it.client.name + ' is in the day\u2019s send list (' + it.stage +
+        ') but fell out of the queue built from it');
+    });
+    assert.ok(sendList.length >= 2, 'the fixture must actually produce send work');
+  });
+
+  test('a no-show still gets their recovery follow-up', () => {
+    const missed = mk({id:'a', name:'Missed', status:'No-show',
+                       callDateTime: agoMin(60 * 30)});
+    const q = GB.actionQueue(st([missed]), now);
+    assert.strictEqual(q.length, 1, 'the recovery run is work, not a finished sequence');
+    assert.strictEqual(q[0].group, 'missed');
+    assert.strictEqual(q[0].eligible, true);
   });
 
   test('a contact with no usable number is not quietly dropped into nothing', () => {

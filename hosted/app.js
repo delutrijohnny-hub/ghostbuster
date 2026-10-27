@@ -1461,18 +1461,36 @@ function renderProgressBar(){
      counting it as though it were makes the number a lie by omission. */
   var statBox = el('pw-stats');
   if(statBox){
+    /* From the one queue, and each number says what it counts.
+
+       These four were "Due now", "Due later", "Waiting" and "Unread", built
+       from two derivations while two more numbers on the same screen came
+       from two others. Four answers to one question, 52 / 24 / 35 / 63.
+
+       Now they come from actionQueue, and the units are named rather than
+       left to be inferred: `To do` and `Later` are TASKS, `Replies` is a
+       task group inside that total, and `Unread` is MESSAGES nobody has
+       looked at -- which is not a task count and never was. The titles say
+       so out loud, because a tooltip is where somebody goes when a number
+       surprises them. */
     var crows = conversationList(STATE, now);
     var ccounts = conversationCounts(crows);
-    var split = dueSplit(STATE, crows, now);
+    var aq = actionQueue(STATE, now);
+    var ac = actionQueueCounts(aq);
     var cards = [
-      {cls: 'now',     n: split.now,        k: 'Due now',   filter: 'needs'},
-      {cls: 'later',   n: split.later,      k: 'Due later', filter: 'needs'},
-      {cls: 'waiting', n: ccounts.waiting,  k: 'Waiting',   filter: 'waiting'},
-      {cls: 'unread',  n: ccounts.unread,   k: 'Unread',    filter: 'unread'}
+      {cls: 'now', n: ac.tasks, k: 'To do', filter: 'action',
+       t: ac.tasks + ' ' + (ac.tasks === 1 ? 'job' : 'jobs') + ' you can do right now, across ' +
+          ac.clients + ' ' + (ac.clients === 1 ? 'person' : 'people') + '.'},
+      {cls: 'later', n: ac.held, k: 'Later', filter: 'later',
+       t: 'Real work that is not doable yet — mostly outside sending hours where they are. Each row says which.'},
+      {cls: 'waiting', n: ac.byGroup.needs_response || 0, k: 'Replies', filter: 'replies',
+       t: 'People who wrote to you and have had no answer. Counted inside To do, not on top of it.'},
+      {cls: 'unread', n: ccounts.unread, k: 'Unread', filter: 'unread',
+       t: 'Conversations with something you have not opened. A message count, not a task count.'}
     ];
     statBox.innerHTML = cards.map(function(c){
       return '<button class="pw-stat ' + c.cls + '" data-action="pw-stat" data-filter="' +
-        c.filter + '" title="Opens the messaging workspace showing these."><span class="n">' +
+        c.filter + '" title="' + escapeHtml(c.t) + '"><span class="n">' +
         c.n + '</span><span class="k">' + escapeHtml(c.k) + '</span></button>';
     }).join('');
   }
@@ -1792,18 +1810,47 @@ function buildTouchCard(client, stage, now){
     if(pinnedDoc){
       ordered = [pinnedDoc].concat(ordered.filter(function(d){ return d.id !== pinnedDoc.id; }));
     }
-    var row = h('div',{class:'ce-btns card-emails'},[]);
-    ordered.forEach(function(d){
+    /* The email for THIS touch, and the rest behind a disclosure.
+
+       Every email in the library used to be a button on every card. With ten
+       docs in the library that is ten links per card down a list of sixty --
+       six hundred links to find the one already marked as the right one.
+       Reported as "ten email-template links repeated on individual texting
+       cards", and it reads exactly like that.
+
+       Nothing is taken away: the pinned email keeps its place and its mark,
+       and the others move from one click to one disclosure click. A <details>
+       rather than a modal, so the choice never leaves the card and it costs
+       no CSS state and no JS. The disclosure only appears when there is
+       something behind it -- a library of one must not grow an empty twisty. */
+    function emailLink(d, isPinned){
       var r = renderEmailDoc(STATE, d.id, client, STATE.senderName);
-      if(!r) return;
-      var a = h('a',{class:'ce-btn' + (pinnedDoc && d.id === pinnedDoc.id ? ' ce-pinned' : ''),
+      if(!r) return null;
+      return h('a',{class:'ce-btn' + (isPinned ? ' ce-pinned' : ''),
         target:'_blank', rel:'noopener',
         href: gmailComposeUrl(client.email, r.subject, r.text, businessEmailAccount(STATE)),
         'data-action':'sent-by-email','data-cid':client.id,'data-doc':d.id,
         title: d.whenToSend ? 'Send ' + d.whenToSend : (d.subject || d.title)},
         ['✉ ' + d.title]);
-      row.appendChild(a);
+    }
+    var row = h('div',{class:'ce-btns card-emails'},[]);
+    var first = ordered.length ? emailLink(ordered[0], !!pinnedDoc) : null;
+    if(first) row.appendChild(first);
+
+    var rest = [];
+    ordered.slice(1).forEach(function(d){
+      var a = emailLink(d, false);
+      if(a) rest.push(a);
     });
+    if(rest.length){
+      var more = h('details',{class:'card-emails-more'},[]);
+      more.appendChild(h('summary',{},[rest.length === 1
+        ? '1 other email' : rest.length + ' other emails']));
+      var restRow = h('div',{class:'ce-btns'},[]);
+      rest.forEach(function(a){ restRow.appendChild(a); });
+      more.appendChild(restRow);
+      row.appendChild(more);
+    }
     if(row.childNodes.length) actions.appendChild(row);
   }
   actions.appendChild(h('button',{class:'btn btn-sm btn-ghost','data-action':'generate-ai','data-cid':client.id,'data-stage':stage,title:'Draft a custom text from this client\'s notes, in John\'s voice'},['✨ Generate with AI']));
@@ -1997,10 +2044,9 @@ function renderThreadsTab(){
      way to tell which one lied. */
   /* One derivation feeds the chips and the list, so a count and the rows
      under it cannot disagree. */
-  var queue = priorityQueue(STATE, new Date());
-  var pcounts = priorityCounts(queue, STATE, new Date());
-  renderMsgxFilters({action: pcounts.action, upcoming: pcounts.upcoming,
-                     waiting: pcounts.waiting, all: rows.length});
+  var qnow = new Date();
+  var queue = actionQueue(STATE, qnow);
+  renderMsgxFilters(msgxFilterCounts(queue, rows, qnow));
 
   renderLeftColumn(queue, rows, waiting);
   renderMsgxThread();
@@ -2036,11 +2082,9 @@ function renderThreadsTab(){
     if(badge) badge.textContent = u2 ? '(' + u2 + ')' : '';
     // Redraw the row so its unread pill clears with the badge, rather than
     // the two disagreeing until the next render.
-    var q2 = priorityQueue(STATE, new Date());
-    renderMsgxFilters({action: q2.length,
-                       upcoming: priorityCounts(q2, STATE, new Date()).upcoming,
-                       waiting: q2.filter(function(r){ return r.group === 'needs_response'; }).length,
-                       all: r2.length});
+    var rnow = new Date();
+    var q2 = actionQueue(STATE, rnow);
+    renderMsgxFilters(msgxFilterCounts(q2, r2, rnow));
     renderLeftColumn(q2, r2, r2.filter(function(r){ return r.awaitingReply; }).length);
   }
 }
@@ -2074,13 +2118,62 @@ function markConversationRead(cid, channel){
   }catch(e){ /* a read marker is never worth breaking the page for */ }
 }
 
+/* The chips ARE Today's four cards, same keys and same numbers.
+
+   Two of Today's cards used to navigate here with filters this strip had
+   never heard of -- 'needs' and 'unread' -- which fell through to the
+   unfiltered action list. So the number you pressed and the list you landed
+   on disagreed, every time, for two of the four. They are one vocabulary
+   now: whatever Today counts, this filters by.
+
+   MSGX_FILTERS is the whole vocabulary, in one place, so a card cannot
+   invent a fifth. */
+var MSGX_FILTERS = ['action','replies','later','unread','upcoming','all'];
+var MSGX_FILTER_LABELS = {
+  action:   'To do',
+  replies:  'Replies',
+  later:    'Later',
+  unread:   'Unread',
+  upcoming: 'Calls',
+  all:      'All'
+};
+var MSGX_FILTER_TITLES = {
+  action:   'Everything you can act on now, worst first.',
+  replies:  'People who wrote to you and have had no answer.',
+  later:    'Real work that is not doable yet. Each row says why.',
+  unread:   'Conversations with something you have never opened.',
+  upcoming: 'What is coming, confirmed or not. Not a to-do list.',
+  all:      'Every conversation, newest first.'
+};
+
+/* The chip counts, derived ONCE.
+
+   This was built in two places -- the main render and the redraw that runs
+   after a conversation is marked read -- and the comment above the second one
+   already warned that two copies of a branch are two things to keep in step.
+   They had drifted: the redraw passed `waiting` and the strip had stopped
+   reading it, so marking a conversation read silently replaced the chips with
+   a set whose Replies count was always zero. One function, both call sites. */
+function msgxFilterCounts(queue, rows, now){
+  var ac = actionQueueCounts(queue);
+  return {
+    action:   ac.tasks,
+    replies:  ac.byGroup.needs_response || 0,
+    later:    ac.held,
+    unread:   rows.filter(function(r){ return (r.unread || 0) > 0; }).length,
+    upcoming: upcomingCalls(STATE, now || new Date()).length,
+    all:      rows.length
+  };
+}
+
 function renderMsgxFilters(counts){
   var box = el('msgx-filters'); if(!box) return;
-  var labels = {action: 'Action', upcoming: 'Calls', waiting: 'Waiting', all: 'All'};
-  var cur = UI.msgxFilter || 'all';
-  box.innerHTML = ['action','upcoming','waiting','all'].map(function(f){
+  var cur = UI.msgxFilter || 'action';
+  box.innerHTML = MSGX_FILTERS.map(function(f){
     return '<button data-action="msgx-filter" data-filter="' + f + '"' +
-      (f === cur ? ' class="on"' : '') + '>' + escapeHtml(labels[f]) +
+      (f === cur ? ' class="on"' : '') +
+      ' title="' + escapeHtml(MSGX_FILTER_TITLES[f] || '') + '">' +
+      escapeHtml(MSGX_FILTER_LABELS[f]) +
       ' <span class="n">' + (counts[f] || 0) + '</span></button>';
   }).join('');
 }
@@ -2113,22 +2206,34 @@ function renderMsgxFilters(counts){
 function currentQueueRows(){
   var f = UI.msgxFilter || 'action';
   var now = new Date();
-  if(f === 'all') return filterConversations(conversationList(STATE, now), UI.msgxQuery);
+  if(f === 'all')      return filterConversations(conversationList(STATE, now), UI.msgxQuery);
   if(f === 'upcoming') return filterConversations(upcomingCalls(STATE, now), UI.msgxQuery);
-  var q = priorityQueue(STATE, now);
-  if(f === 'waiting') q = q.filter(function(r){ return r.group === 'needs_response'; });
+  if(f === 'unread'){
+    return filterConversations(conversationList(STATE, now).filter(function(r){
+      return (r.unread || 0) > 0; }), UI.msgxQuery);
+  }
+  var q = msgxQueueRows(f, actionQueue(STATE, now));
   return filterConversations(q, UI.msgxQuery);
+}
+
+/* Which slice of the one queue a filter means. Used by the list and by Next,
+   so pressing Next walks the list in front of somebody rather than a
+   canonical one they cannot see. */
+function msgxQueueRows(f, queue){
+  if(f === 'replies') return queue.filter(function(r){ return r.group === 'needs_response'; });
+  if(f === 'later')   return queue.filter(function(r){ return !r.eligible; });
+  return queue.filter(function(r){ return r.eligible; });      // 'action'
 }
 
 function renderLeftColumn(queue, rows, waiting){
   var f = UI.msgxFilter || 'action';
-  if(f === 'action' || f === 'waiting'){
-    var shown = f === 'waiting'
-      ? queue.filter(function(r){ return r.group === 'needs_response'; })
-      : queue;
-    renderPriorityQueue(filterConversations(shown, UI.msgxQuery));
+  if(f === 'action' || f === 'replies' || f === 'later'){
+    renderPriorityQueue(filterConversations(msgxQueueRows(f, queue), UI.msgxQuery));
   } else if(f === 'upcoming'){
     renderPriorityQueue(filterConversations(upcomingCalls(STATE, new Date()), UI.msgxQuery));
+  } else if(f === 'unread'){
+    var un = rows.filter(function(r){ return (r.unread || 0) > 0; });
+    renderMsgxList(filterConversations(un, UI.msgxQuery), waiting, un.length);
   } else {
     renderMsgxList(filterConversations(rows, UI.msgxQuery), waiting, rows.length);
   }
@@ -2145,7 +2250,7 @@ function renderPriorityQueue(rows){
     if(r.group !== lastGroup){
       var n = rows.filter(function(x){ return x.group === r.group; }).length;
       html += '<div class="pq-head"><span>' +
-        escapeHtml(PRIORITY_LABELS[r.group] || r.group) +
+        escapeHtml(ACTION_GROUP_LABELS[r.group] || PRIORITY_LABELS[r.group] || r.group) +
         '</span><b>' + n + '</b></div>';
       lastGroup = r.group;
     }
@@ -2164,6 +2269,15 @@ function renderPriorityQueue(rows){
           ? '<span class="r-chan">email</span>' : '') +
         '</span>' +
         '<span class="pq-reason ' + tone + '">' + escapeHtml(r.reason) + '</span>' +
+        /* A held row says why it is held, on the row.
+
+           Without this a Later row is indistinguishable from a To do row
+           that simply has not been worked -- which is how an hour goes into
+           a list where nothing can actually be sent. */
+        (r.holdReason ? '<span class="pq-hold">' + escapeHtml(r.holdReason) + '</span>' : '') +
+        /* The one next action, named as a verb. Deciding what to do is the
+           job this list exists to have already done. */
+        (r.nextAction ? '<span class="pq-next">' + escapeHtml(r.nextAction.label) + '</span>' : '') +
         (r.alsoCount ? '<span class="pq-also">+' + r.alsoCount + ' more</span>' : '') +
       '</span></button>';
   });
@@ -2828,7 +2942,7 @@ function renderMsgxProfile(){
     (c.callDateTime
       ? section('call', 'Upcoming call',
           field('When', escapeHtml(fmtDate(safeDate(c.callDateTime), c.timezone) + ' ' +
-            fmtTime(safeDate(c.callDateTime), c.timezone))) +
+            appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).text)) +
           (c.meetLink
             ? field('Link', '<a href="' + escapeHtml(c.meetLink) + '" target="_blank" rel="noopener">' +
                 escapeHtml(c.meetLink.slice(0, 44)) + '</a>')
@@ -2949,7 +3063,7 @@ function renderOnDeck(){
     '<h4><span>⏱ On deck</span><span>' + od.todays.length + ' call' + (od.todays.length === 1 ? '' : 's') +
       ' today' + (od.loggedCount ? (' · ' + od.loggedCount + ' logged') : '') + '</span></h4>' +
     '<div class="od-main">' +
-      '<span class="od-time">' + fmtTimeHere(d) + '</span>' +
+      '<span class="od-time">' + escapeHtml(appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).mine) + '</span>' +
       '<button class="od-name" data-action="open-client" data-cid="' + c.id + '">' + escapeHtml(c.name) + '</button>' +
       '<span class="od-count">' + countdownLabel(od.mins) + '</span>' +
     '</div>' +
@@ -2972,7 +3086,7 @@ function renderOnDeck(){
     '</div>' +
     (od.later.length ? ('<div class="od-rest"><span>Also today:</span>' + od.later.map(function(x){
       return '<button data-action="open-client" data-cid="' + x.id + '">' +
-        fmtTime(safeDate(x.callDateTime), x.timezone) + ' · ' + escapeHtml(x.name) + '</button>';
+        appointmentTimeLabel(x.callDateTime, x.timezone, viewerTimezone()).mine + ' · ' + escapeHtml(x.name) + '</button>';
     }).join('') + '</div>') : '') +
   '</div>';
 
@@ -3466,7 +3580,7 @@ function renderClientsTab(){
   scored.forEach(function(row){
     var c = row.client;
     var d = safeDate(c.callDateTime);
-    var when = d ? (fmtDate(d, c.timezone) + ' ' + fmtTime(d, c.timezone)) : '—';
+    var when = d ? (fmtDate(d, viewerTimezone()) + ' ' + appointmentTimeLabel(d, c.timezone, viewerTimezone()).text) : '—';
     var lastIdx = lastMessageIndex(c);
     var repliedCell;
     if(lastIdx === -1){
@@ -3589,7 +3703,7 @@ function renderDeadTab(){
   tbody.innerHTML = '';
   dead.forEach(function(c){
     var callD = safeDate(c.callDateTime);
-    var callWhen = callD ? (fmtDate(callD, c.timezone) + ' ' + fmtTime(callD, c.timezone)) : '—';
+    var callWhen = callD ? (fmtDate(callD, viewerTimezone()) + ' ' + appointmentTimeLabel(callD, c.timezone, viewerTimezone()).text) : '—';
     var fMs = lastFollowUpSentAt(c);
     var followWhen = fMs !== null ? fmtDate(new Date(fMs), c.timezone) : 'never sent';
     var tr = h('tr',{class:'clickable','data-action':'open-client','data-cid':c.id},[
@@ -4495,7 +4609,13 @@ function renderWeeklyCharts(){
   });
 }
 
-function calEventLabel(c){ return new Date(c.callDateTime).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) + ' ' + c.name; }
+/* The Calendar printed a bare toLocaleTimeString with no timeZone, so it
+   read the BROWSER's clock while Today read the client's -- the same call
+   showing 2:00 PM on one screen and 4:00 PM on the other, neither labelled.
+   Both are appointmentTimeLabel now. */
+function calEventLabel(c){
+  return appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).mine + ' ' + c.name;
+}
 
 
 // The three outcomes actually worth logging at a glance right after a call —
@@ -4567,7 +4687,7 @@ function renderCalendarWeek(box, byDay){
     events.forEach(function(c){
       html += '<div class="cal-week-event st-'+c.status+'">' +
         '<div data-action="open-client" data-cid="'+c.id+'" style="cursor:pointer;">' +
-        '<span class="t">'+escapeHtml(new Date(c.callDateTime).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}))+'</span> · '+escapeHtml(c.name) +
+        '<span class="t">'+escapeHtml(appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).mine)+'</span> · '+escapeHtml(c.name) +
         '<div class="status-pill st-'+c.status+'" style="display:inline-block;margin-left:5px;">'+statusLabel(c.status)+'</div></div>' +
         quickOutcomeButtonsHtml(c.id) +
         '</div>';
@@ -4590,7 +4710,7 @@ function openDayListModal(dayKey){
   var rows = events.map(function(c){
     return '<div class="cal-day-list-event">' +
       '<div data-action="open-client" data-cid="'+c.id+'" style="cursor:pointer;">' +
-      '<strong>'+escapeHtml(new Date(c.callDateTime).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}))+'</strong> · '+escapeHtml(c.name) +
+      '<strong>'+escapeHtml(appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).mine)+'</strong> · '+escapeHtml(c.name) +
       ' <span class="status-pill st-'+c.status+'">'+statusLabel(c.status)+'</span></div>' +
       quickOutcomeButtonsHtml(c.id) +
       '</div>';
@@ -4612,7 +4732,7 @@ function populatePrintSheet(state){
     var d = safeDate(c.callDateTime);
     if(!d || tzDateKey(d,c.timezone) !== tzDateKey(now,c.timezone)) return;
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td>'+fmtTime(d,c.timezone)+'</td><td>'+escapeHtml(c.name)+'</td><td>'+escapeHtml(c.phone)+'</td><td>&nbsp;</td>';
+    tr.innerHTML = '<td>'+escapeHtml(appointmentTimeLabel(c.callDateTime, c.timezone, viewerTimezone()).text)+'</td><td>'+escapeHtml(c.name)+'</td><td>'+escapeHtml(c.phone)+'</td><td>&nbsp;</td>';
     callsBody.appendChild(tr);
   });
   var touchesBody = document.querySelector('#print-touches-table tbody');
@@ -6705,7 +6825,9 @@ document.addEventListener('click', function(ev){
          landing somebody in a conversation they did not choose is how the
          wrong person gets texted. */
       UI.tab = 'threads';
-      UI.msgxFilter = 'needs';
+      /* 'needs' was not one of this strip's filters and never had been, so
+         Work the list landed on the unfiltered queue with no chip lit. */
+      UI.msgxFilter = 'action';
       UI.msgxQuery = '';
       var sbox = el('msgx-search'); if(sbox) sbox.value = '';
       document.querySelectorAll('.tab-btn').forEach(function(b){

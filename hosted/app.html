@@ -1482,6 +1482,21 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 .pq-row .pq-reason.stop{color:var(--ink-faint);}
 .pq-row .pq-also{display:inline-block;margin-top:3px;font-size:10px;
   color:var(--ink-faint);}
+/* Why a row cannot be worked yet, and the one thing to do when it can.
+   The hold reason is faint and italic because it is a fact about the clock
+   rather than something to act on; the next action reads as the verb it is. */
+.pq-row .pq-hold{display:block;margin-top:2px;font-size:10.5px;font-style:italic;
+  color:var(--ink-faint);}
+.pq-row .pq-next{display:inline-block;margin-top:4px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);
+  background:var(--border);border-radius:999px;padding:1px 7px;}
+/* Ten email links per card became one plus a disclosure. The twisty is small
+   and quiet: it is an escape hatch, not a feature to advertise. */
+.card-emails-more{display:inline-block;margin-left:6px;}
+.card-emails-more>summary{display:inline-block;cursor:pointer;font-size:11px;
+  color:var(--ink-faint);padding:2px 4px;border-radius:6px;}
+.card-emails-more>summary:hover{color:var(--ink-soft);background:var(--border);}
+.card-emails-more[open]>summary{margin-bottom:4px;}
 .pq-row .r-chan{font-size:9.5px;font-weight:700;text-transform:uppercase;
   letter-spacing:.04em;color:var(--ink-faint);
   background:var(--border);border-radius:999px;padding:1px 6px;}
@@ -1856,8 +1871,15 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
 
 
   <div class="tab-panel active" id="tab-calls">
-    <div id="recent-replies"></div>
-    <div id="unplaced-replies"></div>
+    <!-- Replies used to open this tab, above the day's work.
+
+         They were there for a good reason: a reply seen only by somebody who
+         opens that contact is a reply nobody sees. But the queue now leads
+         with "Replies needing you", so the same fact is in the work itself
+         and the panel above it was the same news twice -- history taking the
+         top of the screen from the thing to do about it.
+
+         It keeps its content and moves below the board. Nothing is removed. -->
     <div id="on-deck"></div>
     <div id="unlogged-calls"></div>
     <!-- Asked where somebody lands coming back from Messages, which is the
@@ -1876,6 +1898,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
         <div class="col-body" id="col-text-today"></div>
       </div>
     </div>
+    <div id="recent-replies"></div>
+    <!-- A reply nothing could be matched to is a data problem, not history,
+         so it stays near the work rather than going to the bottom. -->
+    <div id="unplaced-replies"></div>
     <div class="calls-toolbar">
       <input type="search" id="calls-search" placeholder="Search clients… (press /)">
       <span style="font-size:12px;color:var(--ink-faint);">Looking for the schedule? See the <a href="#" data-action="tab" data-tab="calendar">Calendar tab</a>.</span>
