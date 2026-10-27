@@ -7248,14 +7248,26 @@ console.log('\n--- a scheduled send, decided at send time ---');
 console.log('\n--- automation controls ---');
 
 {
-  const hrs = (n) => new Date(Date.now() + n*3600000).toISOString();
+  /* A pinned mid-morning, not the machine's clock.
+
+     This block ran every assertion against `NOW`, so its fixtures
+     meant different things depending on the hour. At 00:07 the test below
+     that needs an appointment-critical touch to be due had none -- the call
+     it places "three hours away" lands at 03:07, and the day-of reminder is
+     not due in the small hours. It caught itself and failed, which is the
+     good version of this bug; the bad version passes for the wrong reason.
+
+     09:00 in the contact's own zone: inside sending hours, far from either
+     midnight, and the same instant whatever timezone the runner sits in. */
+  const NOW = atHourInZone(9, 'America/New_York');
+  const hrs = (n) => new Date(NOW.getTime() + n*3600000).toISOString();
   const mk = (o) => {
     const st = GB.buildDefaultState();
     st.clients = {};
     st.clients.c1 = GB.sanitizeClient(Object.assign({
       id:'c1', name:'Sarah', phone:'2135550100', timezone:'America/New_York',
       status:'Booked', callDateTime: hrs(48),
-      bookedDate: new Date(Date.now() - 5*86400000).toISOString(),
+      bookedDate: new Date(NOW.getTime() - 5*86400000).toISOString(),
       messageLog: []
     }, o || {}));
     return st;
@@ -7267,17 +7279,17 @@ console.log('\n--- automation controls ---');
        is. A manual pause is an instruction, and a system that keeps texting
        after being told to stop is worse than one with no control at all. */
     const running = mk({});
-    const dueBefore = GB.computeDue(running.clients.c1, new Date());
+    const dueBefore = GB.computeDue(running.clients.c1, NOW);
     assert.ok(dueBefore.length > 0, 'nothing was due to begin with, so this proves nothing');
 
     const paused = mk({automationPausedUntil: hrs(72)});
-    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, new Date()), [],
+    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, NOW), [],
       'a paused contact still had touches due');
   });
 
   test('an expired pause lets the cadence resume by itself', () => {
     const st = mk({automationPausedUntil: hrs(-1)});
-    assert.ok(GB.computeDue(st.clients.c1, new Date()).length > 0,
+    assert.ok(GB.computeDue(st.clients.c1, NOW).length > 0,
       'a pause that has run out is still holding the cadence');
   });
 
@@ -7301,7 +7313,7 @@ console.log('\n--- automation controls ---');
     /* "Why am I not being told to text her" was answerable only by inferring
        it from an empty list. Archived is not merely paused, and a finished
        sequence is not a pause either. */
-    const now = new Date();
+    const now = NOW;
     assert.strictEqual(GB.automationState(mk({ignored:true}).clients.c1, now).reason, 'archived');
     assert.strictEqual(GB.automationState(mk({status:'Completed'}).clients.c1, now).reason, 'status');
     assert.strictEqual(GB.automationState(mk({automationPausedUntil: hrs(48)}).clients.c1, now).reason, 'manual');
@@ -7310,14 +7322,14 @@ console.log('\n--- automation controls ---');
 
   test('an archived contact outranks a pause, not the other way round', () => {
     const st = mk({ignored:true, automationPausedUntil: hrs(48)});
-    assert.strictEqual(GB.automationState(st.clients.c1, new Date()).reason, 'archived',
+    assert.strictEqual(GB.automationState(st.clients.c1, NOW).reason, 'archived',
       'a pause masked the fact that the contact is archived');
   });
 
   test('a reply hold is reported as a hold, and says reminders still go', () => {
     const st = mk({messageLog: [{id:'m1', stage:'welcome', variantId:'w1', channel:'sms',
       text:'hi', sentAt:hrs(-20), responded:true, respondedAt:hrs(-2), reviewed:true}]});
-    const a = GB.automationState(st.clients.c1, new Date());
+    const a = GB.automationState(st.clients.c1, NOW);
     assert.strictEqual(a.reason, 'reply');
     assert.ok(/reminders still go/i.test(a.label), a.label);
   });
@@ -7329,8 +7341,8 @@ console.log('\n--- automation controls ---');
     const st = mk({automationPausedUntil: hrs(48),
       messageLog: [{id:'m1', stage:'welcome', variantId:'w1', channel:'sms',
         text:'hi', sentAt:hrs(-20), responded:true, respondedAt:hrs(-2), reviewed:true}]});
-    assert.strictEqual(GB.automationState(st.clients.c1, new Date()).reason, 'manual');
-    assert.deepStrictEqual(GB.computeDue(st.clients.c1, new Date()), []);
+    assert.strictEqual(GB.automationState(st.clients.c1, NOW).reason, 'manual');
+    assert.deepStrictEqual(GB.computeDue(st.clients.c1, NOW), []);
   });
 
   test('a pause silences even the appointment reminders', () => {
@@ -7339,14 +7351,14 @@ console.log('\n--- automation controls ---');
        reply-hold filter would let it through -- and my first test could not
        tell, because nothing exempt was due in it. */
     const soon = {callDateTime: hrs(3),
-      bookedDate: new Date(Date.now() - 5*86400000).toISOString()};
+      bookedDate: new Date(NOW.getTime() - 5*86400000).toISOString()};
     const running = mk(soon);
-    const dueNow = GB.computeDue(running.clients.c1, new Date());
+    const dueNow = GB.computeDue(running.clients.c1, NOW);
     assert.ok(dueNow.some(s2 => GB.PAUSE_EXEMPT_STAGES[s2]),
       'no appointment-critical touch was due, so this proves nothing');
 
     const paused = mk(Object.assign({automationPausedUntil: hrs(48)}, soon));
-    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, new Date()), [],
+    assert.deepStrictEqual(GB.computeDue(paused.clients.c1, NOW), [],
       'a paused contact still got an appointment reminder');
   });
 
@@ -7362,7 +7374,7 @@ console.log('\n--- automation controls ---');
     // follow-up to that contact with no way to see why.
     const st = mk({automationPausedUntil: 'not-a-date'});
     assert.strictEqual(st.clients.c1.automationPausedUntil, null);
-    assert.ok(GB.computeDue(st.clients.c1, new Date()).length > 0);
+    assert.ok(GB.computeDue(st.clients.c1, NOW).length > 0);
   });
 
   test('the browser writes the pause back, or it is lost on reload', () => {
@@ -15667,7 +15679,11 @@ console.log('\n--- what is actually known about a send ---');
        other eight are undone or just unconfirmed, and those need opposite
        responses. */
     const st = GB.buildDefaultState();
-    const now = new Date();
+    /* Pinned to the afternoon. With the real clock this read "sent 30 minutes
+       ago" and counted messages sent TODAY, so for the first half hour after
+       midnight the fixture's messages were yesterday's and every count came
+       back zero. Correct code, impossible fixture. */
+    const now = atHourInZone(14, 'America/New_York');
     const t = (m) => new Date(now.getTime() - m * 60000).toISOString();
     st.clients = {c1: GB.sanitizeClient({id:'c1', name:'T', messageLog:[
       {id:'a', stage:'welcome',    channel:'sms', text:'x', sentAt:t(30), deliveryStatus:'delivered'},
@@ -16256,6 +16272,84 @@ console.log('\n--- appearance: presets and derived tokens ---');
   });
 }
 
+console.log('\n--- an edit must survive the modal closing ---');
+{
+  /* Johnny added a phone number to a contact with a confirmed call the next
+     afternoon. It was silently discarded: typed, looked saved, gone after a
+     reload, no error anywhere. That contact had no other number, so the
+     reminder the show-up rate depends on would not have gone out.
+
+     The fields save on 'change', which for a text input fires on BLUR.
+     closeModal wipes modal-root's innerHTML, so a field still holding focus
+     is removed from the document and change never fires at all. Escape, the
+     close button and the overlay all arrive through closeModal.
+
+     The browser is where this was proven -- before the fix, Escape left 0
+     writes and an empty phone; after it, Escape, the close button and a real
+     change event all write once, and closing a modal nobody edited writes
+     nothing. The node suite cannot drive that: its document is a noop proxy,
+     so a DOM test here would pass against the broken version too. What it
+     CAN hold is the shape: that the flush exists and happens first. */
+  const app = fs.readFileSync(APP_JS, 'utf8');
+  const close = app.slice(app.indexOf('function closeModal()'),
+                          app.indexOf('function openModalHtml('));
+
+  test('closeModal commits pending edits before destroying the modal', () => {
+    const flushAt = close.indexOf('flushOpenClientFields()');
+    const wipeAt = close.indexOf("innerHTML = ''");
+    assert.ok(flushAt !== -1, 'closeModal no longer flushes pending edits');
+    assert.ok(wipeAt !== -1, 'closeModal no longer clears the modal');
+    assert.ok(flushAt < wipeAt,
+      'the flush runs AFTER the modal is wiped, so the fields it reads are ' +
+      'already gone \u2014 which is the original bug with extra steps');
+  });
+
+  test('the flush reads the fields, not whatever happens to have focus', () => {
+    const flush = app.slice(app.indexOf('function flushOpenClientFields()'),
+                            app.indexOf('function closeModal()'));
+    assert.ok(/querySelectorAll\('\[data-action="save-client-field"\]'\)/.test(flush),
+      'the flush does not read the edited fields out of the DOM');
+    assert.ok(!/activeElement/.test(flush),
+      'the flush trusts document.activeElement, so a field edited and then ' +
+      'tabbed past would be dropped');
+  });
+
+  test('one function applies an edit, used by both paths', () => {
+    /* Two copies of "write this field onto the client" is two things to keep
+       in step, and the one in the close path would be the one nobody tests. */
+    const code = codeOnly(app);
+    assert.ok(/function applyClientFieldEdit\(/.test(code), 'no shared apply function');
+    assert.strictEqual((code.match(/applyClientFieldEdit\(/g) || []).length, 3,
+      'applyClientFieldEdit should be defined once and called from exactly two ' +
+      'places \u2014 the change handler and the flush');
+    const handler = code.slice(code.indexOf("=== 'save-client-field'"),
+                               code.indexOf("=== 'save-client-field'") + 700);
+    assert.ok(!/c\[field\] = t\.value/.test(handler),
+      'the change handler writes the field itself again instead of delegating');
+  });
+
+  test('closing a modal nobody edited writes nothing', () => {
+    const code = codeOnly(app);
+    const apply = code.slice(code.indexOf('function applyClientFieldEdit('),
+                             code.indexOf('function flushOpenClientFields('));
+    assert.ok(/return false/.test(apply),
+      'applyClientFieldEdit always writes, so merely opening and closing a ' +
+      'client would save the account and re-render');
+    assert.ok(/next == null \? '' : next/.test(apply),
+      'the no-change comparison is gone, so an unchanged field still writes');
+  });
+
+  test('a hand-corrected name or timezone still outranks the derived guess', () => {
+    /* These flags moved into applyClientFieldEdit with the rest. Losing them
+       means a correction reverts on the next calendar sync. */
+    const code = codeOnly(app);
+    const apply = code.slice(code.indexOf('function applyClientFieldEdit('),
+                             code.indexOf('function flushOpenClientFields('));
+    assert.ok(/timezoneConfirmed = true/.test(apply), 'a chosen timezone is no longer marked confirmed');
+    assert.ok(/nameConfirmed = true/.test(apply), 'a corrected name is no longer marked confirmed');
+  });
+}
+
 console.log('\n--- the guard that refused every rescheduled contact ---');
 {
   const now = new Date('2026-10-26T15:00:00Z');
@@ -16364,7 +16458,20 @@ console.log('\n--- the scenarios the brief names ---');
     const state = st([c]);
     assert.strictEqual(GB.deliveryState(c.messageLog[0]).confirmed, false,
       'an opened draft is reporting itself as a confirmed send');
-    const prog = GB.textingProgress(state, now, 1);
+    /* textingProgress counts what was sent TODAY, judged in the RUNNER's own
+       timezone -- so this assertion needs a clock whose local day contains
+       the message. The block's fixed instant is 15:00 UTC, which is already
+       tomorrow in Tokyo, and "30 minutes ago" then falls on the previous
+       local day and counts as nothing. Found by running the suite in six
+       zones rather than in mine.
+
+       Midday in the runner's own zone, with a message minutes old, is the
+       one anchor that holds everywhere. */
+    const localNoon = atHourInZone(12, Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const localC = mk({id:'a2', name:'Opened Local', messageLog:[
+      {id:'m2', channel:'sms', stage:'welcome', text:'hi',
+       sentAt: new Date(localNoon.getTime() - 30 * 60000).toISOString()}]});
+    const prog = GB.textingProgress(st([localC]), localNoon, 1);
     assert.strictEqual(prog.confirmed, 0, 'progress counted an unconfirmed send as done');
     assert.ok(prog.awaiting >= 1, 'the unconfirmed send is not shown as awaiting confirmation');
     const finding = GB.assistantDataFindings(state, now).find(f => f.kind === 'unconfirmed_sends');

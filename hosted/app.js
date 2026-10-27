@@ -4962,7 +4962,66 @@ function showToast(message, undoJson){
    12) MODALS
    ============================================================ */
 
-function closeModal(){ el('modal-root').innerHTML = ''; openDayListKey = null; }
+/* Applying one edited field from the client modal, from either of the two
+   places that need to: the change event, and the moment the modal closes.
+
+   Returns whether anything was actually written, so a close that changed
+   nothing does not trigger a render. */
+function applyClientFieldEdit(t){
+  if(!t || !t.getAttribute) return false;
+  var cid = t.getAttribute('data-cid'), field = t.getAttribute('data-field');
+  var c = STATE && STATE.clients && STATE.clients[cid];
+  if(!c || !field) return false;
+  var next = (field === 'callDateTime')
+    ? (t.value ? parseDatetimeLocalInTZ(t.value, c.timezone || 'America/New_York') : null)
+    : t.value;
+  /* Nothing to write. Without this, closing a modal nobody edited would save
+     the whole account and re-render for no reason. */
+  if((c[field] == null ? '' : c[field]) === (next == null ? '' : next)) return false;
+  c[field] = next;
+  // Picking a zone by hand is a deliberate correction — flag it so the
+  // area-code guess stops overriding it on every load.
+  if(field === 'timezone') c.timezoneConfirmed = true;
+  /* Same reason as the zone above: a derived value somebody corrected by
+     hand has to survive the next sync, or they fix it, watch it stick,
+     and find it reverted days later. */
+  if(field === 'name') c.nameConfirmed = true;
+  saveState(STATE);
+  return true;
+}
+
+/* Everything typed in the modal, committed before the modal is destroyed.
+
+   The fields save on 'change', which for a text input fires on BLUR. closeModal
+   wipes modal-root's innerHTML, so a field still holding focus is removed from
+   the document and the change event never fires at all. Escape, the close
+   button and a click on the overlay all arrive this way.
+
+   Johnny added a phone number to a client with a call the next afternoon, and
+   it was silently discarded: typed, looked saved, gone after a reload, with no
+   error anywhere. The contact had no other number, so the reminder that
+   protects the show-up rate would not have gone out.
+
+   Reading the values back off the DOM rather than trusting a focus check: a
+   field edited and then tabbed past is already committed and compares equal,
+   so this costs nothing and catches every field rather than only the focused
+   one. */
+function flushOpenClientFields(){
+  var root = el('modal-root');
+  if(!root || !root.querySelectorAll) return false;
+  var wrote = false;
+  Array.prototype.forEach.call(
+    root.querySelectorAll('[data-action="save-client-field"]'),
+    function(t){ if(applyClientFieldEdit(t)) wrote = true; });
+  return wrote;
+}
+
+function closeModal(){
+  var wrote = flushOpenClientFields();
+  el('modal-root').innerHTML = '';
+  openDayListKey = null;
+  if(wrote) renderAll();
+}
 
 function openModalHtml(innerHtml, wide){
   el('modal-root').innerHTML = '<div class="modal-overlay" data-action="overlay-close"><div class="modal' + (wide?' modal-wide':'') + '" data-stop-close="1">' + innerHtml + '</div></div>';
@@ -5395,7 +5454,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261027-664f7287e';
+var BUILD_STAMP = '20261027-21f8ca71f';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -7573,18 +7632,8 @@ document.addEventListener('change', function(ev){
   }
   if(t.getAttribute && t.getAttribute('data-action') === 'save-client-field'){
     var cid2 = t.getAttribute('data-cid'), field = t.getAttribute('data-field');
-    var c = STATE.clients[cid2];
-    if(c){
-      if(field === 'callDateTime') c.callDateTime = t.value ? parseDatetimeLocalInTZ(t.value, c.timezone || 'America/New_York') : null;
-      else c[field] = t.value;
-      // Picking a zone by hand is a deliberate correction — flag it so the
-      // area-code guess stops overriding it on every load.
-      if(field === 'timezone') c.timezoneConfirmed = true;
-      /* Same reason as the zone above: a derived value somebody corrected by
-         hand has to survive the next sync, or they fix it, watch it stick,
-         and find it reverted days later. */
-      if(field === 'name') c.nameConfirmed = true;
-      saveState(STATE); renderAll();
+    if(applyClientFieldEdit(t)){
+      renderAll();
       // the call-time field is displayed in the client's own zone, so a
       // timezone change needs the modal itself re-drawn to stay correct
       if(field === 'timezone') openClientModal(cid2);
