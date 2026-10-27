@@ -1,0 +1,107 @@
+/* The assistant panel.
+ *
+ * Calm on purpose. No accent fills, no badges, no attention-grabbing: the
+ * whole point of this helper is to remove clutter, and a panel that shouts
+ * would be adding some. It borrows the app's own tokens so it inherits every
+ * theme, including the custom ones, rather than carrying its own palette
+ * that goes wrong the moment somebody picks a different accent.
+ */
+#ga-launcher{
+  position:fixed; right:20px; bottom:20px; z-index:80;
+  width:46px; height:46px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:21px; line-height:1; cursor:pointer;
+  background:var(--card); color:var(--ink);
+  border:1px solid var(--border);
+  box-shadow:0 6px 20px #00000026;
+  transition:transform .12s ease, box-shadow .12s ease;
+}
+#ga-launcher:hover{ transform:translateY(-1px); box-shadow:0 10px 26px #0003; }
+
+#ga-panel{
+  position:fixed; right:20px; bottom:76px; z-index:81;
+  width:min(430px, calc(100vw - 32px));
+  max-height:min(640px, calc(100dvh - 120px));
+  overflow:auto; box-sizing:border-box; padding:18px;
+  background:var(--card); color:var(--ink);
+  border:1px solid var(--border); border-radius:14px;
+  box-shadow:0 18px 52px #00000038;
+}
+#ga-panel[hidden]{ display:none; }
+#ga-panel .ga-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+#ga-panel h2{ font-size:17px; margin:0; }
+#ga-panel h3{ font-size:12px; margin:18px 0 6px; text-transform:uppercase;
+  letter-spacing:.06em; color:var(--ink-faint); font-weight:700; }
+#ga-panel p{ font-size:13px; line-height:1.55; margin:5px 0; }
+#ga-panel .ga-sub{ color:var(--ink-faint); font-size:11.5px; margin:6px 0 14px; }
+#ga-panel .ga-lead{ font-size:14px; font-weight:600; margin:12px 0; }
+#ga-panel .ga-status{ font-size:11.5px; color:var(--ink-faint); margin:10px 0 0; }
+#ga-panel .ga-label{ display:block; font-size:12px; color:var(--ink-soft); margin-top:12px; }
+
+#ga-panel button{
+  font-family:inherit; font-size:12.5px; cursor:pointer;
+  border:1px solid var(--border); border-radius:8px; padding:7px 11px;
+  background:transparent; color:inherit; margin:4px 4px 0 0;
+}
+#ga-panel button:hover{ background:var(--border); }
+#ga-panel button:disabled{ opacity:.5; cursor:progress; }
+#ga-panel .ga-primary{ font-weight:650; }
+#ga-panel .ga-close{ padding:4px 9px; font-size:11.5px; margin:0; }
+#ga-panel textarea{
+  display:block; width:100%; box-sizing:border-box; margin:6px 0 0;
+  font-family:inherit; font-size:13px; padding:9px;
+  border:1px solid var(--border); border-radius:8px;
+  background:var(--bg, var(--card)); color:inherit; resize:vertical;
+}
+
+/* An observation and a suggestion look different because they ARE different:
+   one is a fact with evidence, the other is a proposal to agree with. */
+#ga-panel .ga-card{ border:1px solid var(--border); border-radius:10px;
+  padding:10px 11px; margin:8px 0; }
+#ga-panel .ga-card-head{ display:flex; align-items:center; gap:7px; margin-bottom:4px;
+  flex-wrap:wrap; }
+#ga-panel .ga-suggestion{ border-style:dashed; }
+#ga-panel .ga-tag{ font-size:9.5px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.05em; border-radius:999px; padding:2px 7px;
+  background:var(--border); color:var(--ink-soft); }
+#ga-panel .ga-tag.maybe{ color:var(--ink-faint); }
+#ga-panel .ga-src{ font-size:10px; color:var(--ink-faint); }
+#ga-panel .ga-evidence{ font-size:11px; color:var(--ink-faint); font-variant-numeric:tabular-nums; }
+#ga-panel .ga-why{ font-size:12px; color:var(--ink-soft); }
+#ga-panel .ga-noticed{ font-weight:600; }
+#ga-panel .ga-change{ margin-top:6px; padding-top:6px; border-top:1px solid var(--border); }
+#ga-panel .ga-change strong{ font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--ink-faint); }
+#ga-panel .ga-limit{ font-size:11px; color:var(--ink-faint); font-style:italic; }
+
+#ga-panel details{ margin-top:6px; }
+#ga-panel summary{ cursor:pointer; font-size:11px; color:var(--ink-faint); }
+#ga-panel .ga-coverage{ margin:0 0 6px; }
+
+#ga-panel .ga-links{ display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+#ga-panel .ga-link{ font-size:11px; padding:3px 8px; margin:0; }
+#ga-panel .ga-more{ font-size:10.5px; color:var(--ink-faint); align-self:center; }
+
+#ga-panel .ga-verdicts{ display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+  margin-top:8px; padding-top:7px; border-top:1px solid var(--border); }
+#ga-panel .ga-verdict{ font-size:11px; padding:3px 8px; margin:0; }
+#ga-panel .ga-verdict.on{ background:var(--border); font-weight:650; }
+#ga-panel .ga-verdict-note{ font-size:10.5px; color:var(--ink-faint); }
+
+#ga-panel :focus-visible, #ga-launcher:focus-visible{
+  outline:2px solid var(--green, #3188d8); outline-offset:2px;
+}
+
+/* On a phone the panel is the screen, and the launcher sits clear of the
+   composer rather than on top of it. */
+@media (max-width:600px){
+  #ga-launcher{ right:14px; bottom:14px; width:42px; height:42px; font-size:19px; }
+  #ga-panel{ right:10px; left:10px; bottom:66px; width:auto;
+    max-height:calc(100dvh - 100px); padding:15px; }
+}
+
+/* Somebody who has asked for less motion is not asking for a lift on hover. */
+@media (prefers-reduced-motion: reduce){
+  #ga-launcher{ transition:none; }
+  #ga-launcher:hover{ transform:none; }
+}
