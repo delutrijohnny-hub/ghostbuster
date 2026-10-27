@@ -1,3 +1,7 @@
+create schema ghost_assistant_internal;
+revoke all on schema ghost_assistant_internal from public, anon;
+grant usage on schema ghost_assistant_internal to authenticated;
+
 -- Explicit opt-in, managed by an operator. No user is enrolled by default.
 create table public.assistant_pilot_users (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -31,7 +35,7 @@ create policy assistant_run_feedback on public.assistant_runs for update to auth
 create index assistant_runs_user_time on public.assistant_runs(user_id, created_at desc);
 
 -- Atomic quota reservation. Also acts as the backend pilot gate.
-create function public.reserve_assistant_run(p_mode text, p_question text)
+create function ghost_assistant_internal.reserve_assistant_run(p_mode text, p_question text)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare result uuid;
 begin
@@ -45,14 +49,29 @@ begin
   insert into assistant_runs(user_id, mode, question) values(auth.uid(), p_mode, p_question) returning id into result;
   return result;
 end $$;
-revoke all on function public.reserve_assistant_run(text,text) from public, anon;
-grant execute on function public.reserve_assistant_run(text,text) to authenticated;
+revoke all on function ghost_assistant_internal.reserve_assistant_run(text,text) from public, anon;
+grant execute on function ghost_assistant_internal.reserve_assistant_run(text,text) to authenticated;
 
-create function public.finish_assistant_run(p_id uuid, p_answer text)
+create function ghost_assistant_internal.finish_assistant_run(p_id uuid, p_answer text)
 returns void language sql security definer set search_path = public as $$
   update assistant_runs set answer = left(p_answer, 16000)
   where id = p_id and user_id = auth.uid() and answer = ''
     and exists(select 1 from assistant_pilot_users where user_id = auth.uid() and enabled);
 $$;
+revoke all on function ghost_assistant_internal.finish_assistant_run(uuid,text) from public, anon;
+grant execute on function ghost_assistant_internal.finish_assistant_run(uuid,text) to authenticated;
+
+-- Exposed wrappers run with caller permissions; privileged implementations
+-- live outside the Data API schema and check auth.uid() and enrollment.
+create function public.reserve_assistant_run(p_mode text, p_question text)
+returns uuid language sql security invoker set search_path = '' as $$
+ select ghost_assistant_internal.reserve_assistant_run(p_mode,p_question);
+$$;
+create function public.finish_assistant_run(p_id uuid, p_answer text)
+returns void language sql security invoker set search_path = '' as $$
+ select ghost_assistant_internal.finish_assistant_run(p_id,p_answer);
+$$;
+revoke all on function public.reserve_assistant_run(text,text) from public, anon;
 revoke all on function public.finish_assistant_run(uuid,text) from public, anon;
+grant execute on function public.reserve_assistant_run(text,text) to authenticated;
 grant execute on function public.finish_assistant_run(uuid,text) to authenticated;

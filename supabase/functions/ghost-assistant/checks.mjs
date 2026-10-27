@@ -5,6 +5,7 @@ export function inspectSnapshot(clients, messages, now = Date.now()) {
   for (const c of clients) {
     const phone = String(c.phone || '').replace(/\D/g, '');
     if (phone) phones.set(phone, [...(phones.get(phone) || []), c]);
+    if (c.ignored || c.close_outcome === 'Closed') continue;
     const when = Date.parse(c.call_date_time);
     if (Number.isFinite(when) && when < now && ['Booked','Confirmed','Reminded'].includes(c.status))
       findings.push({kind:'missing_outcome', client_ids:[c.id], detail:`${c.name}: past appointment still marked ${c.status}. Review its outcome.`});
