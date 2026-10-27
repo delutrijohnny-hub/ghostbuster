@@ -1214,6 +1214,35 @@ function setTextTodayOpen(v){
    what lets a phone drop that header on the one tab where it is in the way. */
 function markActiveTab(){
   try{ document.body.setAttribute('data-tab', UI.tab || ''); }catch(e){}
+  /* Which screen am I on, when the screen lives behind More.
+
+     The tab strip marks .active on the button it switched to, and seven of
+     those buttons are now inside a closed <details> where nobody can see the
+     mark. Without this, opening Performance leaves every visible tab
+     unlit -- which reads as "no tab is selected", not as "the selected one
+     is in here".
+
+     Also closes the menu after a pick. A disclosure that stays open over the
+     screen it just navigated to is a thing to dismiss, and dismissing it is
+     work the click already did. */
+  try{
+    var more = document.getElementById('tab-more');
+    if(!more) return;
+    /* Where the strip ends, for the phone menu that is pinned to the
+       viewport rather than to the strip it scrolls with. Measured rather
+       than guessed: the strip sits under a header whose height changes with
+       the account's name and the wrap at narrow widths, so a constant here
+       would be wrong on exactly the screens this is for. */
+    var nav = more.parentNode;
+    if(nav && nav.getBoundingClientRect){
+      var b = Math.round(nav.getBoundingClientRect().bottom);
+      if(b > 0) document.documentElement.style.setProperty('--tabs-bottom', b + 'px');
+    }
+    var inside = more.querySelector('.tab-btn[data-tab="' + (UI.tab || '') + '"]');
+    var summary = document.getElementById('tab-more-summary');
+    if(summary) summary.classList.toggle('active', !!inside);
+    if(inside) more.removeAttribute('open');
+  }catch(e){ /* navigation chrome is never worth breaking a render for */ }
 }
 
 function renderAll(){
@@ -6097,9 +6126,13 @@ document.addEventListener('click', function(ev){
       break;
     case 'tab':
       UI.tab = target.getAttribute('data-tab');
-      markActiveTab();
       document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.toggle('active', b===target); });
       document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.toggle('active', p.id==='tab-'+UI.tab); });
+      /* AFTER the sweep above, not before. The More summary is itself a
+         .tab-btn, so a sweep that lights only the clicked element takes the
+         summary's mark straight back off -- picking Performance left every
+         visible tab unlit, which reads as no tab being selected at all. */
+      markActiveTab();
       /* The messaging workspace is laid out from the window width, and a
          hidden panel measures nothing useful. Rendered at load in a narrow
          pane it picks the phone layout and keeps it after the window grows,

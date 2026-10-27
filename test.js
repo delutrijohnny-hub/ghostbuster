@@ -16206,6 +16206,74 @@ console.log('\n--- appearance: presets and derived tokens ---');
   });
 }
 
+console.log('\n--- four destinations, and everything else behind More ---');
+{
+  const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+  const nav = html.slice(html.indexOf('<nav class="tabs"'),
+                         html.indexOf('</nav>', html.indexOf('<nav class="tabs"')));
+  const menu = nav.slice(nav.indexOf('<div class="tab-more-menu"'));
+  const primary = nav.slice(0, nav.indexOf('<details class="tab-more"'));
+  const tabKeys = (block) => (block.match(/data-tab="([a-z]+)"/g) || [])
+    .map(m => m.replace(/.*"([a-z]+)".*/, '$1'));
+
+  test('exactly four primary destinations, and they are the named ones', () => {
+    assert.deepStrictEqual(tabKeys(primary), ['calls', 'threads', 'clients', 'calendar'],
+      'the primary strip is not Today / Conversations / Clients / Calendar');
+  });
+
+  test('every other section is still reachable, none were dropped', () => {
+    /* Simplifying must not remove capability. Eleven tabs became four plus
+       seven, and this fails if any of the seven goes missing. */
+    const all = tabKeys(nav).sort();
+    assert.deepStrictEqual(all, ['calendar','calls','clients','closed','dead','emails',
+                                 'owner','team','threads','variants','weekly'],
+      'a section disappeared from navigation entirely');
+    assert.deepStrictEqual(tabKeys(menu).sort(),
+      ['closed','dead','emails','owner','team','variants','weekly']);
+  });
+
+  test('the tab keys did not change, so saved UI state still resolves', () => {
+    /* 'variants' and 'emails' are what the bandit and the library call these
+       everywhere. Renaming the KEYS to match the labels would reach into
+       saved state and the panel ids for nothing anybody can see. */
+    const app = fs.readFileSync(APP_JS, 'utf8');
+    tabKeys(nav).forEach(k => {
+      assert.ok(html.indexOf('id="tab-' + k + '"') !== -1,
+        'data-tab="' + k + '" has no matching panel id="tab-' + k + '"');
+    });
+    assert.ok(/data-tab="variants"/.test(html) && /data-tab="emails"/.test(html),
+      'the template tab keys were renamed');
+    assert.ok(app.indexOf('tab-more-summary') !== -1,
+      'nothing lights the More summary, so a secondary tab leaves every tab unlit');
+  });
+
+  test('picking a section inside More lights More, not nothing', () => {
+    /* The ordering bug this had: markActiveTab ran BEFORE the sweep that
+       lights only the clicked .tab-btn, and the More summary is itself a
+       .tab-btn -- so the mark was set and immediately taken back off. */
+    const app = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+    const handler = app.slice(app.indexOf("case 'tab':"),
+                              app.indexOf("case 'set-stats-range':"));
+    const sweepAt = handler.indexOf("classList.toggle('active', b===target)");
+    const markAt = handler.indexOf('markActiveTab()');
+    assert.ok(sweepAt !== -1 && markAt !== -1, 'the tab handler no longer does both');
+    assert.ok(markAt > sweepAt,
+      'markActiveTab runs before the sweep that clears every other .tab-btn, '
+        + 'so the More summary is lit and then immediately unlit');
+  });
+
+  test('the phone menu is pinned to the viewport, not to the strip it scrolls with', () => {
+    /* The strip scrolls horizontally on a phone. An absolutely positioned
+       menu scrolls with it and lands off the edge; anchoring it left instead
+       of right only pushes it further off, which the first attempt did. */
+    const css = html.slice(html.indexOf('.tab-more{'), html.indexOf('.tab-panel{'));
+    assert.ok(/@media \(max-width:560px\)[\s\S]*\.tab-more-menu\{[^}]*position:fixed/.test(css),
+      'the narrow-screen menu is not fixed to the viewport');
+    assert.ok(/--tabs-bottom/.test(css),
+      'the fixed menu has no measured offset, so it sits under or over the strip');
+  });
+}
+
 console.log('\n--- the one action queue ---');
 {
   /* The defect this replaced, stated as a test.
