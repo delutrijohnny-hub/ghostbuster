@@ -1834,6 +1834,8 @@ function buildTouchCard(client, stage, now){
         'data-action':'send-text','data-cid':client.id,'data-stage':stage,
         title:'Sends from Messages on your Mac, from your own number — so it arrives in the thread ' + firstName(client.name) + ' already has with you, and their reply comes back here.'},
         ['Send text']));
+    }
+    {
       /* And the handoff, on a phone.
 
          The Mac route is the right default at a desk and the wrong one in a
@@ -1841,7 +1843,16 @@ function buildTouchCard(client, stage, now){
          are, while the phone in your hand has Messages on it already.
          Offered as WELL rather than instead, because when the Mac is awake
          it remains the better route -- it confirms delivery and a handoff
-         never can. */
+         never can.
+
+         Rendered OUTSIDE the sending window too, which is why it sits in its
+         own block rather than in the else above. Quiet hours govern what this
+         app SENDS; opening a draft sends nothing. Gating it meant that after
+         9pm every card lost both controls and kept only a note, so there was
+         no way to text anybody by hand from Today -- and this is the control
+         that was explicitly asked to stay. The note above still says what
+         time it is where they are, which should inform the decision rather
+         than make it. */
       actions.appendChild(h('a',{class:'btn btn-sm handoff-btn',
         href: smsHrefFor(client, text),
         'data-action':'open-sms','data-cid':client.id,'data-stage':stage,
@@ -5454,7 +5465,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261027-21f8ca71f';
+var BUILD_STAMP = '20261027-39d14930g';
 
 /* Which settings section to scroll to once the modal is up.
 

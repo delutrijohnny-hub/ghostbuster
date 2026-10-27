@@ -16272,6 +16272,116 @@ console.log('\n--- appearance: presets and derived tokens ---');
   });
 }
 
+console.log('\n--- a save must never fail in silence ---');
+{
+  /* "If you use it for more than ten minutes it stops saving changes."
+
+     saveState identified the user with sb.auth.getUser(), which is a REQUEST:
+     it sends the access token to the server for validation. It answers "no
+     user" for an expired token, a token the SDK has not refreshed yet, a
+     dropped connection or a slow network -- none of which mean signed out.
+     And the early return skipped reportSaveHealth, so every one of those
+     cases lost the work in total silence. A tab open past the token lifetime
+     simply stopped saving, with nothing on screen to say so.
+
+     That is also why a phone number typed into a client modal vanished: the
+     modal flush wrote it into state and saveState dropped it on the floor. */
+  const data = fs.readFileSync(path.join(__dirname, 'hosted', 'data.js'), 'utf8');
+  const save = data.slice(data.indexOf('async function saveState(state){'),
+                          data.indexOf('async function saveState(state){') + 1400);
+
+  test('saveState does not identify the user with a network call', () => {
+    assert.ok(!/await sb\.auth\.getUser\(\)/.test(save),
+      'saveState is back on getUser(), which answers "no user" for an expired ' +
+      'token or a dropped connection and silently discards the save');
+    assert.ok(/currentAuthUser\(sb\)/.test(save),
+      'saveState no longer resolves the user through the resilient lookup');
+  });
+
+  test('a save that cannot identify the user says so on screen', () => {
+    const noUser = save.slice(save.indexOf('if(!user)'), save.indexOf('var uid'));
+    assert.ok(/reportSaveHealth\(false/.test(noUser),
+      'saveState returns silently when there is no user \u2014 the work is lost ' +
+      'with no banner, which is the original bug');
+    assert.ok(/signed out/.test(noUser), 'the message does not say what went wrong');
+  });
+
+  test('the lookup tries the local session before the network', () => {
+    const fn = data.slice(data.indexOf('async function currentAuthUser('),
+                          data.indexOf('async function saveState(state){'));
+    const sessionAt = fn.indexOf('getSession()');
+    const refreshAt = fn.indexOf('refreshSession()');
+    const userAt = fn.indexOf('getUser()');
+    assert.ok(sessionAt !== -1 && refreshAt !== -1 && userAt !== -1,
+      'the lookup no longer has all three ways of asking');
+    assert.ok(sessionAt < refreshAt && refreshAt < userAt,
+      'the order is wrong \u2014 the local read must come first, the server ' +
+      'round trip last, or a token rollover still loses a save');
+  });
+
+  test('the baseline is not advanced when a save is abandoned', () => {
+    /* The diff has to be retried, not forgotten. SYNCED advancing on a save
+       that never wrote is how a change disappears for good rather than being
+       written late. */
+    const noUser = save.slice(save.indexOf('if(!user)'), save.indexOf('var uid'));
+    assert.ok(!/SYNCED =/.test(noUser),
+      'the sync baseline moves on a save that never happened');
+  });
+}
+
+console.log('\n--- Open in Messages is not gated by the clock ---');
+{
+  /* Reported twice, and the second time was a different cause from the first.
+
+     The first was a width gate -- .phone-only hid it above 860px. The second
+     is this: in the Mac-route branch the handoff button sat inside the `else`
+     of the quiet-hours check, so from 9pm to 8am every card on Today lost
+     BOTH controls and kept only a note. On a phone at midnight there was no
+     way to text anybody by hand, which is exactly the control that had been
+     asked for explicitly.
+
+     Quiet hours govern what this app SENDS. Opening a draft sends nothing --
+     a person reads the warning, decides, and presses send themselves or does
+     not. The note stays; it should inform the decision rather than make it. */
+  const app = fs.readFileSync(APP_JS, 'utf8');
+  const card = app.slice(app.indexOf('function buildTouchCard('),
+                         app.indexOf('/* ---- recent sends'));
+  const macBranch = card.slice(card.indexOf("route.mode === 'mac'"),
+                               card.indexOf("route.mode === 'handoff'"));
+
+  test('the handoff is outside the quiet-hours branch, not inside its else', () => {
+    const elseAt = macBranch.indexOf('} else {');
+    const sendAt = macBranch.indexOf("'data-action':'send-text'");
+    const handoffAt = macBranch.indexOf("'data-action':'open-sms'");
+    assert.ok(elseAt !== -1 && sendAt !== -1 && handoffAt !== -1,
+      'the Mac branch no longer has the shape this guards');
+    assert.ok(sendAt > elseAt,
+      'Send text escaped the sending-window check \u2014 it must stay gated');
+    /* The brace that closes the else, found after the Send text button. If
+       the handoff still sits before it, it is inside the else again. */
+    const closeAt = macBranch.indexOf('\n    }', sendAt);
+    assert.ok(closeAt !== -1, 'the else no longer closes where this expects');
+    assert.ok(handoffAt > closeAt,
+      'Open in Messages is inside the quiet-hours else again, so after 9pm ' +
+      'every card on Today shows a note and no way to text by hand');
+  });
+
+  test('the sending window still gates the thing that actually sends', () => {
+    assert.ok(/too late there/.test(macBranch),
+      'the quiet-hours warning is gone from the card');
+    assert.ok(/smsSendWindow\(client/.test(macBranch),
+      'the card no longer checks the sending window at all');
+  });
+
+  test('Open in Messages carries no width gate', () => {
+    const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
+    assert.ok(/\.handoff-btn\{display:inline-flex;\}/.test(html),
+      'the handoff button lost its unconditional display rule');
+    assert.ok(!/phone-only/.test(html) && !/phone-only/.test(app),
+      'the old width gate is back \u2014 it hid this button on the desktop');
+  });
+}
+
 console.log('\n--- an edit must survive the modal closing ---');
 {
   /* Johnny added a phone number to a contact with a confirmed call the next

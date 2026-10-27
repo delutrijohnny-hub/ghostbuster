@@ -1317,8 +1317,8 @@ async function saveClientMessageText(clientId, stage, text){
   if(!sb || !clientId || !stage) return {ok: false, error: 'not ready'};
   var body = String(text == null ? '' : text);
   if(!body.trim()) return clearClientMessageText(clientId, stage);
-  var userRes = await sb.auth.getUser();
-  var uid = userRes && userRes.data && userRes.data.user && userRes.data.user.id;
+  var tuser = await currentAuthUser(sb);
+  var uid = tuser && tuser.id;
   var orgId = (window.STATE && window.STATE.orgId) || (typeof STATE !== 'undefined' && STATE.orgId);
   if(!orgId) return {ok: false, error: 'no organisation'};
   var res = await sb.from('client_message_texts').upsert({
@@ -1388,8 +1388,8 @@ async function refreshDeviceAgent(state){
 async function saveTheme(theme){
   var sb = window.GB_SUPABASE;
   if(!sb) return {ok: false, error: 'not ready'};
-  var userRes = await sb.auth.getUser();
-  var uid = userRes && userRes.data && userRes.data.user && userRes.data.user.id;
+  var thuser = await currentAuthUser(sb);
+  var uid = thuser && thuser.id;
   if(!uid) return {ok: false, error: 'not signed in'};
   var res = await sb.from('app_settings')
     .upsert({user_id: uid, theme: theme || null, updated_at: new Date().toISOString()},
@@ -1414,11 +1414,61 @@ async function fetchClientEvents(clientId){
 }
 
 
+/* Who is signed in — without a network round trip, and without giving up
+   on the first stumble.
+
+   saveState called sb.auth.getUser() and returned silently when it answered
+   nothing:
+
+       var user = (await sb.auth.getUser()).data.user;
+       if(!user) return;
+
+   getUser() is a REQUEST. It sends the access token to /auth/v1/user for
+   the server to validate, so it answers "no user" for an expired token, a
+   token the SDK has not refreshed yet, a dropped connection, or a slow
+   network — none of which mean the person is signed out. And because the
+   early return skipped reportSaveHealth, every one of those cases lost the
+   work in total silence: no banner, no console line, nothing on screen. A
+   tab left open long enough simply stopped saving, which is exactly how it
+   was reported: "after about ten minutes it stops saving changes."
+
+   getSession() reads the stored session locally and refreshes it when it has
+   expired, so it answers correctly across a token rollover and costs no
+   request at all. refreshSession() is the explicit second attempt, for the
+   case where the stored token is stale and nothing has yet renewed it.
+   getUser() stays as the last resort, because it is the only one that can
+   tell us the server has actually rejected this session.
+
+   Null here now means something: all three ways of asking failed. Callers
+   must say so out loud rather than returning as though nothing happened. */
+async function currentAuthUser(sb){
+  try{
+    var s = await sb.auth.getSession();
+    var sess = s && s.data && s.data.session;
+    if(sess && sess.user) return sess.user;
+  }catch(e){ /* fall through to the next way of asking */ }
+  try{
+    var r = await sb.auth.refreshSession();
+    var rs = r && r.data && r.data.session;
+    if(rs && rs.user) return rs.user;
+  }catch(e){ /* and the next */ }
+  try{
+    var u = await sb.auth.getUser();
+    return (u && u.data && u.data.user) || null;
+  }catch(e){ return null; }
+}
+
 async function saveState(state){
   var sb = window.GB_SUPABASE;
-  var userRes = await sb.auth.getUser();
-  var user = userRes.data && userRes.data.user;
-  if(!user) return;
+  var user = await currentAuthUser(sb);
+  if(!user){
+    /* Loudly. A save that cannot identify the user is the user's work going
+       nowhere, and the banner is the only thing that will tell them. SYNCED
+       is untouched, so the same diff is retried by the next save or by the
+       Try again button on the banner. */
+    reportSaveHealth(false, 'you appear to be signed out \u2014 your session may have expired');
+    return;
+  }
   var uid = user.id;
 
   var ticket = ++SAVE_SEQ;
