@@ -2223,10 +2223,26 @@ function hasSentStage(client, stage){ return client.messageLog.some(function(m){
 // recent one marks the start of "this appointment" as distinct from the one
 // that was booked before it.
 function appointmentSetAt(client){
-  var rs = client.reschedules || [];
-  if(!rs.length) return null;
-  var last = Date.parse(rs[rs.length - 1]);
-  return isNaN(last) ? null : last;
+  var rs = (client && client.reschedules) || [];
+  var latest = null;
+  for(var i = 0; i < rs.length; i++){
+    var e = rs[i];
+    /* The live column is timestamptz[], so entries arrive as strings. An
+       object shape is accepted too, because this guard failing OPEN is the
+       expensive direction: a single unparseable entry used to make the whole
+       function return null, which falls back to hasSentStage -- and that is
+       exactly the "day-of sent in August for a September call" bug this
+       exists to prevent, silently reinstated. */
+    var t = NaN;
+    if(typeof e === 'string' || typeof e === 'number') t = Date.parse(e);
+    else if(e && typeof e === 'object') t = Date.parse(e.at || e.to || e.when || '');
+    if(!isNaN(t) && (latest === null || t > latest)) latest = t;
+  }
+  /* The LATEST parseable entry, not the last element. Arrays here should be
+     chronological and taking the maximum costs nothing if they are -- while
+     one out-of-order entry would otherwise move the appointment's anchor
+     backwards and let a stale reminder count as current. */
+  return latest;
 }
 
 /* Has this stage been sent FOR THE CURRENT APPOINTMENT?

@@ -16206,6 +16206,191 @@ console.log('\n--- appearance: presets and derived tokens ---');
   });
 }
 
+console.log('\n--- the scenarios the brief names ---');
+{
+  const now = new Date('2026-10-26T15:00:00Z');
+  const inMin  = (m) => new Date(now.getTime() + m * 60000).toISOString();
+  const agoMin = (m) => new Date(now.getTime() - m * 60000).toISOString();
+  const agoDay = (d) => new Date(now.getTime() - d * 86400000).toISOString();
+  let seq = 0;
+  const mk = (o) => GB.sanitizeClient(Object.assign(
+    {name:'X', phone:'201555' + String(3000 + (++seq)), timezone:'America/New_York',
+     status:'Booked', bookedDate: agoDay(4)}, o));
+  const st = (clients) => {
+    const x = GB.buildDefaultState(); x.senderName = 'J'; x.clients = {};
+    clients.forEach(c => { x.clients[c.id] = c; });
+    return x;
+  };
+
+  test('opening Messages does not complete a send, anywhere that counts', () => {
+    /* The single most load-bearing distinction in this product. A logged row
+       with no provider and no delivery status is a draft that was OPENED. */
+    const c = mk({id:'a', name:'Opened', messageLog:[
+      {id:'m1', channel:'sms', stage:'welcome', text:'hi', sentAt: agoMin(30)}]});
+    const state = st([c]);
+    assert.strictEqual(GB.deliveryState(c.messageLog[0]).confirmed, false,
+      'an opened draft is reporting itself as a confirmed send');
+    const prog = GB.textingProgress(state, now, 1);
+    assert.strictEqual(prog.confirmed, 0, 'progress counted an unconfirmed send as done');
+    assert.ok(prog.awaiting >= 1, 'the unconfirmed send is not shown as awaiting confirmation');
+    const finding = GB.assistantDataFindings(state, now).find(f => f.kind === 'unconfirmed_sends');
+    assert.ok(finding, 'the assistant did not report it as unconfirmed either');
+  });
+
+  test('a confirmed send reads the same way everywhere', () => {
+    const c = mk({id:'a', name:'Real', messageLog:[
+      {id:'m1', channel:'sms', stage:'welcome', text:'hi', sentAt: agoMin(30),
+       deliveryStatus:'delivered'}]});
+    const state = st([c]);
+    assert.strictEqual(GB.deliveryState(c.messageLog[0]).confirmed, true);
+    assert.strictEqual(GB.textingProgress(state, now, 1).awaiting, 0,
+      'a delivered send is still being counted as awaiting confirmation');
+    assert.ok(!GB.assistantDataFindings(state, now).some(f => f.kind === 'unconfirmed_sends'),
+      'a delivered send is being reported as unconfirmed');
+  });
+
+  test('a reply suppresses the routine nudge, and the person stays visible', () => {
+    const replied = mk({id:'a', name:'Wrote', status:'Confirmed', callDateTime: inMin(60*24*8),
+      messageLog:[{id:'m', channel:'sms', stage:'welcome', text:'hi',
+                   sentAt: agoMin(200), deliveryStatus:'delivered'}],
+      replies:[{id:'r', at: agoMin(30), text:'tell me more'}]});
+    const state = st([replied]);
+    const due = GB.getTextTodayList(state, now, '');
+    assert.deepStrictEqual(due.map(d => d.stage), [],
+      'a scripted touch is still queued on top of an unanswered reply');
+    const q = GB.actionQueue(state, now);
+    assert.strictEqual(q.length, 1);
+    assert.strictEqual(q[0].group, 'needs_response');
+  });
+
+  test('a reschedule replaces the reminders the old date had earned', () => {
+    /* The reminder that matters most, and the assertion that has to be
+       specific. The existing test for this checked computeDue(...).length > 0
+       at the new date, which passes on a bare ['welcome'] -- so the day-of
+       reminder could stop firing for every rescheduled call and the suite
+       would stay green. This names the stage.
+
+       reschedules is timestamptz[] on the live column, so entries are
+       timestamp strings. An earlier draft of this test invented
+       {from, to, at} objects, which Date.parse turns into NaN -- and the
+       whole guard then falls back to hasSentStage. That failure looked
+       exactly like the product bug, which is how the brittleness below
+       got found. */
+    const oldCall = agoDay(1);
+    const newCall = inMin(60 * 24 * 6);
+    const moved = mk({id:'a', name:'Moved', status:'Rescheduled',
+      callDateTime: newCall, rescheduleCount: 1,
+      reschedules: [agoMin(90)],
+      messageLog:[{id:'m1', channel:'sms', stage:'dayof', text:'see you today',
+                   sentAt: agoDay(1), deliveryStatus:'delivered'}]});
+
+    const dueNow = GB.computeDue(moved, now);
+    assert.ok(dueNow.indexOf('dayof') === -1,
+      'a day-of reminder is due today for an appointment that is six days away');
+    assert.ok(dueNow.indexOf('hourbefore') === -1,
+      'an hour-before reminder survived the reschedule');
+
+    const newMorning = new Date(Date.parse(newCall) - 5 * 3600000);
+    assert.ok(GB.computeDue(moved, newMorning).indexOf('dayof') !== -1,
+      'the day-of reminder never fires for the NEW date, because it was already ' +
+      'sent for the old one \u2014 a rescheduled client silently loses their reminder');
+
+    const nearly = new Date(Date.parse(newCall) - 30 * 60000);
+    assert.ok(GB.computeDue(moved, nearly).indexOf('hourbefore') !== -1,
+      'the hour-before reminder never fires for the new date either');
+  });
+
+  test('a malformed reschedule entry cannot silently disable the guard', () => {
+    /* appointmentSetAt used to take the LAST element and Date.parse it. One
+       unparseable entry returned null, which falls back to hasSentStage --
+       and that is the "day-of sent on 19 August for a 24 September call" bug
+       reinstated, silently, with every test still green. Failing open is the
+       expensive direction here, so it takes the latest entry it CAN read. */
+    const moved = mk({id:'a', name:'Messy', status:'Rescheduled',
+      callDateTime: inMin(60 * 24 * 6), rescheduleCount: 2,
+      reschedules: [agoMin(200), {at: agoMin(90)}],
+      messageLog:[{id:'m1', channel:'sms', stage:'dayof', text:'x',
+                   sentAt: agoDay(1), deliveryStatus:'delivered'}]});
+    const newMorning = new Date(Date.parse(moved.callDateTime) - 5 * 3600000);
+    assert.ok(GB.computeDue(moved, newMorning).indexOf('dayof') !== -1,
+      'an unreadable reschedule entry turned the protection off');
+
+    const outOfOrder = mk({id:'b', name:'Backwards', status:'Rescheduled',
+      callDateTime: inMin(60 * 24 * 6), rescheduleCount: 2,
+      reschedules: [agoMin(60), agoDay(30)],
+      messageLog:[{id:'m2', channel:'sms', stage:'dayof', text:'x',
+                   sentAt: agoDay(1), deliveryStatus:'delivered'}]});
+    assert.ok(GB.computeDue(outOfOrder,
+      new Date(Date.parse(outOfOrder.callDateTime) - 5 * 3600000)).indexOf('dayof') !== -1,
+      'an out-of-order entry moved the anchor backwards and let a stale send count');
+  });
+
+  test('a past appointment never reads as upcoming, in any of the three places', () => {
+    const past = mk({id:'a', name:'Yesterday', callDateTime: agoMin(60 * 26)});
+    const state = st([past]);
+    assert.deepStrictEqual(GB.upcomingCalls(state, now), []);
+    assert.ok(!GB.actionQueue(state, now).some(r => r.group === 'call_at_risk'));
+    assert.ok(GB.assistantBriefing(state, now).appointments.length === 0,
+      'the assistant is listing a past appointment under Coming up');
+  });
+
+  test('quiet hours and the timezone conversion agree with each other', () => {
+    /* The window is judged in the CONTACT's zone and the appointment is
+       displayed in the reader's. Both must be true at once. */
+    const owl = mk({id:'a', name:'Owl', phone:'8085550500', timezone:'Pacific/Honolulu',
+                    callDateTime: inMin(60 * 20)});
+    const state = st([owl]);
+    const win = GB.smsSendWindow(state.clients.a, now);
+    assert.strictEqual(win.ok, false, 'it is 5am in Honolulu and the window says it is open');
+    assert.ok(/5am where they are/.test(win.reason), win.reason);
+    const label = GB.appointmentTimeLabel(owl.callDateTime, state.clients.a.timezone,
+                                          'America/New_York');
+    assert.ok(/EDT/.test(label.mine) && /HST/.test(label.theirs), label.text);
+    assert.strictEqual(label.sameZone, false);
+  });
+
+  test('the same provider event twice does not create two sends or two tasks', () => {
+    /* Idempotency at the task layer. One client can appear only once in the
+       queue however many times a webhook delivers the same thing. */
+    const c = mk({id:'a', name:'Twice', messageLog:[
+      {id:'m1', channel:'sms', stage:'welcome', text:'hi', sentAt: agoMin(40), deliveryStatus:'sent'},
+      {id:'m1', channel:'sms', stage:'welcome', text:'hi', sentAt: agoMin(40), deliveryStatus:'delivered'}]});
+    const state = st([c]);
+    const rows = GB.actionQueue(state, now).filter(r => r.clientId === 'a');
+    assert.ok(rows.length <= 1, 'a duplicated provider event produced ' + rows.length + ' queue rows');
+    const due = GB.getTextTodayList(state, now, '').filter(d => d.client.id === 'a');
+    assert.ok(due.length <= 1, 'a duplicated event produced ' + due.length + ' sends for one person');
+  });
+
+  test('one person with two client rows is one row in the queue', () => {
+    /* A rebooked contact legitimately has two records on one number. Seeing
+       them twice in the morning is the same person texted twice. */
+    const one = mk({id:'a', name:'Dana R', phone:'9195557777'});
+    const two = mk({id:'b', name:'Dana Reyes', phone:'9195557777'});
+    const due = GB.getTextTodayList(st([one, two]), now, '');
+    assert.strictEqual(due.length, 1, 'one human produced ' + due.length + ' texts');
+  });
+
+  test('the queue and the assistant survive a book that is all edge cases', () => {
+    const nasty = [
+      mk({id:'a', name:'', phone:''}),
+      mk({id:'b', name:'No Call', callDateTime: null}),
+      mk({id:'c', name:'Bad Date', callDateTime: 'not a date'}),
+      mk({id:'d', name:'Opted Out', smsStatus:'opted_out'}),
+      mk({id:'e', name:'Archived', ignored:true}),
+      mk({id:'f', name:'Closed', status:'Completed', closeOutcome:'Closed'})
+    ];
+    const state = st(nasty);
+    assert.doesNotThrow(() => GB.actionQueue(state, now));
+    assert.doesNotThrow(() => GB.assistantBriefing(state, now));
+    assert.doesNotThrow(() => GB.assistantWorkflowReview(state, now));
+    GB.actionQueue(state, now).forEach(r => {
+      assert.ok(typeof r.name === 'string', 'a queue row has no name field at all');
+      assert.ok(r.nextAction && r.nextAction.label, r.clientId + ' has no next action');
+    });
+  });
+}
+
 console.log('\n--- the private assistant, deterministic part ---');
 {
   const now = new Date('2026-10-26T15:00:00Z');
