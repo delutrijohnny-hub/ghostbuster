@@ -351,11 +351,14 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
    overflow-x, so the menu is fixed-free and the strip keeps its scroll by
    letting the open menu sit above it. */
 .tab-more{position:relative;display:flex;align-items:stretch;}
-.tab-more>summary{list-style:none;display:flex;align-items:center;gap:5px;cursor:pointer;}
-.tab-more>summary::-webkit-details-marker{display:none;}
-.tab-more>summary::after{content:'\25be';font-size:10px;opacity:.7;}
-.tab-more[open]>summary{color:var(--ink);}
-.tab-more-menu{position:absolute;top:100%;right:0;z-index:40;min-width:190px;
+.tab-more>.tab-btn{display:flex;align-items:center;gap:5px;cursor:pointer;}
+.tab-more>.tab-btn::after{content:'\25be';font-size:10px;opacity:.7;}
+.tab-more>.tab-btn[aria-expanded="true"]{color:var(--ink);}
+.tab-more-menu[hidden]{display:none;}
+/* Fixed to the VIEWPORT, not to the strip. top/left/right are set by
+   setTabMoreOpen from the button's own rect, so it stays anchored at any
+   width; the values here are only a sane fallback before that runs. */
+.tab-more-menu{position:fixed;top:var(--tabs-bottom,92px);right:16px;z-index:60;min-width:190px;
   display:flex;flex-direction:column;align-items:stretch;
   background:var(--card);border:1px solid var(--border);border-radius:10px;
   box-shadow:0 10px 30px #0000002e;padding:5px;}
@@ -372,8 +375,7 @@ header.app-header .btn-primary{background:var(--red);border-color:var(--red);}
 @media (max-width:560px){
   .tabs{padding:0 10px;}
   .tab-btn{padding:11px 10px;font-size:13px;}
-  .tab-more-menu{position:fixed;top:var(--tabs-bottom,92px);left:10px;right:10px;
-    min-width:0;max-height:60vh;overflow:auto;}
+  .tab-more-menu{min-width:0;max-height:60vh;overflow:auto;}
 }
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
@@ -1768,7 +1770,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   .container{padding:10px;}
 }
 </style>
-<link rel="stylesheet" href="assistant.css?v=20261027-90135db5b">
+<link rel="stylesheet" href="assistant.css?v=20261027-c35f91b6c">
 </head>
 <body>
 
@@ -1858,10 +1860,9 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
        four are where the work happens.
 
        Nothing is removed and no key changes. The secondary buttons are the
-       same .tab-btn elements with the same data-tab values, moved inside a
-       <details> so the strip costs no JS state and still works with the
-       keyboard. markActiveTab lights the summary when the open tab lives in
-       here, so "which screen am I on" is never unanswered. -->
+       same .tab-btn elements with the same data-tab values, moved into a
+       menu beside the strip. markActiveTab lights More when the open tab
+       lives in there, so "which screen am I on" is never unanswered. -->
   <button class="tab-btn active" data-action="tab" data-tab="calls">Today</button>
   <!-- "Conversations", not "Texts". The pane holds texts, emails and notes
        in one thread, and calling it Texts invited somebody to reply to an
@@ -1870,9 +1871,36 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   <button class="tab-btn" data-action="tab" data-tab="clients"><span data-term="contactPlural">Clients</span></button>
   <button class="tab-btn" data-action="tab" data-tab="calendar">Calendar</button>
 
-  <details class="tab-more" id="tab-more">
-    <summary class="tab-btn" id="tab-more-summary">More</summary>
-    <div class="tab-more-menu" role="group" aria-label="Other sections">
+  <!-- A button and a div, NOT <details>.
+
+       It was a disclosure, which worked in testing and did not work in
+       Safari, where overriding `display` on a <summary> stops it toggling at
+       all. The CSS here sets display:flex on the summary to line the chevron
+       up, so the control was inert on the one browser this is used in.
+
+       A button with aria-expanded needs no browser-specific behaviour, so
+       there is nothing left to be quirky. -->
+  <div class="tab-more" id="tab-more">
+    <button class="tab-btn" id="tab-more-summary" type="button"
+            data-action="tab-more" aria-expanded="false" aria-controls="tab-more-menu">More</button>
+  </div>
+</nav>
+<!-- The menu lives OUTSIDE the nav, and that is the whole point.
+
+     nav.tabs carries a mask-image to fade the right edge of the scrolling
+     strip. A mask makes its element a containing block AND clips everything
+     inside it -- including position:fixed descendants. So the menu had real
+     geometry, 355x182 at (10,93), and was painted into a clipped layer where
+     nobody could see it. In every browser.
+
+     It was invisible as a <details> too, which is why "More doesn't work"
+     was reported: it opened perfectly and showed nothing. Two verification
+     passes missed it because both measured getBoundingClientRect instead of
+     looking at the screen -- a rect is not a pixel.
+
+     Out here nothing clips it. setTabMoreOpen positions it from the button's
+     own rect, so it stays anchored at any width without the nav's help. -->
+    <div class="tab-more-menu" id="tab-more-menu" role="group" aria-label="Other sections" hidden>
       <!-- "Text templates" and "Email templates", named as a pair.
 
            This was "Messages" next to "Texts" -- synonyms in English for two
@@ -1897,8 +1925,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
            Diagnostics only, never their contacts. Hidden unless the data is there. -->
       <button class="tab-btn hidden" id="tab-btn-owner" data-action="tab" data-tab="owner">Account health</button>
     </div>
-  </details>
-</nav>
+</div>
 
 <div class="container">
 
@@ -2134,10 +2161,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261027-90135db5b"></script>
-<script src="data.js?v=20261027-90135db5b"></script>
-<script src="app.js?v=20261027-90135db5b"></script>
-<script src="assistant.js?v=20261027-90135db5b"></script>
-<script src="auth.js?v=20261027-90135db5b"></script>
+<script src="logic.js?v=20261027-c35f91b6c"></script>
+<script src="data.js?v=20261027-c35f91b6c"></script>
+<script src="app.js?v=20261027-c35f91b6c"></script>
+<script src="assistant.js?v=20261027-c35f91b6c"></script>
+<script src="auth.js?v=20261027-c35f91b6c"></script>
 </body>
 </html>

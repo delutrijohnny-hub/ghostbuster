@@ -16850,10 +16850,17 @@ console.log('\n--- the assistant endpoint and panel, as written ---');
 console.log('\n--- four destinations, and everything else behind More ---');
 {
   const html = fs.readFileSync(path.join(__dirname, 'hosted', 'app.html'), 'utf8');
-  const nav = html.slice(html.indexOf('<nav class="tabs"'),
-                         html.indexOf('</nav>', html.indexOf('<nav class="tabs"')));
-  const menu = nav.slice(nav.indexOf('<div class="tab-more-menu"'));
-  const primary = nav.slice(0, nav.indexOf('<details class="tab-more"'));
+  /* The strip and the menu are SIBLINGS now -- the menu had to move out of
+     nav.tabs because the mask on the strip clips its descendants. So "the
+     navigation" spans both, and a test that slices only the <nav> would
+     report seven sections as missing. */
+  const navStartIdx = html.indexOf('<nav class="tabs"');
+  const navEndIdx = html.indexOf('</nav>', navStartIdx);
+  const menuStartIdx = html.indexOf('<div class="tab-more-menu"', navEndIdx);
+  const menuEndIdx = html.indexOf('</div>', html.indexOf('data-tab="owner"', menuStartIdx));
+  const nav = html.slice(navStartIdx, menuEndIdx);
+  const menu = html.slice(menuStartIdx, menuEndIdx);
+  const primary = html.slice(navStartIdx, html.indexOf('<div class="tab-more"', navStartIdx));
   const tabKeys = (block) => (block.match(/data-tab="([a-z]+)"/g) || [])
     .map(m => m.replace(/.*"([a-z]+)".*/, '$1'));
 
@@ -16903,15 +16910,92 @@ console.log('\n--- four destinations, and everything else behind More ---');
         + 'so the More summary is lit and then immediately unlit');
   });
 
+  test('More does not depend on <details>, which Safari breaks', () => {
+    /* Shipped as a disclosure and was inert in Safari -- the one browser this
+       is actually used in. Overriding `display` on a <summary> stops WebKit
+       toggling it, and the CSS sets display:flex there to line the chevron
+       up. It worked in every environment I tested and in none that mattered.
+
+       So: no <details> in the tab strip at all, a real button carrying
+       aria-expanded, and the open state held in an attribute this code sets
+       rather than one the browser manages. */
+    /* Comments stripped first: a comment explaining why <details> is NOT used
+       here must not read as <details> being used here. */
+    const navBlock = html.slice(html.indexOf('<nav class="tabs"'),
+                                html.indexOf('</nav>', html.indexOf('<nav class="tabs"')))
+      .replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(!/<details/.test(navBlock),
+      'the tab strip is back on <details>, which Safari will not toggle once ' +
+      'display is overridden on the summary');
+    assert.ok(/data-action="tab-more"/.test(navBlock),
+      'the More control has no click action, so nothing opens it');
+    assert.ok(/aria-expanded="false"/.test(navBlock),
+      'the More button does not report its state to a screen reader');
+
+    const app = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+    assert.ok(/case 'tab-more':/.test(app), 'the dispatcher has no tab-more case');
+    assert.ok(/function setTabMoreOpen\(/.test(app), 'nothing toggles the menu');
+    /* Dismissal has to exist, or the menu sits over the screen until a tab is
+       picked -- and on Today, where no tab inside it is current, nothing else
+       would ever close it. */
+    assert.ok(/Escape[\s\S]{0,200}setTabMoreOpen\(false\)/.test(app),
+      'Escape does not close the menu');
+    assert.ok(/!wrap\.contains\(e\.target\)[\s\S]{0,60}setTabMoreOpen\(false\)/.test(app),
+      'clicking outside does not close the menu');
+    const css = html.slice(html.indexOf('.tab-more{'), html.indexOf('.tab-panel{'));
+    assert.ok(/\.tab-more-menu\[hidden\]\{display:none;?\}/.test(css),
+      'the hidden attribute does not actually hide the menu, so it is always open');
+    assert.ok(!/summary/.test(css),
+      'the CSS still styles a <summary> that no longer exists');
+  });
+
+  test('the More menu is not inside the masked strip, which would clip it', () => {
+    /* The real reason "More doesn't work" was reported, and it was never the
+       JavaScript.
+
+       nav.tabs carries a mask-image to fade the right edge of the scrolling
+       strip. A mask makes its element a containing block AND clips every
+       descendant, position:fixed included. So the menu opened correctly,
+       reported a perfectly good 355x182 rect at (10,93), and was painted into
+       a clipped layer where nobody could see it -- in every browser, not just
+       Safari.
+
+       Two of my verification passes missed it because both measured
+       getBoundingClientRect and concluded "it fits on screen". A rect is not
+       a pixel. The structural invariant is the one that can be tested from
+       here: the menu must not live inside the masked element. */
+    const navStart = html.indexOf('<nav class="tabs"');
+    const navEnd = html.indexOf('</nav>', navStart);
+    const navBlock = html.slice(navStart, navEnd).replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(!/<div class="tab-more-menu"/.test(navBlock),
+      'the More menu is back inside nav.tabs, which is masked \u2014 it will open ' +
+      'and be invisible');
+    assert.ok(/<div class="tab-more-menu"/.test(html.slice(navEnd)),
+      'the More menu is not anywhere after the strip either, so nothing renders it');
+
+    /* And the mask is still there, so the reason above still applies. If the
+       fade is ever removed this test should be reconsidered, not deleted. */
+    const tabsCss = html.slice(html.indexOf('.tabs{'), html.indexOf('.tab-btn{'));
+    assert.ok(/mask-image/.test(tabsCss),
+      'nav.tabs no longer has a mask \u2014 re-check whether the menu still needs ' +
+      'to live outside it before moving anything back');
+
+    const app = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+    assert.ok(/getBoundingClientRect\(\)[\s\S]{0,400}menu\.style\.top/.test(app),
+      'the menu is no longer positioned from the button, so it has nothing to ' +
+      'anchor to once it is outside the strip');
+  });
+
   test('the phone menu is pinned to the viewport, not to the strip it scrolls with', () => {
     /* The strip scrolls horizontally on a phone. An absolutely positioned
        menu scrolls with it and lands off the edge; anchoring it left instead
        of right only pushes it further off, which the first attempt did. */
     const css = html.slice(html.indexOf('.tab-more{'), html.indexOf('.tab-panel{'));
-    assert.ok(/@media \(max-width:560px\)[\s\S]*\.tab-more-menu\{[^}]*position:fixed/.test(css),
-      'the narrow-screen menu is not fixed to the viewport');
-    assert.ok(/--tabs-bottom/.test(css),
-      'the fixed menu has no measured offset, so it sits under or over the strip');
+    assert.ok(/\.tab-more-menu\{[^}]*position:fixed/.test(css),
+      'the menu is not fixed to the viewport, so it moves with the scrolling strip');
+    const app2 = codeOnly(fs.readFileSync(APP_JS, 'utf8'));
+    assert.ok(/innerWidth <= 560[\s\S]{0,160}menu\.style\.left = '10px'/.test(app2),
+      'the narrow-screen menu is not given viewport gutters, so it can open off the edge');
   });
 }
 

@@ -1212,6 +1212,62 @@ function setTextTodayOpen(v){
    panel in the markup, so no selector rooted at the active panel can touch
    them -- they are preceding siblings. Reflecting the tab on an ancestor is
    what lets a phone drop that header on the one tab where it is in the way. */
+function tabMoreOpen(){
+  var menu = document.getElementById('tab-more-menu');
+  return !!menu && !menu.hasAttribute('hidden');
+}
+
+function setTabMoreOpen(open){
+  var menu = document.getElementById('tab-more-menu');
+  var btn = document.getElementById('tab-more-summary');
+  if(!menu || !btn) return;
+  if(open) menu.removeAttribute('hidden'); else menu.setAttribute('hidden', '');
+  btn.setAttribute('aria-expanded', String(!!open));
+  if(open){
+    /* Anchored from the button's own rect, every time it opens.
+
+       The menu is no longer a child of the strip -- it cannot be, because the
+       strip is masked and a mask clips its descendants -- so it has nothing
+       to position against in CSS. Measuring on open also means it follows the
+       button when the strip is scrolled, which a static rule could not. */
+    var r = btn.getBoundingClientRect();
+    menu.style.top = Math.round(r.bottom) + 'px';
+    if(window.innerWidth <= 560){
+      menu.style.left = '10px';
+      menu.style.right = '10px';
+    } else {
+      /* Right edges aligned, so the menu never runs off the side whatever
+         the button's position. Measured from the right so the width does not
+         have to be known before it is shown. */
+      menu.style.left = 'auto';
+      menu.style.right = Math.max(8, Math.round(window.innerWidth - r.right)) + 'px';
+    }
+    /* Focus the first section in the menu, so a keyboard user lands inside
+       what they just opened rather than at the top of the page. */
+    var first = menu.querySelector('.tab-btn:not(.hidden)');
+    if(first) first.focus();
+  }
+}
+
+/* Clicking anywhere else closes it, and so does Escape. Bound once at the
+   document, in the capture phase, so a handler that stops propagation
+   somewhere in the page cannot leave the menu stuck open over the screen. */
+(function(){
+  if(typeof document === 'undefined') return;
+  document.addEventListener('click', function(e){
+    if(!tabMoreOpen()) return;
+    var wrap = document.getElementById('tab-more');
+    if(wrap && !wrap.contains(e.target)) setTabMoreOpen(false);
+  }, true);
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && tabMoreOpen()){
+      setTabMoreOpen(false);
+      var btn = document.getElementById('tab-more-summary');
+      if(btn) btn.focus();
+    }
+  }, true);
+})();
+
 function markActiveTab(){
   try{ document.body.setAttribute('data-tab', UI.tab || ''); }catch(e){}
   /* Which screen am I on, when the screen lives behind More.
@@ -1238,10 +1294,10 @@ function markActiveTab(){
       var b = Math.round(nav.getBoundingClientRect().bottom);
       if(b > 0) document.documentElement.style.setProperty('--tabs-bottom', b + 'px');
     }
-    var inside = more.querySelector('.tab-btn[data-tab="' + (UI.tab || '') + '"]');
+    var inside = more.querySelector('.tab-more-menu .tab-btn[data-tab="' + (UI.tab || '') + '"]');
     var summary = document.getElementById('tab-more-summary');
     if(summary) summary.classList.toggle('active', !!inside);
-    if(inside) more.removeAttribute('open');
+    if(inside) setTabMoreOpen(false);
   }catch(e){ /* navigation chrome is never worth breaking a render for */ }
 }
 
@@ -5339,7 +5395,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261027-90135db5b';
+var BUILD_STAMP = '20261027-c35f91b6c';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6123,6 +6179,16 @@ document.addEventListener('click', function(ev){
         if(msg.detail) console.error('Ghost Recall: calendar sync — ' + msg.detail);
         if(msg.ok) init();
       });
+      break;
+    /* More: open, close, and get out of the way.
+
+       Was a <details>. Safari stops toggling a disclosure once `display` is
+       overridden on its <summary>, and the CSS does exactly that to line the
+       chevron up -- so the control was dead on the browser this is used in,
+       and worked everywhere I tested it. A button and aria-expanded have no
+       browser-specific behaviour left to break. */
+    case 'tab-more':
+      setTabMoreOpen(!tabMoreOpen());
       break;
     case 'tab':
       UI.tab = target.getAttribute('data-tab');
