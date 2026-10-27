@@ -5339,7 +5339,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261026-9d4c0655';
+var BUILD_STAMP = '20261027-c2a22fff';
 
 /* Which settings section to scroll to once the modal is up.
 

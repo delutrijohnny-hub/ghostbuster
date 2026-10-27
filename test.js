@@ -5546,6 +5546,49 @@ test('the app lives at /app and the landing page owns the root', () => {
     assert.strictEqual(inJs, inHtml,
       'BUILD_STAMP disagrees with the ?v= on the script tag, so the build shown is not the build running');
   }
+  /* And the stamp must have MOVED when the code did.
+
+     The existing checks above are about internal consistency: all four
+     versioned, and BUILD_STAMP agreeing with the ?v= beside it. Both passed
+     happily on a branch that changed logic.js, app.js, app.html and added two
+     new files while every stamp still read 20261026-9d4c0655 -- which is the
+     one state the stamp system exists to prevent. Deploying that serves the
+     new HTML against the cached old JS, and the only person who sees the new
+     build is whoever thinks to hard-reload.
+
+     Compared against origin/main rather than against the previous commit: the
+     stamp is a DEPLOY marker, so the question is whether it changed since the
+     last thing that was deployed, not since the last time anybody typed. */
+  {
+    const { execSync } = require('child_process');
+    let deployedHtml = null, deployedApp = null;
+    try {
+      deployedHtml = execSync('git show origin/main:hosted/app.html',
+        {cwd: __dirname, encoding: 'utf8', stdio: ['pipe','pipe','ignore']});
+      deployedApp = execSync('git show origin/main:hosted/app.js',
+        {cwd: __dirname, encoding: 'utf8', stdio: ['pipe','pipe','ignore']});
+    } catch (e) {
+      console.log('     (skipped \u2014 no origin/main to compare against here)');
+    }
+    if (deployedHtml && deployedApp) {
+      const liveStamp = (deployedHtml.match(/src="app\.js\?v=([\w.-]+)"/) || [])[1];
+      const appChanged = deployedApp !== appJs;
+      const logicChanged = (() => {
+        try {
+          return execSync('git show origin/main:hosted/logic.js',
+            {cwd: __dirname, encoding: 'utf8', stdio: ['pipe','pipe','ignore']})
+            !== fs.readFileSync(LOGIC_JS, 'utf8');
+        } catch (e) { return false; }
+      })();
+      if (appChanged || logicChanged) {
+        assert.notStrictEqual(inHtml, liveStamp,
+          'app.js or logic.js differs from what is deployed on main, but the cache-bust ' +
+          'stamp is still ' + liveStamp + ' \u2014 browsers would load the new HTML and the ' +
+          'cached old JS');
+      }
+    }
+  }
+
   assert.ok(!landing.includes('id="app-root"'), 'index.html should be the landing page, not the app');
   assert.ok(landing.includes('href="/app"'), 'the landing page must link to the app');
 
