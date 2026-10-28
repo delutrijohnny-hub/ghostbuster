@@ -953,9 +953,42 @@ var VALID_STATUSES = buildDefaultPipeline().map(function(st){ return st.key; });
 
 var STOP_1TO4 = {Completed:true,'No-show':true,Ghosted:true};
 
-// How often a stalled no-show/reschedule nudge re-fires while nothing has
-// changed — a reply that never turns into an actual date doesn't stop it.
+// How often a stalled no-show/reschedule nudge re-fires once the contact has
+// written back at least once — a reply that never turns into an actual date
+// doesn't stop the chase. Silence is paced far slower; see
+// RECOVERY_SPACING_DAYS directly below.
 var FOLLOWUP_REFIRE_DAYS = 4;
+
+/* ---- one recovery text a month while they stay silent ----
+
+   The rescue sequences re-fired every four days and each one counted only its
+   own stage's history, which are two ways of saying the same thing: a contact
+   who never answered could collect a no-show text, a recovery text and a
+   revival text inside a fortnight, because every step looked at when IT last
+   fired and none of them looked at the others.
+
+   The rule now: the first text still goes out at the usual moment —
+   immediately on a no-show, two days into a stall — and after that, while
+   they stay quiet, at most one a month. Quiet is the condition rather than
+   the status. Somebody who writes back is in a conversation rather than being
+   chased, so a reply that never became a date still gets the faster
+   FOLLOWUP_REFIRE_DAYS pace.
+
+   Spacing is measured across the whole family, so the stages cannot take
+   turns, and it counts hand-written sends too ('custom'). Texting someone
+   yourself and then letting the cadence follow up the next morning is the
+   same two-texts-in-two-days problem wearing a different hat — and from the
+   other end of the phone there is no such thing as "that one was manual". */
+var RECOVERY_SPACING_DAYS = 30;
+
+// The automatic stages the monthly limit governs.
+var RECOVERY_SPACED_STAGES = {recovery: true, noshow: true, revival: true};
+
+// What counts as having already reached out to a quiet lead. Appointment
+// reminders are deliberately absent: a day-of link is about a meeting that is
+// happening, not a chase, and counting it would suppress the no-show rescue
+// for the people most in need of it.
+var RECOVERY_OUTREACH_STAGES = {recovery: true, noshow: true, revival: true, custom: true};
 
 // Window for the T-1h reminder, in minutes before the call.
 var HOURBEFORE_LEAD_MIN = 75;
@@ -2280,6 +2313,44 @@ function lastSentAtMs(client, stage){
   return latest;
 }
 
+/* The last time anything that chases a quiet lead went out, counting only
+   sends at or after sinceMs — the moment this sequence's own clock started.
+
+   The cutoff is the point. A "still good for tomorrow?" text the day before a
+   call is outreach, but it is not recovery outreach: counted, it would
+   suppress the immediate no-show rescue for a month, and that is the one text
+   in the product that has to go the moment somebody misses. */
+function lastRecoveryOutreachMs(client, sinceMs){
+  var latest = null;
+  var floorMs = (typeof sinceMs === 'number' && !isNaN(sinceMs)) ? sinceMs : null;
+  (client.messageLog || []).forEach(function(m){
+    if(!m || !RECOVERY_OUTREACH_STAGES[m.stage]) return;
+    var t = Date.parse(m.sentAt);
+    if(isNaN(t)) return;
+    if(floorMs !== null && t < floorMs) return;
+    if(latest === null || t > latest) latest = t;
+  });
+  return latest;
+}
+
+/* Has anything come back since sinceMs, inclusive?
+
+   Inclusive on purpose, and it is not a rounding nicety. respondedAt is when
+   the reply was LOGGED, and it is absent on every reply recovered from the Mac
+   Messages database — replyPauseUntil already falls those back to the send
+   time. So the reply to the message we last chased with is stamped at exactly
+   the moment that message went out. A strict comparison read all of those real
+   replies as silence and held the person to monthly spacing for answering, and
+   recovered replies are a large share of the live reply history. */
+function repliedSinceMs(client, sinceMs){
+  if(typeof sinceMs !== 'number' || isNaN(sinceMs)) return false;
+  return (client.messageLog || []).some(function(m){
+    if(!m || !m.responded) return false;
+    var t = Date.parse(m.respondedAt || m.sentAt);
+    return !isNaN(t) && t >= sinceMs;
+  });
+}
+
 
 /* ---- the cadence, as data ----
    computeDue was eight hard-coded rules. A business could rename its stages
@@ -2469,7 +2540,20 @@ function stepIsDue(step, client, now, ctx){
     if(daysSince < (t.afterDays || 0)) return false;
     if(typeof t.windowDays === 'number' && daysSince > t.windowDays) return false;
     var lastSent = lastSentAtMs(client, stage);
-    return lastSent === null || (now.getTime() - lastSent) / 86400000 >= (t.everyDays || 1);
+    if(lastSent !== null && (now.getTime() - lastSent) / 86400000 < (t.everyDays || 1)) return false;
+    /* At most one chase a month while they stay quiet, measured across every
+       stage that chases rather than per stage.
+
+       Deliberately an extra gate on top of the step's own interval instead of
+       a replacement for it, so this can only ever withhold a text and never
+       bring one forward. A change to how often Ghost Recall texts real people
+       should fail in the quiet direction. */
+    if(RECOVERY_SPACED_STAGES[stage]){
+      var lastChase = lastRecoveryOutreachMs(client, anchorMs);
+      if(lastChase !== null && !repliedSinceMs(client, lastChase) &&
+         (now.getTime() - lastChase) / 86400000 < RECOVERY_SPACING_DAYS) return false;
+    }
+    return true;
   }
 
   // Everything below is a once-only touch on the way to an appointment, so it
@@ -9636,6 +9720,10 @@ var __LOGIC_EXPORTS__ = {
   startOfLocalWeek: startOfLocalWeek, inRange: inRange,
   hasSentStage: hasSentStage, hasSentStageThisAppointment: hasSentStageThisAppointment,
   appointmentSetAt: appointmentSetAt, lastSentAtMs: lastSentAtMs, computeDue: computeDue,
+  RECOVERY_SPACING_DAYS: RECOVERY_SPACING_DAYS, RECOVERY_SPACED_STAGES: RECOVERY_SPACED_STAGES,
+  RECOVERY_OUTREACH_STAGES: RECOVERY_OUTREACH_STAGES,
+  lastRecoveryOutreachMs: lastRecoveryOutreachMs, repliedSinceMs: repliedSinceMs,
+  FOLLOWUP_REFIRE_DAYS: FOLLOWUP_REFIRE_DAYS,
   REVIVAL_EVERY_DAYS: REVIVAL_EVERY_DAYS, REVIVAL_DAILY_CAP: REVIVAL_DAILY_CAP, REPLY_PAUSE_DAYS: REPLY_PAUSE_DAYS, PAUSE_EXEMPT_STAGES: PAUSE_EXEMPT_STAGES, STAGE_PRIORITY: STAGE_PRIORITY, replyPauseUntil: replyPauseUntil,
   cadenceRepeatSteps: cadenceRepeatSteps,
   longLeadSequence: longLeadSequence,

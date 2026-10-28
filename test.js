@@ -476,6 +476,159 @@ test('No-show already rescued -> nothing due', () => {
   assertDue(GB.computeDue(c, new Date()), []);
 });
 
+/* ---- one recovery text a month while they stay quiet ----
+   Johnny's rule, 2026-10-28. The first chase keeps its old timing; after that,
+   silence is paced monthly instead of every four days. These tests exist
+   because the old pace is still right for somebody who writes back, so the
+   two speeds have to be told apart by evidence rather than by status. */
+console.log('\n--- monthly recovery spacing ---');
+
+test('a silent no-show is not chased again four days later — the old pace', () => {
+  const c = freshClient({
+    status: 'No-show', callDateTime: isoDaysAgo(9),
+    messageLog: [{ stage: 'noshow', variantId: 'n1', text: 'hi', sentAt: isoDaysAgo(5), responded: false, respondedAt: null }]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('noshow'),
+    'five days of silence is not a month');
+});
+
+test('a silent stalled contact gets one recovery text, then nothing for a month', () => {
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(12),
+    messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'hi', sentAt: isoDaysAgo(10), responded: false, respondedAt: null }]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('recovery'),
+    'ten days of silence is not a month');
+});
+
+test('a month of silence does open the next chase', () => {
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(40),
+    messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'hi', sentAt: isoDaysAgo(31), responded: false, respondedAt: null }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('recovery'));
+});
+
+test('the month is measured from the last chase, whichever stage sent it — the stages cannot take turns', () => {
+  /* Without a family-wide gate each step reads only its own history, so a
+     revival text last week does not stop a recovery text this week. On the
+     live book that is how one person collected three texts in a fortnight. */
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(60),
+    messageLog: [
+      { stage: 'recovery', variantId: 'r1', text: 'hi',  sentAt: isoDaysAgo(60), responded: false, respondedAt: null },
+      { stage: 'revival',  variantId: 'v1', text: 'hey', sentAt: isoDaysAgo(5),  responded: false, respondedAt: null }
+    ]
+  });
+  const due = GB.computeDue(c, new Date());
+  assert.ok(!due.includes('recovery'), 'a revival text five days ago is still a text five days ago');
+  assert.ok(!due.includes('revival'));
+});
+
+test('a text typed by hand counts as the month\u2019s outreach', () => {
+  /* "Count manual outreach when spacing recovery messages." From the other end
+     of the phone there is no such thing as "that one was manual". */
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(20),
+    messageLog: [{ stage: 'custom', variantId: 'custom', text: 'any news?', sentAt: isoDaysAgo(3), responded: false, respondedAt: null }]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('recovery'));
+});
+
+test('an appointment reminder is not a chase — a no-show is still rescued the same day', () => {
+  /* The cutoff that makes this work: only sends made after the sequence's own
+     anchor count. A "see you tomorrow" text the day before the call sits
+     before the appointment, so it cannot suppress the rescue. This is the one
+     text in the product that has to go out the moment somebody misses. */
+  const c = freshClient({
+    status: 'No-show', callDateTime: isoDaysAgo(1),
+    messageLog: [{ stage: 'dayof', variantId: 'd1', text: 'see you at 2', sentAt: isoDaysAgo(1), responded: false, respondedAt: null }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('noshow'));
+});
+
+test('a reply keeps the faster chase — silence is the condition, not the status', () => {
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(12),
+    messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'hi', sentAt: isoDaysAgo(6),
+                   responded: true, respondedAt: isoDaysAgo(5) }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('recovery'),
+    'they wrote back and never gave a date — that is a conversation, chased at the old pace');
+});
+
+test('a reply recovered from Messages carries no reply time, and still counts as a reply', () => {
+  /* respondedAt is absent on everything imported from the Mac Messages
+     database, so it falls back to the send time. A strict "after the last
+     chase" comparison read every one of those real replies as silence. */
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(12),
+    messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'hi', sentAt: isoDaysAgo(6),
+                   responded: true, respondedAt: null }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('recovery'));
+});
+
+test('a reply logged BEFORE the last chase does not unlock a faster one', () => {
+  const c = freshClient({
+    status: 'Rescheduled', stalledSince: isoDaysAgo(40),
+    messageLog: [
+      { stage: 'recovery', variantId: 'r1', text: 'hi',    sentAt: isoDaysAgo(35), responded: true,  respondedAt: isoDaysAgo(34) },
+      { stage: 'recovery', variantId: 'r2', text: 'again', sentAt: isoDaysAgo(5),  responded: false, respondedAt: null }
+    ]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('recovery'),
+    'they answered a month ago and have been quiet since — that is silence now');
+});
+
+test('the monthly limit withholds texts, it never brings one forward', () => {
+  /* The spacing is an extra gate on top of each step\u2019s own interval rather
+     than a replacement for it, so no contact can end up messaged sooner than
+     before this rule existed. */
+  const c = freshClient({
+    status: 'No-show', callDateTime: isoDaysAgo(2),
+    messageLog: [{ stage: 'noshow', variantId: 'n1', text: 'hi', sentAt: isoDaysAgo(1),
+                   responded: true, respondedAt: new Date().toISOString() }]
+  });
+  assert.ok(!GB.computeDue(c, new Date()).includes('noshow'),
+    'a reply does not override the step\u2019s own re-fire interval');
+});
+
+test('a chase sent before the appointment does not suppress the rescue after it', () => {
+  /* The anchor cutoff, in the scenario it exists for: somebody stalled, got
+     chased, rebooked, and missed the new call. Counting the chase from the
+     previous round would hold the rescue for a month and the rebooking would
+     pass in silence. Only outreach made since the appointment counts. */
+  const c = freshClient({
+    status: 'No-show', callDateTime: isoDaysAgo(1),
+    messageLog: [{ stage: 'custom', variantId: 'custom', text: 'still interested?',
+                   sentAt: isoDaysAgo(4), responded: false, respondedAt: null }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('noshow'));
+});
+
+test('the monthly limit never withholds an appointment reminder', () => {
+  /* The limit governs chasing, and nothing else. A contact chased last week
+     who has since rebooked still gets the day-of text with the meeting link
+     in it \u2014 withholding that to keep a monthly text count is losing a call
+     to avoid a message, which is the wrong trade every time. */
+  const c = freshClient({
+    status: 'Confirmed', callDateTime: new Date(Date.now() + 4 * 3600000).toISOString(),
+    bookedDate: isoDaysAgo(10),
+    messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'any news?',
+                   sentAt: isoDaysAgo(5), responded: false, respondedAt: null }]
+  });
+  assert.ok(GB.computeDue(c, new Date()).includes('dayof'));
+});
+
+test('the month is a named constant, not a number buried in the evaluator', () => {
+  assert.strictEqual(GB.RECOVERY_SPACING_DAYS, 30);
+  assert.deepStrictEqual(Object.keys(GB.RECOVERY_SPACED_STAGES).sort(), ['noshow', 'recovery', 'revival']);
+  assert.ok(GB.RECOVERY_OUTREACH_STAGES.custom, 'hand-written sends count toward the spacing');
+  assert.ok(!GB.RECOVERY_OUTREACH_STAGES.dayof, 'appointment reminders do not');
+  assert.ok(!GB.RECOVERY_OUTREACH_STAGES.welcome, 'nor does a welcome');
+});
+
 test('ignored client shows nothing due and is excluded from stats', () => {
   const state = GB.buildDefaultState();
   const c = freshClient({ id: 'ig1', ignored: true, status: 'Completed', callDateTime: isoDaysAgo(1), closeOutcome: 'Closed' });
