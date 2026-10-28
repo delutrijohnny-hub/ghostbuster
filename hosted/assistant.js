@@ -271,7 +271,30 @@
     try { payload.viewerTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
     catch (e) { payload.viewerTimezone = 'UTC'; }
 
-    sb().functions.invoke('ghost-assistant', {body: payload}).then(function (res) {
+    /* sb() is window.GB_SUPABASE, and reaching .functions on it throws
+       SYNCHRONOUSLY when the app has not finished loading in this tab. That
+       throw happens outside the promise chain below, so .catch never ran: the
+       panel sat on "Reading your current records…" with both buttons disabled
+       forever, nothing was sent, and the only trace was a line in the console.
+       Silence is the worst failure this panel can produce, because it looks
+       exactly like work in progress.
+
+       It also broke this file's own promise that a failure costs the panel and
+       nothing else — disabled controls never came back, so the panel was dead
+       until the page was reloaded. loadDismissals already guarded the same
+       call shape; the call that matters did not. */
+    var pending;
+    try {
+      pending = sb().functions.invoke('ghost-assistant', {body: payload});
+    } catch (e) {
+      pending = Promise.reject(new Error('Ghost Recall is still loading in this tab, ' +
+        'so the assistant could not be reached. Reload the page and try again.'));
+    }
+    if (!pending || typeof pending.then !== 'function') {
+      pending = Promise.reject(new Error('The assistant could not be reached.'));
+    }
+
+    pending.then(function (res) {
       if (epoch !== generation || !root) return;
       var data = res && res.data;
       if ((res && res.error) || !data || data.error) {

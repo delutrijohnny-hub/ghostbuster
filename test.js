@@ -17303,6 +17303,27 @@ console.log('\n--- the assistant endpoint and panel, as written ---');
     });
   });
 
+  test('the panel cannot fail silently \u2014 the invoke is wrapped', () => {
+    /* 2026-10-28. Johnny pressed "My briefing" and nothing happened: no row in
+       assistant_runs, no request in the gateway log, no error on screen. sb()
+       is window.GB_SUPABASE, so `sb().functions.invoke(...)` throws
+       SYNCHRONOUSLY when the app has not finished loading in that tab \u2014
+       outside the promise chain, so .catch never ran and the status line sat on
+       "Reading your current records" with both buttons disabled for good.
+
+       Silence is the worst thing this panel can do, because it is
+       indistinguishable from working. */
+    const body = panel.slice(panel.indexOf('var run = function'),
+                             panel.indexOf('function loadDismissals'));
+    assert.ok(/try\s*\{[\s\S]{0,200}functions\.invoke\('ghost-assistant'/.test(body),
+      'the invoke is not inside a try, so a synchronous throw escapes the ' +
+      'promise chain and the panel hangs with its buttons disabled');
+    assert.ok(/typeof pending\.then !== 'function'/.test(body),
+      'a non-promise return is not handled, so .then would throw too');
+    assert.ok(/\.catch\(/.test(body) && /b\.disabled = false/.test(body),
+      'the controls are not re-enabled on every path, so one failure kills the panel');
+  });
+
   test('the endpoint holds no service-role key and filters by owner', () => {
     assert.ok(!/SERVICE_ROLE|service_role/.test(fn),
       'a service-role key here would reach past RLS into other accounts');
