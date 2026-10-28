@@ -1506,12 +1506,51 @@ async function saveState(state){
     var newRows = c.added.map(function(r){ return stamp(r, true); });
     var updRows = c.changed.map(function(r){ return stamp(r, false); });
     if(newRows.length) writes.push(sb.from('clients').upsert(newRows));
-    if(updRows.length) writes.push(sb.from('clients').upsert(updRows));
+    /* PATCH, one row at a time, and NOT an upsert.
+
+       The comment above is right about PostgREST: an UPDATE only sets the
+       columns it is given, so omitting user_id leaves ownership alone. But
+       this was sent as an upsert, and an upsert is INSERT ... ON CONFLICT.
+       Postgres checks NOT NULL against the row being inserted BEFORE it ever
+       reaches the conflict clause, and clients.user_id is NOT NULL -- so every
+       edit to an existing contact was rejected outright:
+
+         23502  null value in column "user_id" of relation "clients"
+                violates not-null constraint
+
+       Nothing was wrong with the reasoning or with the row. The write simply
+       used a verb that cannot omit a column. Proven against the live database
+       in a rolled-back transaction: the same row refuses the upsert and
+       accepts the update, owner unchanged.
+
+       One request per changed contact instead of one for the batch. That is
+       the honest cost of a PATCH, and almost every save changes a single
+       contact -- a correct write per row beats one rejected write for all of
+       them. */
+    updRows.forEach(function(r){
+      writes.push(sb.from('clients').update(r).eq('id', r.id));
+    });
     // Explicit ids only. Never a "delete everything not in this set" filter.
     if(prev && c.removedKeys.length) writes.push(sb.from('clients').delete().in('id', c.removedKeys));
 
     var m = diff(prev && prev.messages, next.messages);
-    if(m.added.length) writes.push(sb.from('message_log').insert(m.added));
+    /* upsert, not insert, because this exact batch gets retried.
+
+       A failed save deliberately leaves SYNCED alone so the diff is tried
+       again -- but the rows that DID land are still missing from SYNCED, so
+       the retry re-sent them and died on the primary key:
+
+         23505  duplicate key value violates unique constraint
+                "message_log_pkey"
+
+       Promise.all reports every write, and one rejection fails the save, so a
+       single rejected client edit turned into a session where NO save could
+       ever succeed again. That is the "it stops saving after a while" that
+       looked like an expiring session: the first failure poisons every later
+       one, and only a reload cleared it. Keyed on the client-generated id, so
+       re-sending a row it already has is a no-op. */
+    if(m.added.length) writes.push(sb.from('message_log')
+      .upsert(m.added, {onConflict: 'id', ignoreDuplicates: true}));
     // Messages change only via review (responded/reviewed), so an upsert keyed
     // on the client-generated id is enough — no delete-and-reinsert.
     if(m.changed.length) writes.push(sb.from('message_log').upsert(m.changed));
@@ -1558,9 +1597,17 @@ async function saveState(state){
     // stays flat as the timeline grows.
     var pending = (state.pendingEvents || []).slice();
     if(pending.length){
-      writes.push(sb.from('events').insert(pending.map(function(e){
+      /* Same retry rule as message_log above: pendingEvents is only drained
+         on a clean save, so a failure re-sends the events that landed and
+         trips events_pkey.
+
+         ignoreDuplicates, which is ON CONFLICT DO NOTHING -- not a plain
+         upsert. History stays append-only: a row already on file is left
+         exactly as it is rather than being overwritten by a second copy of
+         itself. Idempotent and still unrewritable. */
+      writes.push(sb.from('events').upsert(pending.map(function(e){
         return {id: e.id, user_id: uid, client_id: e.clientId, kind: e.kind, at: e.at, data: e.data};
-      })));
+      }), {onConflict: 'id', ignoreDuplicates: true}));
     }
 
     if(!writes.length){ reportSaveHealth(true); return; }

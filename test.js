@@ -10207,8 +10207,12 @@ const flush = () => new Promise(r => setTimeout(r, 0));
 function makeDataCtx(){
   const calls = [];
   function table(name){
-    const rec = (op) => (payload) => {
-      const entry = {table: name, op, payload, filters: []};
+    /* opts is recorded because it carries the half of the write that decides
+       whether a retry can survive: {ignoreDuplicates} is ON CONFLICT DO
+       NOTHING, and without it a re-sent row trips the primary key. The stub
+       ignored the second argument, so no test could see the difference. */
+    const rec = (op) => (payload, opts) => {
+      const entry = {table: name, op, payload, opts: opts || null, filters: []};
       calls.push(entry);
       const chain = {
         eq(k,v){ entry.filters.push(['eq',k,v]); return chain; },
@@ -10218,7 +10222,12 @@ function makeDataCtx(){
       };
       return chain;
     };
-    return {upsert: rec('upsert'), insert: rec('insert'), delete: rec('delete'), select: rec('select')};
+    /* update was simply absent. Nothing in the save path called it, so a
+       PATCH could not be written OR tested -- which is part of why every
+       client edit went out as an upsert and was rejected by a NOT NULL
+       column the stub does not have. */
+    return {upsert: rec('upsert'), insert: rec('insert'), update: rec('update'),
+            delete: rec('delete'), select: rec('select')};
   }
   // Sync health is read through an RPC now, because the token table is
   // owner-only. Nothing in the save path calls it; this keeps it from throwing.
@@ -10355,8 +10364,11 @@ test('a save never lays a stale ok over a bounce', async () => {
   d.calls.length = 0;
   d.run("st.clients['c1'].notes = 'spoke today';");
   await d.run('saveState(st)');
-  const rows = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert')
-                      .flatMap(c => c.payload);
+  // An edit is a PATCH now, not an upsert -- see the clients write in
+  // data.js. Both verbs are read here so this cannot be dodged by changing it.
+  const rows = d.calls.filter(c => c.table === 'clients' &&
+                                   (c.op === 'upsert' || c.op === 'update'))
+                      .flatMap(c => Array.isArray(c.payload) ? c.payload : [c.payload]);
   assert.ok(rows.length, 'the edit issued no write, so this proved nothing');
   rows.forEach(r => {
     assert.ok(!('email_status' in r),
@@ -10399,13 +10411,25 @@ test('an ordinary save never rewrites who owns a contact', async () => {
   d.run("st.clients['c1'].notes = 'spoke today';");
   await d.run('saveState(st)');        // an ordinary edit
 
-  const ups = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert');
-  assert.ok(ups.length, 'the edit issued no write, so this proved nothing');
-  ups.forEach(u => u.payload.forEach(row => {
+  /* An edit goes out as a PATCH. That is not cosmetic: omitting user_id is
+     only possible on an UPDATE. An upsert is INSERT ... ON CONFLICT, and
+     Postgres checks NOT NULL on the row being inserted before it reaches the
+     conflict clause -- so the version that omitted user_id from an upsert was
+     rejected 23502 every single time, and every edit to an existing contact
+     was lost. This test passed throughout, because the stub has no NOT NULL. */
+  const edits = d.calls.filter(c => c.table === 'clients' && c.op === 'update');
+  assert.ok(edits.length, 'the edit issued no PATCH, so this proved nothing');
+  assert.ok(!d.calls.some(c => c.table === 'clients' && c.op === 'upsert' &&
+                               [].concat(c.payload).some(r => !('user_id' in r))),
+    'a clients upsert went out without user_id — Postgres rejects that, 23502');
+  edits.forEach(u => {
+    const row = u.payload;
     assert.ok(!('user_id' in row),
       'an edit carried user_id, so a save can still reassign a contact');
     assert.strictEqual(row.notes, 'spoke today', 'the edit itself was lost');
-  }));
+    assert.deepStrictEqual(u.filters, [['eq', 'id', 'c1']],
+      'a PATCH without a single-row id filter is a blind mass update');
+  });
 });
 
 test('creating and editing in one save keep their own rules', async () => {
@@ -10423,13 +10447,90 @@ test('creating and editing in one save keep their own rules', async () => {
     st.clients['c2'] = sanitizeClient({id:'c2', name:'B', phone:'5125559999'});
   `);
   await d.run('saveState(st)');
-  const rows = d.calls.filter(c => c.table === 'clients' && c.op === 'upsert')
-                      .flatMap(c => c.payload);
+  const rows = d.calls.filter(c => c.table === 'clients' &&
+                                   (c.op === 'upsert' || c.op === 'update'))
+                      .flatMap(c => Array.isArray(c.payload) ? c.payload : [c.payload]);
   const created = rows.find(r => r.id === 'c2');
   const edited  = rows.find(r => r.id === 'c1');
   assert.ok(created && edited, 'expected both a create and an edit');
   assert.strictEqual(created.user_id, 'u1', 'the new contact lost its owner');
   assert.ok(!('user_id' in edited), 'the edited contact had its owner restated');
+});
+
+test('every clients row sent as an insert or upsert carries its owner', async () => {
+  /* The invariant the database has and the stub does not: clients.user_id is
+     NOT NULL. Postgres checks that against the row being INSERTED, and an
+     upsert is INSERT ... ON CONFLICT -- so a row sent that way without an
+     owner is refused 23502 before the conflict clause is reached, whatever
+     the intent was.
+
+     This is the check that was missing. The ownership tests asserted the
+     payload had no user_id and passed, because a stub has no constraints; the
+     live database rejected every one of those writes and the only evidence
+     was a line in the Postgres log. A rule the database enforces has to be
+     asserted here too, or the suite is green while nothing saves.
+
+     Omitting an owner is still correct -- on an UPDATE, which is the one verb
+     that can leave a column alone. */
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+  `);
+  await d.run('saveState(st)');
+  d.run(`
+    st.clients['c1'].phone = '5125550001';
+    st.clients['c2'] = sanitizeClient({id:'c2', name:'B', phone:'5125559999'});
+  `);
+  await d.run('saveState(st)');
+
+  const inserted = d.calls.filter(c => c.table === 'clients' &&
+                                       (c.op === 'insert' || c.op === 'upsert'));
+  assert.ok(inserted.length, 'no clients insert at all, so this proved nothing');
+  inserted.forEach(c => [].concat(c.payload).forEach(row => {
+    assert.ok(row.user_id,
+      'a clients row was sent as an ' + c.op + ' with no user_id — the ' +
+      'database refuses that with 23502 and the edit is lost');
+  }));
+
+  // And the edit itself reached the server, by the one verb that may omit it.
+  const patched = d.calls.filter(c => c.table === 'clients' && c.op === 'update')
+                         .map(c => c.payload);
+  assert.ok(patched.some(r => r.id === 'c1' && r.phone === '5125550001'),
+    'the edited phone number was never sent');
+});
+
+test('a re-sent row cannot trip the primary key, so one failure does not end the session', async () => {
+  /* A failed save deliberately leaves SYNCED alone so the same diff is tried
+     again. The rows that DID land are still absent from SYNCED, so the retry
+     re-sends them -- and a plain insert then dies on message_log_pkey or
+     events_pkey. Promise.all surfaces every write and one rejection fails the
+     save, so a single rejected client edit became a session in which NO save
+     could ever succeed. That is what "it stops saving after ten minutes"
+     actually was; a reload cleared it because loadState rebuilds SYNCED.
+
+     ON CONFLICT DO NOTHING makes the retry survivable without rewriting
+     anything. */
+  const d = makeDataCtx();
+  d.run(`
+    var st = buildDefaultState();
+    st.clients['c1'] = sanitizeClient({id:'c1', name:'A', phone:'5125551234'});
+    markSent(st, 'c1', 'welcome', 'hello there');
+  `);
+  await d.run('saveState(st)');
+
+  [['message_log', 'a replayed message'], ['events', 'a replayed history row']].forEach(pair => {
+    const table = pair[0];
+    const adds = d.calls.filter(c => c.table === table &&
+                                     (c.op === 'insert' || c.op === 'upsert'));
+    assert.ok(adds.length, 'no ' + table + ' write, so this proved nothing');
+    adds.forEach(c => {
+      assert.ok(c.op === 'upsert' && c.opts && c.opts.ignoreDuplicates === true,
+        pair[1] + ' would trip ' + table + '_pkey and fail the whole save');
+      assert.strictEqual(c.opts.onConflict, 'id',
+        'the conflict target must be the primary key');
+    });
+  });
 });
 
 test('an unchanged save writes nothing at all', async () => {
@@ -10583,7 +10684,14 @@ test('events are appended, never rewritten', async () => {
   await d.run('saveState(st)');
   const ev = d.calls.filter(c => c.table === 'events');
   assert.ok(ev.length >= 1, 'expected an events write');
-  assert.ok(ev.every(e => e.op === 'insert'), 'events must only ever be inserted');
+  /* Append-only, which is the guarantee -- not the verb. An insert, or an
+     upsert with ignoreDuplicates (ON CONFLICT DO NOTHING), both leave a row
+     already on file exactly as it is. A plain upsert does not, and is what
+     this forbids. */
+  assert.ok(ev.every(e => e.op === 'insert' ||
+                          (e.op === 'upsert' && e.opts && e.opts.ignoreDuplicates === true)),
+    'an events write could overwrite history: ' +
+    ev.map(e => e.op + JSON.stringify(e.opts)).join(' '));
   const kinds = ev.flatMap(e => e.payload.map(r => r.kind));
   assert.ok(kinds.includes('message.sent'), 'expected message.sent, got ' + kinds.join(','));
   // and they must not be re-sent on the next save
