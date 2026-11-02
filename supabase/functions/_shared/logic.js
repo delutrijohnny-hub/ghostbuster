@@ -2249,7 +2249,14 @@ function inRange(dateVal, range, now){
    Everything in the UI is driven off this one function.
    ============================================================ */
 
-function hasSentStage(client, stage){ return client.messageLog.some(function(m){ return m.stage === stage; }); }
+/* `|| []` because computeDue is reached from places that did not build their
+   client through sanitizeClient -- a briefing composed from database rows, a
+   cron runner walking a book. Every neighbouring helper guards this; the core
+   cadence engine was the one that threw, on "Cannot read properties of
+   undefined (reading 'some')", which stops a whole run rather than one row. */
+function hasSentStage(client, stage){
+  return (client.messageLog || []).some(function(m){ return m.stage === stage; });
+}
 
 // When the current appointment was last moved, or null if it never has been.
 // recordReschedule stamps these at the moment the change is seen, so the most
@@ -5231,6 +5238,158 @@ function upcomingCalls(state, now){
 }
 
 /* The counts behind the filter chips, from the same rows the queue renders. */
+/* ---- the briefing for ONE call ---- */
+
+/* How far ahead a call is worth being warned about.
+
+   Fifteen minutes is enough to read a screen and not enough to forget it
+   again. The number is here rather than in the runner because the runner is
+   a schedule and this is a product decision. */
+var BRIEFING_LEAD_MINUTES = 15;
+
+/* How much of what they actually said to put in front of somebody.
+
+   Three turns. The whole thread is not a briefing -- it is the thing a
+   briefing exists to save you reading -- and one turn is not enough to tell
+   what a conversation is about. */
+var BRIEFING_RECENT_TURNS = 3;
+
+/* Everything known about one contact, arranged for the two minutes before
+   you call them.
+
+   COMPOSED, NOT GENERATED. Every line below is a record this account already
+   holds, with the time it was recorded, so a claim can be checked against the
+   thread in ten seconds. A model may later be handed this to read aloud; it
+   is handed THIS, never the book, and it may not add to it.
+
+   What it deliberately does NOT do is infer. "They are price sensitive" is
+   not in any record; "they asked what it costs, on the 14th, and nothing has
+   been sent since" is. The second is useful and checkable, the first is a
+   guess that walks into a call as a fact -- and `limits` says plainly that
+   objections and promises are not yet tracked as facts at all, rather than
+   quietly implying the absence of any.
+
+   openQuestions is the one piece of real judgement here, and it is still
+   evidence: a question mark in something they sent, with nothing outbound
+   after it. That is "they asked and we have not answered", which is the most
+   useful thing anyone can know thirty seconds before dialling. */
+function callBriefing(state, client, now){
+  now = now || new Date();
+  if(!client) return null;
+
+  var tz = client.timezone || 'America/New_York';
+  var call = safeDate(client.callDateTime);
+  var mins = minutesUntil(client.callDateTime, now);
+
+  var thread = conversationThread(client).filter(function(it){ return it.dir !== 'note'; });
+  var inbound = thread.filter(function(it){ return it.dir === 'in'; });
+  var outbound = thread.filter(function(it){ return it.dir === 'out'; });
+  var lastOut = outbound.length ? outbound[outbound.length - 1] : null;
+  var lastIn = inbound.length ? inbound[inbound.length - 1] : null;
+
+  function turn(it){
+    return {at: it.at, text: it.text,
+            daysAgo: Math.floor((now.getTime() - it.t) / 86400000)};
+  }
+
+  /* Their last few turns, oldest first so it reads as a conversation. */
+  var theirWords = inbound.slice(-BRIEFING_RECENT_TURNS).map(turn);
+
+  /* Asked, and nothing sent since. Not every question is unanswered -- a
+     reply may have come by phone -- so this is "worth checking", which is
+     what the label says. */
+  var openQuestions = inbound.filter(function(it){
+    return it.text.indexOf('?') !== -1 && (!lastOut || it.t > lastOut.t);
+  }).map(turn);
+
+  var summary = summaryState(client);
+  var due = computeDue(client, now) || [];
+  /* automationState returns `running`, not `paused`, and a label that already
+     explains itself -- "Holding until Nov 5 -- they replied. Appointment
+     reminders still go." Reading a `.paused` that does not exist gave a
+     briefing that said paused:false and reason:'reply' in the same breath. */
+  var auto = automationState(client, now);
+  var unconfirmed = outbound.filter(function(it){
+    return sendEvidence(it) === 'awaiting';
+  }).length;
+
+  /* What this cannot tell you, stated rather than left to be assumed. A
+     briefing that looks complete is worse than one that names its gaps,
+     because somebody walks into the call trusting it. */
+  var limits = [];
+  limits.push('Objections, promises and budgets are not stored as separate '
+    + 'facts yet, so anything of that kind is only in the words below.');
+  if(!client.notes && !client.recap && summary.state === 'none'){
+    limits.push('Nothing has been written down about this contact beyond their messages.');
+  }
+  if(summary.state === 'stale'){
+    limits.push('The summary was written before ' + summary.newSince + ' newer '
+      + (summary.newSince === 1 ? 'message' : 'messages') + ', so it may be out of date.');
+  }
+  if(!agentSeesThread(client)){
+    limits.push('This number’s texts do not reach this Mac, so the history '
+      + 'here may be missing messages that were sent or received.');
+  }
+  if(unconfirmed){
+    limits.push(unconfirmed + ' of the messages below '
+      + (unconfirmed === 1 ? 'has' : 'have') + ' no confirmation that '
+      + (unconfirmed === 1 ? 'it' : 'they') + ' ever sent.');
+  }
+  if(!client.timezoneConfirmed){
+    limits.push('The timezone is inferred from the phone number, not confirmed with them.');
+  }
+  if(!inbound.length){
+    limits.push('They have never replied, so nothing here is in their own words.');
+  }
+
+  return {
+    clientId: client.id,
+    name: client.name,
+    firstName: firstName(client.name),
+    phone: client.phone || '',
+    status: client.status,
+    /* The appointment, in THEIR zone. A briefing that prints the reader's
+       timezone is how somebody rings an hour early. */
+    call: call ? {
+      at: client.callDateTime,
+      date: fmtDate(call, tz),
+      time: fmtTime(call, tz),
+      timezone: tz,
+      timezoneConfirmed: !!client.timezoneConfirmed,
+      minutesUntil: mins,
+      confirmed: appointmentConfirmed(client)
+    } : null,
+    rescheduled: Number(client.rescheduleCount) || 0,
+    /* What is on file, as somebody wrote it. */
+    notes: client.notes || '',
+    recap: client.recap || '',
+    summary: {state: summary.state, text: summary.text,
+              at: summary.at, newSince: summary.newSince},
+    /* What happened, with dates. */
+    history: {
+      replies: inbound.length,
+      sent: outbound.length,
+      firstTouch: thread.length ? thread[0].at : null,
+      lastSent: lastOut ? turn(lastOut) : null,
+      lastReply: lastIn ? turn(lastIn) : null,
+      theirWords: theirWords,
+      openQuestions: openQuestions
+    },
+    /* The mechanics, so nobody texts them on the way into the call. */
+    cadence: {
+      dueNow: due,
+      nextTouch: due.length ? touchLabel(due[0]) : null,
+      running: !!(auto && auto.running),
+      // The sentence automationState already wrote, rather than a second one.
+      automation: (auto && auto.label) || '',
+      optedOut: (client.smsStatus || 'ok') === 'opted_out'
+    },
+    limits: limits,
+    source: 'composed from this account’s own records',
+    asOf: now.toISOString()
+  };
+}
+
 function priorityCounts(rows, state, now){
   var all = rows || [];
   var upcoming = 0;
@@ -10115,6 +10274,9 @@ var __LOGIC_EXPORTS__ = {
   THEME_CONTRAST_PAIRS: THEME_CONTRAST_PAIRS,
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
+  callBriefing: callBriefing,
+  BRIEFING_LEAD_MINUTES: BRIEFING_LEAD_MINUTES,
+  BRIEFING_RECENT_TURNS: BRIEFING_RECENT_TURNS,
   nextInQueue: nextInQueue,
   PRIORITY_RULES: PRIORITY_RULES, PRIORITY_LABELS: PRIORITY_LABELS,
   touchAlreadySent: touchAlreadySent,

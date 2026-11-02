@@ -9295,6 +9295,155 @@ console.log('\n--- an inbound text finds its contact ---');
   });
 }
 
+console.log('\n--- the briefing for one call, fifteen minutes out ---');
+
+{
+  const NOW = new Date('2026-11-03T15:00:00Z');
+  const ago = (h) => new Date(NOW.getTime() - h * 3600000).toISOString();
+  const inMin = (m) => new Date(NOW.getTime() + m * 60000).toISOString();
+
+  const build = (over) => {
+    const st = GB.buildDefaultState();
+    st.senderName = 'Johnny';
+    const c = GB.sanitizeClient(Object.assign({
+      id: 'c1', name: 'Dana Ruiz', phone: '2135550100', status: 'Confirmed',
+      callDateTime: inMin(15), bookedDate: ago(240), messageLog: [], replies: []
+    }, over || {}));
+    st.clients[c.id] = c;
+    return {st, c};
+  };
+  const brief = (over) => { const {st, c} = build(over); return GB.callBriefing(st, c, NOW); };
+
+  const sent = (h, text, extra) => Object.assign({
+    id: 'm' + h, stage: 'dayof', variantId: 'd1', text: text, sentAt: ago(h),
+    responded: false, reviewed: true, channel: 'sms',
+    providerId: 'imsg:' + h, deliveryStatus: 'delivered'
+  }, extra || {});
+  const got = (h, text) => ({id: 'r' + h, at: ago(h), text: text, providerId: 'imsg:in' + h});
+
+  test('the appointment is stated in the contact’s timezone, not the reader’s', () => {
+    /* A briefing that prints the reader's zone is how somebody rings an hour
+       early. The zone comes off the contact, and whether it was confirmed is
+       said out loud rather than assumed. */
+    const b = brief({timezone: 'America/New_York', timezoneConfirmed: true});
+    assert.strictEqual(b.call.timezone, 'America/New_York');
+    assert.strictEqual(b.call.timezoneConfirmed, true);
+    assert.strictEqual(b.call.minutesUntil, 15);
+    assert.ok(b.call.date && b.call.time, 'the call has no readable date or time');
+  });
+
+  test('a question they asked with nothing sent since is surfaced', () => {
+    /* The single most useful line thirty seconds before dialling: they asked
+       and nothing has answered. */
+    const b = brief({
+      messageLog: [sent(20, 'See you at 9am.')],
+      replies: [got(2, 'Also can we do 9:30 instead?')]
+    });
+    assert.deepStrictEqual(b.history.openQuestions.map(q => q.text),
+      ['Also can we do 9:30 instead?']);
+  });
+
+  test('a question already followed by a message is not called open', () => {
+    // Something went out after they asked. It may not have answered them,
+    // but "unanswered" would be a claim this cannot support.
+    const b = brief({
+      messageLog: [sent(1, 'Yes, 9:30 works.')],
+      replies: [got(2, 'Can we do 9:30 instead?')]
+    });
+    assert.deepStrictEqual(b.history.openQuestions, []);
+  });
+
+  test('a statement is not mistaken for a question', () => {
+    const b = brief({messageLog: [], replies: [got(2, 'Sounds good see you then')]});
+    assert.deepStrictEqual(b.history.openQuestions, []);
+  });
+
+  test('their last few turns are quoted, oldest first and capped', () => {
+    /* The whole thread is not a briefing -- it is what a briefing saves you
+       reading -- and one turn is not enough to tell what it is about. */
+    const b = brief({replies: [got(9, 'first'), got(7, 'second'), got(5, 'third'), got(3, 'fourth')]});
+    assert.strictEqual(b.history.theirWords.length, GB.BRIEFING_RECENT_TURNS);
+    assert.deepStrictEqual(b.history.theirWords.map(t => t.text), ['second', 'third', 'fourth'],
+      'the quoted turns are not the most recent, oldest first');
+    assert.strictEqual(b.history.replies, 4, 'the count must be of all of them, not the quoted few');
+  });
+
+  test('it always says that objections and promises are not tracked yet', () => {
+    /* Until client_facts exists, the absence of a recorded objection means
+       nothing was recorded -- not that there is none. A briefing that looks
+       complete is worse than one that names its gaps. */
+    const b = brief({notes: 'x', recap: 'y'});
+    assert.ok(b.limits.some(l => /not stored as separate\s+facts yet/.test(l)),
+      'the briefing implies it knows about objections: ' + JSON.stringify(b.limits));
+  });
+
+  test('a stale summary names how many messages it predates', () => {
+    const b = brief({
+      conversationSummary: 'They want more inbound calls.',
+      conversationSummaryThrough: ago(50),
+      replies: [got(5, 'one more thing'), got(4, 'and another')]
+    });
+    assert.strictEqual(b.summary.state, 'stale');
+    assert.ok(b.limits.some(l => /written before 2 newer messages/.test(l)),
+      JSON.stringify(b.limits));
+  });
+
+  test('a thread this Mac cannot see is named as incomplete', () => {
+    const b = brief({messageLog: [sent(20, 'hi', {providerId: null, deliveryStatus: null})]});
+    assert.ok(b.limits.some(l => /do not reach this Mac/.test(l)), JSON.stringify(b.limits));
+  });
+
+  test('sends with no confirmation are counted, not hidden', () => {
+    const b = brief({
+      messageLog: [sent(30, 'confirmed one'),
+                   sent(20, 'unconfirmed', {providerId: null, deliveryStatus: null})]
+    });
+    assert.ok(b.limits.some(l => /^1 of the messages below has no confirmation/.test(l)),
+      JSON.stringify(b.limits));
+  });
+
+  test('a contact who has never replied is not presented as understood', () => {
+    const b = brief({messageLog: [sent(20, 'hi')], replies: []});
+    assert.ok(b.limits.some(l => /never replied/.test(l)), JSON.stringify(b.limits));
+    assert.deepStrictEqual(b.history.theirWords, []);
+  });
+
+  test('the cadence reads the automation sentence that already exists', () => {
+    /* automationState returns `running` and a label that explains itself.
+       Reading a `.paused` that does not exist produced a briefing saying
+       paused:false and reason:'reply' in the same breath. */
+    const b = brief({automationPausedUntil: new Date(NOW.getTime() + 86400000).toISOString()});
+    assert.strictEqual(b.cadence.running, false);
+    assert.ok(/Paused by you/.test(b.cadence.automation), b.cadence.automation);
+    const running = brief({});
+    assert.strictEqual(running.cadence.running, true);
+    assert.ok(/running/i.test(running.cadence.automation));
+  });
+
+  test('an opted-out contact is flagged before anybody dials', () => {
+    const b = brief({smsStatus: 'opted_out'});
+    assert.strictEqual(b.cadence.optedOut, true);
+  });
+
+  test('it holds up with no call, no contact and no history', () => {
+    assert.strictEqual(GB.callBriefing(GB.buildDefaultState(), null, NOW), null);
+    const b = brief({callDateTime: null});
+    assert.strictEqual(b.call, null, 'a contact with no appointment got one anyway');
+    assert.doesNotThrow(() => GB.callBriefing(GB.buildDefaultState(), {id: 'x'}, NOW));
+  });
+
+  test('every claim says where it came from', () => {
+    // The whole point: a line with a date can be checked against the thread.
+    const b = brief({replies: [got(2, 'what does it cost?')]});
+    assert.ok(/own records/.test(b.source), b.source);
+    assert.ok(b.asOf, 'the briefing does not say when it was composed');
+    b.history.theirWords.forEach((t) => {
+      assert.ok(t.at, 'a quoted turn carries no timestamp');
+      assert.strictEqual(typeof t.daysAgo, 'number');
+    });
+  });
+}
+
 console.log('\n--- client text does not reach Google unless somebody said so ---');
 
 {
