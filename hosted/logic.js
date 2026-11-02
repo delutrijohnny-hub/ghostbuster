@@ -4771,20 +4771,46 @@ function assistantDataFindings(state, now){
   /* 5. Sends with nothing behind them. The pile that makes "did I text
         them?" unanswerable. */
   var unverified = 0, unverifiedClients = {};
+  var notSeen = 0, unknowable = 0, blindClients = {};
   ids.forEach(function(cid){
     var c = clients[cid];
     if(!c) return;
     (c.messageLog || []).forEach(function(m){
-      var d = deliveryState(m);
-      if(!d.confirmed && d.state !== 'received'){ unverified++; unverifiedClients[cid] = true; }
+      // WITH the contact, so the two silences can be told apart.
+      var d = deliveryState(m, c);
+      if(d.confirmed || d.state === 'received') return;
+      unverified++; unverifiedClients[cid] = true;
+      if(d.state === 'not_seen') notSeen++;
+      else if(d.state === 'unknowable'){ unknowable++; blindClients[cid] = true; }
     });
   });
   if(unverified){
+    /* One number was unactionable for months. Split, each half names its own
+       cause: a message missing from a thread this Mac CAN read is a send that
+       did not happen, and a message on a number this Mac has never seen is a
+       message nothing here can speak to. Different fixes, so they cannot
+       share a sentence. */
+    var parts = [];
+    if(notSeen){
+      parts.push(notSeen + ' ' + (notSeen === 1 ? 'is' : 'are') +
+        ' missing from a conversation this Mac can read, so there is no sign ' +
+        (notSeen === 1 ? 'it' : 'they') + ' ever sent');
+    }
+    if(unknowable){
+      parts.push(unknowable + ' ' + (unknowable === 1 ? 'is' : 'are') +
+        ' on ' + Object.keys(blindClients).length + ' ' +
+        (Object.keys(blindClients).length === 1 ? 'number' : 'numbers') +
+        ' whose texts never reach this Mac, so nothing here can confirm ' +
+        (unknowable === 1 ? 'it' : 'them') + ' either way');
+    }
     add('unconfirmed_sends', Object.keys(unverifiedClients),
       unverified + ' logged ' + (unverified === 1 ? 'message was' : 'messages were') +
         ' opened in another app and never confirmed. Opening a draft is not proof it was sent, ' +
-        'so these are neither sent nor failed — they are unknown.',
-      {messages: unverified, contacts: Object.keys(unverifiedClients).length});
+        'so these are neither sent nor failed — they are unknown.' +
+        (parts.length ? ' Of those, ' + parts.join('; ') + '.' : ''),
+      {messages: unverified, contacts: Object.keys(unverifiedClients).length,
+       noSignItSent: notSeen, onNumbersThisMacCannotSee: unknowable,
+       contactsThisMacCannotSee: Object.keys(blindClients).length});
   }
 
   /* 6. A contact nothing can be texted to. Not a queue problem -- the queue
@@ -5009,7 +5035,7 @@ function assistantWorkflowReview(state, now){
   var unverified = 0;
   ids.forEach(function(cid){
     (clients[cid].messageLog || []).forEach(function(m){
-      var d = deliveryState(m);
+      var d = deliveryState(m, clients[cid]);
       if(!d.confirmed && d.state !== 'received') unverified++;
     });
   });
@@ -5429,6 +5455,62 @@ function sendEvidence(m){
   return 'awaiting';          // queued, unverified, and nothing at all
 }
 
+/* ---- two silences, which are not the same problem ---- */
+
+/* Can this Mac see this conversation at all?
+
+   The agent only reads what Messages put on THIS machine. An iPhone-to-iPhone
+   thread is there; a green-bubble SMS to an Android phone is there only if
+   Text Message Forwarding is switched on, and otherwise the Mac has never
+   seen a word of it.
+
+   That distinction is the whole point of what follows. Evidence is any
+   message in the thread the agent itself placed -- an outbound send it
+   matched, or a reply it carried in -- which is what an 'imsg:' provider id
+   means and nothing else does. A Twilio id says a carrier handled it, which
+   says nothing about what this Mac can read. */
+function agentSeesThread(client){
+  if(!client) return false;
+  function byAgent(x){
+    return !!x && typeof x.providerId === 'string' && x.providerId.indexOf('imsg:') === 0;
+  }
+  return (client.messageLog || []).some(byAgent) ||
+         (client.replies || []).some(byAgent);
+}
+
+/* What the absence of a receipt actually tells us.
+
+   696 of this account's logged texts had no provider id, and reading them as
+   one pile -- "opened in Messages, not confirmed" -- hid that they are two
+   populations with opposite meanings and different fixes:
+
+   'not_seen'    314 rows. The Mac CAN see this contact's thread, and this
+                 message is not in it. That is positive evidence the send did
+                 not happen, and it points at the send route.
+   'unknowable'  291 rows, across contacts whose threads this Mac has never
+                 seen at all. The text probably did go; nothing here can say
+                 so. That points at Text Message Forwarding, not at the send.
+
+   Telling somebody "not confirmed" about both is how 605 rows sat for months
+   with nobody able to act on any of them.
+
+   Returns null when the question does not arise: a confirmed or failed send
+   has its answer, a queued one has not been attempted yet, and email has its
+   own handoff story on a channel the agent cannot see by definition. */
+var SEND_SILENCE_LABELS = {
+  not_seen:   'opened in Messages — and never appeared there',
+  unknowable: 'opened in Messages — this Mac cannot see this number’s texts'
+};
+
+function sendSilence(client, m){
+  if(!m || m.dir === 'in') return null;
+  if((m.channel || 'sms') !== 'sms') return null;
+  // Queued is not silence. It has not been tried yet.
+  if(m.deliveryStatus === 'queued') return null;
+  if(sendEvidence(m) !== 'awaiting') return null;
+  return agentSeesThread(client) ? 'not_seen' : 'unknowable';
+}
+
 /* The agent runs every two minutes. A send it is going to confirm is
    confirmed inside that window, so anything still unconfirmed after this has
    not been seen and is not going to be -- which is the moment it becomes
@@ -5498,7 +5580,7 @@ function textingProgress(state, now, dueCount){
   };
 }
 
-function deliveryState(m){
+function deliveryState(m, client){
   if(!m) return {state: 'unknown', label: '', confirmed: false};
   if(m.dir === 'in') return {state: 'received', label: 'received', confirmed: true};
   var raw = m.deliveryStatus || null;
@@ -5522,6 +5604,14 @@ function deliveryState(m){
      unconfirmed -- which reads as a send that went fine. */
   var ch = m.channel || 'sms';
   if(ch === 'sms'){
+    /* With the contact in hand this can say WHICH silence it is -- see
+       sendSilence. Without it the old single state stands, so every existing
+       caller keeps working and none of them starts claiming more than it
+       knows. */
+    var silence = client ? sendSilence(client, m) : null;
+    if(silence){
+      return {state: silence, label: SEND_SILENCE_LABELS[silence], confirmed: false};
+    }
     return {state: 'unverified', label: DELIVERY_STATES.unverified, confirmed: false};
   }
   if(ch === 'email'){
@@ -6418,6 +6508,16 @@ function computeVariantPerformance(state, now){
       // Unreviewed sends stay out of the denominator, exactly as they do for
       // the bandit: nobody checked, so they are not evidence either way.
       if(!m.reviewed) return;
+      /* Nor does a send this Mac was watching for and never saw go out.
+         Nobody can fail to answer a text they were never sent, and 17 rows on
+         this book were being scored as refusals on exactly that basis -- a
+         wording punished for a send that did not happen.
+
+         Only 'not_seen', never 'unknowable': on a number this Mac cannot read
+         the text almost certainly did go, and dropping those would throw away
+         most of the evidence there is. A reply is kept either way, because a
+         reply proves the send happened whatever the receipts say. */
+      if(!m.responded && sendSilence(c, m) === 'not_seen') return;
       var b = bucket(m.stage, m.variantId);
       b.sends++;
       if(m.responded) b.replies++;
@@ -9841,6 +9941,9 @@ var __LOGIC_EXPORTS__ = {
   pendingQuestion: pendingQuestion,
   phoneKey: phoneKey,
   matchInboundReply: matchInboundReply,
+  agentSeesThread: agentSeesThread,
+  sendSilence: sendSilence,
+  SEND_SILENCE_LABELS: SEND_SILENCE_LABELS,
   adoptionKey: adoptionKey,
   adoptLoggedSend: adoptLoggedSend,
   ADOPT_MIN_AGREE: ADOPT_MIN_AGREE,

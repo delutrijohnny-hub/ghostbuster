@@ -964,14 +964,20 @@ async function loadState(){
      Degrades to empty rather than failing the load -- no replies is the
      normal state until a number is registered. */
   var repliesRes = await sb.from('sms_events')
-    .select('id, body, from_phone, client_id, match_reason, created_at')
+    /* provider_id so logic.js can tell whether this Mac can SEE a contact's
+       thread at all: an 'imsg:' id means the agent itself carried the reply
+       in. agentSeesThread reads it, and without it a contact the Mac has only
+       ever received from reads as a contact it cannot see -- which would
+       excuse a send that genuinely never went out. */
+    .select('id, body, from_phone, client_id, match_reason, created_at, provider_id')
     .eq('kind', 'sms.inbound')
     .order('created_at', {ascending: false})
     .limit(500);
   state.unplacedReplies = [];
   ((repliesRes && repliesRes.data) || []).forEach(function(row){
     if(!row || !row.body) return;
-    var item = {id: row.id ? String(row.id) : null, text: row.body, at: row.created_at};
+    var item = {id: row.id ? String(row.id) : null, text: row.body, at: row.created_at,
+                providerId: row.provider_id || null};
     if(row.client_id && state.clients[row.client_id]){
       state.clients[row.client_id].replies.push(item);
     } else if(!row.client_id){

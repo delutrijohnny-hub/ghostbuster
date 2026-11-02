@@ -2699,7 +2699,7 @@ function renderMsgxThread(){
         ' \u00b7 not sent to ' + escapeHtml(firstName(c.name)) + '</div>' +
         escapeHtml(it.text) + '</div>';
     }
-    var ds = deliveryState(it);
+    var ds = deliveryState(it, c);
     /* The channel is on the bubble, not inferred from how it looks. A thread
        now carries both, and an email that reads as a text is how somebody
        answers in a medium the contact never used. */
@@ -5140,7 +5140,7 @@ function openClientModal(clientId){
        confirmed delivering. deliveryState draws that line: what a provider or
        the Mac agent confirmed reads plainly, what we merely handed over says
        so. */
-    var ds = deliveryState(it);
+    var ds = deliveryState(it, c);
     var delivery = ds.label
       ? ' · <span class="' + (ds.confirmed ? 'dlv-ok' : 'dlv-unsure') + '">' +
         escapeHtml(ds.label) + '</span>'
@@ -5465,7 +5465,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261101-adoptsend';
+var BUILD_STAMP = '20261102-twosilences';
 
 /* Which settings section to scroll to once the modal is up.
 

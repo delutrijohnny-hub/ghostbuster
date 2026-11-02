@@ -7159,6 +7159,97 @@ console.log('\n--- what may be claimed about a message ---');
     assert.strictEqual(GB.deliveryState(undefined).label, '');
   });
 
+  /* Two silences, which are not the same problem.
+     On this book: 314 messages missing from threads this Mac CAN read, and
+     291 on 133 numbers it has never seen a word of. Reported as one pile they
+     were unactionable for months. */
+  {
+    const seen = (extra) => Object.assign(
+      {messageLog: [{providerId: 'imsg:AAA', channel: 'sms'}], replies: []}, extra || {});
+    const blind = (extra) => Object.assign(
+      {messageLog: [{providerId: null, channel: 'sms'}], replies: []}, extra || {});
+    const silent = {dir: 'out', channel: 'sms', deliveryStatus: null};
+
+    test('a send missing from a thread this Mac can read has no sign it sent', () => {
+      assert.strictEqual(GB.sendSilence(seen(), silent), 'not_seen');
+      const d = GB.deliveryState(silent, seen());
+      assert.strictEqual(d.state, 'not_seen');
+      assert.strictEqual(d.confirmed, false, 'a silence was promoted to confirmed');
+      assert.ok(/never appeared/i.test(d.label), d.label);
+    });
+
+    test('a send to a number this Mac cannot see is unknowable, not a failure', () => {
+      /* Absence of evidence is not evidence of absence: a green-bubble SMS to
+         an Android phone never reaches this Mac, and the text almost
+         certainly did go. */
+      assert.strictEqual(GB.sendSilence(blind(), silent), 'unknowable');
+      const d = GB.deliveryState(silent, blind());
+      assert.strictEqual(d.state, 'unknowable');
+      assert.strictEqual(d.confirmed, false);
+      assert.ok(/cannot see/i.test(d.label), d.label);
+    });
+
+    test('a reply the agent carried in proves the Mac can see the thread', () => {
+      /* Four contacts on this book have only ever been RECEIVED from. Reading
+         them as invisible would excuse a send that genuinely never went. */
+      const inboundOnly = {messageLog: [{providerId: null, channel: 'sms'}],
+                           replies: [{providerId: 'imsg:BBB', text: 'hi'}]};
+      assert.strictEqual(GB.agentSeesThread(inboundOnly), true);
+      assert.strictEqual(GB.sendSilence(inboundOnly, silent), 'not_seen');
+    });
+
+    test('a carrier id is not evidence about what this Mac can read', () => {
+      // A Twilio id says a carrier handled it, which says nothing about
+      // whether Messages on this machine ever saw the conversation.
+      const twilio = {messageLog: [{providerId: 'SM123abc', channel: 'sms'}], replies: []};
+      assert.strictEqual(GB.agentSeesThread(twilio), false);
+      assert.strictEqual(GB.sendSilence(twilio, silent), 'unknowable');
+    });
+
+    test('the question does not arise for anything already answered', () => {
+      ['delivered', 'sent', 'sent_manual'].forEach((st) => {
+        assert.strictEqual(GB.sendSilence(seen(), {dir: 'out', channel: 'sms', deliveryStatus: st}),
+          null, st + ' was treated as a silence');
+      });
+      ['failed', 'bounced', 'complained'].forEach((st) => {
+        assert.strictEqual(GB.sendSilence(seen(), {dir: 'out', channel: 'sms', deliveryStatus: st}),
+          null, st + ' was treated as a silence');
+      });
+      // Queued has not been attempted yet, so it is not silence either.
+      assert.strictEqual(
+        GB.sendSilence(seen(), {dir: 'out', channel: 'sms', deliveryStatus: 'queued'}), null);
+      // Inbound and email are not this question.
+      assert.strictEqual(GB.sendSilence(seen(), {dir: 'in', channel: 'sms'}), null);
+      assert.strictEqual(
+        GB.sendSilence(seen(), {dir: 'out', channel: 'email', deliveryStatus: null}), null);
+    });
+
+    test('without the contact, the old single state still stands', () => {
+      /* Every caller that cannot supply a contact keeps working and none of
+         them starts claiming more than it knows. */
+      const d = GB.deliveryState(silent);
+      assert.strictEqual(d.state, 'unverified');
+      assert.ok(/not confirmed/i.test(d.label), d.label);
+    });
+
+    test('both silences read as doubt, never as achievement', () => {
+      Object.keys(GB.SEND_SILENCE_LABELS).forEach((k) => {
+        const label = GB.SEND_SILENCE_LABELS[k];
+        assert.ok(label && label.length, k + ' has no phrase');
+        assert.ok(!/\b(sent|delivered)\b/i.test(label.replace(/ever sent|never appeared/i, '')),
+          k + ' reads like a send that happened: ' + label);
+      });
+    });
+
+    test('it holds up with no contact and no log', () => {
+      assert.doesNotThrow(() => GB.agentSeesThread(null));
+      assert.strictEqual(GB.agentSeesThread({}), false);
+      assert.strictEqual(GB.agentSeesThread({messageLog: [null], replies: [null]}), false);
+      assert.doesNotThrow(() => GB.sendSilence(null, silent));
+      assert.strictEqual(GB.sendSilence(seen(), null), null);
+    });
+  }
+
   test('the handoff path records unverified rather than leaving it blank', () => {
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     const start = app.indexOf("case 'open-sms':");
@@ -9075,6 +9166,71 @@ console.log('\n--- linking a logged send to the message that really went out ---
     const r = GB.adoptLoggedSend([{id: 'a', text: 'Yes'}], 'Yes');
     assert.ok(r && r.reason === 'exact');
     assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: 'Yes please'}], 'Yes'), null);
+  });
+}
+
+console.log('\n--- a send that never went out is not a refusal ---');
+
+{
+  const ago = (d) => new Date(Date.now() - d * 86400000).toISOString();
+  /* `evidence` adds a confirmed message the agent placed, which is what makes
+     this contact's thread readable on this Mac. variantId 'custom' keeps it
+     out of the variant maths, so it only supplies visibility. */
+  const one = (opts) => {
+    const log = [];
+    if (opts.evidence) {
+      log.push({id: 'ev', stage: 'custom', variantId: 'custom', text: 'typed by hand',
+                sentAt: ago(9), responded: false, reviewed: true, channel: 'sms',
+                providerId: 'imsg:AAA', deliveryStatus: 'delivered'});
+    }
+    log.push({id: 'tx', stage: 'dayof', variantId: 'd1', text: 'see you at 2', sentAt: ago(6),
+              responded: !!opts.replied, respondedAt: opts.replied ? ago(6) : null,
+              reviewed: true, channel: 'sms', providerId: null, deliveryStatus: null});
+    const c = GB.sanitizeClient({
+      id: 'c1', name: 'P', phone: '2135550101', timezone: 'America/New_York',
+      status: 'Completed', bookedDate: ago(40), callDateTime: ago(5), messageLog: log
+    });
+    return {clients: {c1: c}, variants: GB.buildDefaultVariants(), variantStats: {}, todos: []};
+  };
+  const d1 = (state) => {
+    const g = GB.computeVariantPerformance(state, new Date()).find((x) => x.stage === 'dayof');
+    return g ? g.rows.find((r) => r.variantId === 'd1') : null;
+  };
+
+  test('a send this Mac never saw go out is not counted as a refusal', () => {
+    /* 17 rows on this book were scored as "they did not reply" against a
+       wording, for texts missing from threads this Mac can read. Nobody can
+       fail to answer a message they were never sent. */
+    const row = d1(one({evidence: true}));
+    assert.ok(row, 'the wording vanished from the panel entirely');
+    assert.strictEqual(row.sends, 0, 'a send with no sign it happened entered the denominator');
+    assert.strictEqual(row.replies, 0);
+    assert.strictEqual(row.replyRate, null, 'a rate was computed from no evidence');
+  });
+
+  test('on a number this Mac cannot read, the send still counts', () => {
+    /* The opposite error, and the more tempting one. Those texts almost
+       certainly went; dropping them would throw away most of the evidence
+       this account has. */
+    const row = d1(one({evidence: false}));
+    assert.ok(row);
+    assert.strictEqual(row.sends, 1, 'an unknowable send was discarded as if it never sent');
+    assert.strictEqual(row.replies, 0);
+  });
+
+  test('a reply keeps the send, whatever the receipts say', () => {
+    // They answered it, so it was sent. That outranks every absent receipt.
+    const row = d1(one({evidence: true, replied: true}));
+    assert.ok(row);
+    assert.strictEqual(row.sends, 1, 'a send somebody answered was dropped');
+    assert.strictEqual(row.replies, 1);
+  });
+
+  test('a confirmed send is unaffected by any of this', () => {
+    const state = one({evidence: true});
+    state.clients.c1.messageLog[1].deliveryStatus = 'delivered';
+    const row = d1(state);
+    assert.strictEqual(row.sends, 1);
   });
 }
 
