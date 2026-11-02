@@ -186,16 +186,22 @@ Deno.serve(async (req) => {
          `&select=stage,variant_key,text,builtin,channel,retired`),
   ]);
 
-  const settings = (settingsRows || [])[0] || {};
+  /* `acct`, not `settings`: the switch check above already holds a `settings`
+     in this scope, and a second `const` of the same name in the same function
+     is a SyntaxError at module load -- the function does not start at all. It
+     deployed cleanly and then every request came back
+     {"code":"BOOT_ERROR"}, caught by an anon-key probe rather than by a user
+     clicking draft. */
+  const acct = (settingsRows || [])[0] || {};
   /* Always called, with null resetting each to its default -- a stale global
      must not survive between requests on a warm instance. Same order
      loadState uses. */
-  GB.setPipeline(Array.isArray(settings.pipeline) && settings.pipeline.length ? settings.pipeline : null);
-  GB.setTerminology(settings.terminology || null);
-  GB.setSequence(Array.isArray(settings.sequence) && settings.sequence.length ? settings.sequence : null);
+  GB.setPipeline(Array.isArray(acct.pipeline) && acct.pipeline.length ? acct.pipeline : null);
+  GB.setTerminology(acct.terminology || null);
+  GB.setSequence(Array.isArray(acct.sequence) && acct.sequence.length ? acct.sequence : null);
 
   const state = GB.assistantStateFromRows(clients, inbound || [], 'UTC', []);
-  state.senderName = settings.sender_name || 'the sender';
+  state.senderName = acct.sender_name || 'the sender';
   /* voiceExamples reads state.variants: a person's own wording must outrank
      the starter templates, or somebody who wrote their own copy gets drafts
      in the stock voice. Retired wordings are left out. */
