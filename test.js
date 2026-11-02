@@ -612,13 +612,24 @@ test('the monthly limit never withholds an appointment reminder', () => {
      who has since rebooked still gets the day-of text with the meeting link
      in it \u2014 withholding that to keep a monthly text count is losing a call
      to avoid a message, which is the wrong trade every time. */
+  /* Anchored to a fixed morning in the CONTACT'S own zone, and that `now`
+     handed to computeDue.
+
+     It used to read `Date.now() + 4h` against `new Date()`, so after 20:00 in
+     Chicago the call landed on TOMORROW and the day-of text was correctly not
+     due -- the test failed by the clock rather than on the behaviour it
+     describes, every evening, and it chose tonight to start. A test that
+     fails by the hour spends the suite's authority, which is the only thing
+     making any of the rest of this checkable. */
+  const now = atHourInZone(9, 'America/Chicago');
   const c = freshClient({
-    status: 'Confirmed', callDateTime: new Date(Date.now() + 4 * 3600000).toISOString(),
+    status: 'Confirmed',
+    callDateTime: new Date(now.getTime() + 4 * 3600000).toISOString(),
     bookedDate: isoDaysAgo(10),
     messageLog: [{ stage: 'recovery', variantId: 'r1', text: 'any news?',
                    sentAt: isoDaysAgo(5), responded: false, respondedAt: null }]
   });
-  assert.ok(GB.computeDue(c, new Date()).includes('dayof'));
+  assert.ok(GB.computeDue(c, now).includes('dayof'));
 });
 
 test('the month is a named constant, not a number buried in the evaluator', () => {
