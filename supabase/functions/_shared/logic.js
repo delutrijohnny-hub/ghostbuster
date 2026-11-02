@@ -5520,6 +5520,48 @@ function sendSilence(client, m){
   return agentSeesThread(client) ? 'not_seen' : 'unknowable';
 }
 
+/* The email library's own stage, which is not a touch wording and must never
+   be ranked as one. Module scope because two callers need it now:
+   computeVariantPerformance, where it has always lived, and agentReplyCredit
+   below. It was a nested helper, and referencing it from out here was a
+   ReferenceError waiting for the first library email somebody replied to. */
+function isLibraryEmail(stage){ return stage === 'email'; }
+
+/* What a reply the AGENT attributed owes the chooser.
+ *
+ * reviewMessage is the only thing that moves variant_stats, and it runs in a
+ * browser when somebody answers "did they reply?". On this account nobody has:
+ * zero message.replied or message.no_reply events in 685, going back to
+ * 2026-09-30. imessage-sync had already answered the question for them 139
+ * times by writing responded/reviewed straight onto the row, which no counter
+ * ever saw. So the chooser explored forever and never learned anything.
+ *
+ * This is the delta that closes that gap, kept here rather than in the Edge
+ * Function for the usual reason: the .ts file is the one the node suite cannot
+ * load, and an arithmetic rule about learning belongs where it can be checked.
+ *
+ * A reply is the strongest evidence there is -- somebody answered, so the text
+ * arrived -- which is why it always earns its send back:
+ *
+ *   never reviewed      +1 send, +1 reply. It was in no counter at all.
+ *   reviewed, no reply  the send was kept OUT by sendSilence, because a reply
+ *                       arriving through the agent proves the Mac can read
+ *                       this thread, which makes any unconfirmed send to this
+ *                       contact a 'not_seen' one. So it owes +1 send too.
+ *   already replied     nothing. Crediting twice is how a wording gets
+ *                       promoted on one person answering once.
+ *
+ * Caller passes the row as it stood BEFORE the attribution. */
+function agentReplyCredit(prior){
+  var none = {sends: 0, responses: 0};
+  if(!prior || prior.responded) return none;
+  if(!prior.variantId || prior.variantId === 'custom') return none;
+  if((prior.channel || 'sms') !== 'sms') return none;
+  if(isLibraryEmail(prior.stage)) return none;
+  var wasCounted = !!prior.reviewed && sendEvidence(prior) !== 'awaiting';
+  return {sends: wasCounted ? 0 : 1, responses: 1};
+}
+
 /* The agent runs every two minutes. A send it is going to confirm is
    confirmed inside that window, so anything still unconfirmed after this has
    not been seen and is not going to be -- which is the moment it becomes
@@ -6511,7 +6553,6 @@ function computeVariantPerformance(state, now){
 
      If per-email reply rates are ever wanted, they belong in the Email templates tab
      labelled with each email's title, not here. */
-  function isLibraryEmail(stage){ return stage === 'email'; }
 
   function bucket(stage, variantId){
     if(!byStage[stage]) byStage[stage] = {};
@@ -9974,6 +10015,8 @@ var __LOGIC_EXPORTS__ = {
   matchInboundReply: matchInboundReply,
   agentSeesThread: agentSeesThread,
   sendSilence: sendSilence,
+  agentReplyCredit: agentReplyCredit,
+  isLibraryEmail: isLibraryEmail,
   SEND_SILENCE_LABELS: SEND_SILENCE_LABELS,
   adoptionKey: adoptionKey,
   adoptLoggedSend: adoptLoggedSend,

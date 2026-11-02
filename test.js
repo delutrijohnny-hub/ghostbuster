@@ -7363,6 +7363,83 @@ console.log('\n--- what may be claimed about a message ---');
       assert.doesNotThrow(() => GB.sendSilence(null, silent));
       assert.strictEqual(GB.sendSilence(seen(), null), null);
     });
+
+    /* What a reply the AGENT attributed owes the chooser.
+       reviewMessage is the only thing that has ever moved variant_stats, and
+       it runs in a browser when somebody answers "did they reply?" -- which
+       on this account has happened zero times in 685 events since
+       2026-09-30, while imessage-sync answered it 139 times by writing
+       responded/reviewed straight onto the row. */
+    const row = (extra) => Object.assign(
+      {stage: 'welcome', variantId: 'w1', channel: 'sms',
+       reviewed: false, responded: false, deliveryStatus: null}, extra || {});
+
+    test('a reply nobody had reviewed owes a send and a reply', () => {
+      assert.deepStrictEqual(GB.agentReplyCredit(row()), {sends: 1, responses: 1});
+    });
+
+    test('a reply to a send that was kept out as unseen owes the send back', () => {
+      /* It was reviewed as no-reply and sendSilence kept it out, because a
+         reply arriving through the agent proves the Mac can read this thread.
+         The reply proves the text arrived, so the send is owed too. */
+      assert.deepStrictEqual(GB.agentReplyCredit(row({reviewed: true})),
+        {sends: 1, responses: 1});
+    });
+
+    test('a reply to a send already counted owes only the reply', () => {
+      ['delivered', 'sent', 'sent_manual'].forEach((st) => {
+        assert.deepStrictEqual(GB.agentReplyCredit(row({reviewed: true, deliveryStatus: st})),
+          {sends: 0, responses: 1}, st);
+      });
+      // A failed send is in the denominator today, so it is not owed again.
+      assert.deepStrictEqual(GB.agentReplyCredit(row({reviewed: true, deliveryStatus: 'failed'})),
+        {sends: 0, responses: 1});
+    });
+
+    test('a reply already on record owes nothing', () => {
+      /* Crediting twice is how a wording gets promoted on one person
+         answering once. The agent re-reads threads, so this will happen. */
+      assert.deepStrictEqual(GB.agentReplyCredit(row({reviewed: true, responded: true})),
+        {sends: 0, responses: 0});
+      assert.deepStrictEqual(GB.agentReplyCredit(row({responded: true})),
+        {sends: 0, responses: 0});
+    });
+
+    test('nothing is credited to text that is nobody’s template', () => {
+      assert.deepStrictEqual(GB.agentReplyCredit(row({variantId: 'custom'})),
+        {sends: 0, responses: 0});
+      assert.deepStrictEqual(GB.agentReplyCredit(row({variantId: null})),
+        {sends: 0, responses: 0});
+      // The library's own stage is not a touch wording and must not be ranked
+      // as one -- the same exclusion computeVariantPerformance makes.
+      assert.deepStrictEqual(GB.agentReplyCredit(row({stage: 'email', variantId: 'lib-1'})),
+        {sends: 0, responses: 0});
+      assert.strictEqual(GB.isLibraryEmail('email'), true);
+      assert.strictEqual(GB.isLibraryEmail('welcome'), false);
+    });
+
+    test('an email is not credited by a function that only sees texts', () => {
+      assert.deepStrictEqual(GB.agentReplyCredit(row({channel: 'email'})),
+        {sends: 0, responses: 0});
+    });
+
+    test('a missing row credits nothing rather than throwing in a webhook', () => {
+      assert.deepStrictEqual(GB.agentReplyCredit(null), {sends: 0, responses: 0});
+      assert.deepStrictEqual(GB.agentReplyCredit(undefined), {sends: 0, responses: 0});
+      assert.doesNotThrow(() => GB.agentReplyCredit({}));
+    });
+
+    test('the credit never exceeds one reply, whatever the row says', () => {
+      /* credit_variant_reply raises on anything outside 0..1, so a credit
+         that could exceed it would start failing syncs rather than quietly
+         inflating a wording. Keep them agreeing. */
+      [{}, {reviewed: true}, {reviewed: true, deliveryStatus: 'delivered'},
+       {responded: true}, {variantId: 'custom'}].forEach((e) => {
+        const c = GB.agentReplyCredit(row(e));
+        assert.ok(c.sends >= 0 && c.sends <= 1, 'sends out of range: ' + c.sends);
+        assert.ok(c.responses >= 0 && c.responses <= 1, 'responses out of range: ' + c.responses);
+      });
+    });
   }
 
   test('the handoff path records unverified rather than leaving it blank', () => {

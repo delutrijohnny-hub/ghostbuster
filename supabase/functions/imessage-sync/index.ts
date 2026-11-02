@@ -49,6 +49,64 @@ function db(path: string, init: RequestInit = {}) {
   });
 }
 
+/* Credit the wording for a reply this function just attributed.
+ *
+ * reviewMessage, in the browser, is the only thing that has ever moved
+ * variant_stats, and it runs when somebody answers "did they reply?". On this
+ * account nobody has: zero message.replied / message.no_reply events in 685,
+ * back to 2026-09-30. This function had already answered that question 139
+ * times by writing responded/reviewed straight onto the row, and no counter
+ * ever saw it -- so pickVariant explored forever and learned nothing. This is
+ * the missing half.
+ *
+ * The arithmetic is GB.agentReplyCredit, in logic.js, where the node suite can
+ * check it. The write is an RPC because it must ADD: the browser saves
+ * variant_stats as a whole row from its own in-memory state, so an upsert from
+ * here would be overwritten by the next browser save, and PostgREST cannot
+ * express `sends = sends + 1`.
+ *
+ * THE HASH IS NOT OPTIONAL. reconcileVariantStats retires a counter whose hash
+ * no longer matches the wording, which is how a key that has carried several
+ * different messages stops being ranked as one -- the whole point of the
+ * 2026-10-12 reset. credit_variant_reply mirrors that rule, so it needs to know
+ * which wording is being credited. Without a hash the credit is skipped rather
+ * than guessed: a wrong guess either resurrects pre-reset numbers as evidence
+ * for today's copy, or wipes the live count on every reply.
+ */
+async function creditWording(userId: string, row: any) {
+  const credit = GB.agentReplyCredit({
+    stage: row.stage,
+    variantId: row.variant_key,
+    channel: row.channel || 'sms',
+    reviewed: !!row.reviewed,
+    responded: !!row.responded,
+    deliveryStatus: row.delivery_status || null,
+  });
+  if (!credit.sends && !credit.responses) return;
+
+  const vRes = await db(
+    `/variants?user_id=eq.${encodeURIComponent(userId)}` +
+    `&stage=eq.${encodeURIComponent(row.stage)}` +
+    `&variant_key=eq.${encodeURIComponent(row.variant_key)}` +
+    `&select=text&limit=1`).catch(() => null);
+  const v = vRes && vRes.ok ? ((await vRes.json().catch(() => [])) || [])[0] : null;
+  if (!v || typeof v.text !== 'string' || !v.text) return;   // see the header
+  const hash = GB.variantTextHash(v.text);
+  if (!hash) return;
+
+  await db('/rpc/credit_variant_reply', {
+    method: 'POST',
+    body: JSON.stringify({
+      p_user: userId,
+      p_stage: row.stage,
+      p_variant_key: row.variant_key,
+      p_sends: credit.sends,
+      p_responses: credit.responses,
+      p_text_hash: hash,
+    }),
+  }).catch(() => { /* a lost credit must never cost the reply itself */ });
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status, headers: { ...CORS, 'Content-Type': 'application/json' },
@@ -495,15 +553,23 @@ Deno.serve(async (req) => {
     const prior = await db(
       `/message_log?client_id=eq.${encodeURIComponent(client.id)}&channel=eq.sms` +
       `&responded=is.false&sent_at=lte.${encodeURIComponent(at)}` +
-      `&order=sent_at.desc&limit=1&select=id`);
+      `&order=sent_at.desc&limit=1` +
+      // The columns agentReplyCredit needs to work out what this reply owes
+      // the chooser. `select=id` alone is what left it unable to.
+      `&select=id,stage,variant_key,reviewed,responded,channel,delivery_status`);
     const pm = ((await prior.json().catch(() => [])) || [])[0];
     if (pm) {
-      await db(`/message_log?id=eq.${pm.id}`, {
+      const marked = await db(`/message_log?id=eq.${pm.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           responded: true, responded_at: at, reviewed: true,
         }),
       });
+      /* Read, and only credit a wording for an attribution that landed.
+         Crediting off an unchecked PATCH is how a wording gets promoted for a
+         reply the database never recorded. */
+      if (marked.ok) await creditWording(tok.user_id, pm);
+      else { failed++; if (!firstError) firstError = (await marked.text().catch(() => '')).slice(0, 200); }
     }
   }
 
