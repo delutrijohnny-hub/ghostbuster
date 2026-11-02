@@ -1,8 +1,22 @@
-// Thin authenticated proxy in front of the Gemini API, so the API key never
-// ships to the browser. The app already builds the full prompt client-side
-// (it has the client's notes/recap/voice-example data loaded there anyway,
-// none of which is secret) — this function's only job is to hold the key
-// and make the actual call.
+// Authenticated proxy in front of the Gemini API, so the API key never ships
+// to the browser.
+//
+// It used to say here that the prompt is built client-side and that none of
+// the client's notes, recap or voice-example data is "secret", as though that
+// settled it. It does not. Those are somebody else's words about somebody
+// else's business, and the question is not whether they are secret but
+// whether anyone decided to send them to Google. Nothing recorded that
+// anyone had, so the switch below now does.
+//
+// WHAT IS STILL WRONG, and it is the next piece of work: the body is a bare
+// `prompt` string that the browser composed. This function can decide WHETHER
+// anything goes, and cannot decide WHAT goes, because it never sees structure
+// -- only a blob. Selling this to a company that asks "what exactly leaves
+// our account?" needs the prompt built HERE, from rows read under the
+// caller's own token, the way ghost-assistant does it. The prompt builders
+// (replyDraftPrompt, conversationSummaryPrompt) already live in logic.js and
+// are already tested, so the move is mechanical; it is not done yet and this
+// comment is not pretending otherwise.
 //
 // Platform-level JWT verification alone isn't enough here: Supabase's
 // default "verify_jwt" accepts any validly-signed project JWT, and the
@@ -45,8 +59,41 @@ Deno.serve(async (req) => {
   const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` },
   });
-  if (!userRes.ok || !(await userRes.json())?.id) {
+  const who = userRes.ok ? await userRes.json().catch(() => null) : null;
+  const userId = who?.id;
+  if (!userId) {
     return jsonResponse({ error: 'Not signed in' }, 401);
+  }
+
+  /* THE SWITCH. Sending a client's words to Google is a decision about
+   * somebody else's data, and until this column existed nothing recorded that
+   * anyone had made it -- the prompt was assembled in the browser and this
+   * function forwarded whatever string it was handed, so no server-side rule
+   * could narrow it and no answer could be given to "does this send our
+   * client data to Google?" except "yes, whenever anyone clicks draft".
+   *
+   * Read as the CALLER and filtered to the caller's OWN row: app_settings is
+   * readable org-wide by a manager, so `select` without the filter would let
+   * one person's switch authorise another's.
+   *
+   * FAILS CLOSED. A settings read that errors refuses rather than permits,
+   * because the cost of being wrong is one missing draft in one direction and
+   * a client's conversation leaving the building in the other.
+   */
+  const setRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/app_settings?user_id=eq.${encodeURIComponent(userId)}` +
+    `&select=ai_drafting_enabled&limit=1`,
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` } },
+  ).catch(() => null);
+  const settings = setRes && setRes.ok
+    ? ((await setRes.json().catch(() => [])) || [])[0] : null;
+  if (!settings || settings.ai_drafting_enabled !== true) {
+    return jsonResponse({
+      error: 'AI drafting is switched off for this account, so nothing was sent anywhere. '
+           + 'It writes drafts by sending this conversation to Google Gemini, which is why '
+           + 'it is off until somebody turns it on.',
+      aiDraftingEnabled: false,
+    }, 403);
   }
 
   let prompt: string;

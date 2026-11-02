@@ -643,6 +643,11 @@ async function loadState(){
     theme: (settingsRes.data && settingsRes.data.theme) || null,
     calendarFilter: (settingsRes.data && settingsRes.data.calendar_filter) || null,
     myCalendars: myCalendars,
+    /* Whether this account may send client text to Google for drafting.
+       Server-enforced in gemini-draft; this copy only lets the screen say so
+       instead of offering a button that refuses. Absent column reads false,
+       which is the safe direction and what an older database gives. */
+    aiDraftingEnabled: !!(settingsRes.data && settingsRes.data.ai_drafting_enabled),
     emailEnabled: !!(settingsRes.data && settingsRes.data.email_enabled),
     autoSendEmail: !!(settingsRes.data && settingsRes.data.auto_send_email),
     emailFromName: (settingsRes.data && settingsRes.data.email_from_name) || null,
@@ -1282,6 +1287,7 @@ function buildSyncSnapshot(state, uid){
     terminology: state.terminology || null,
     sequence: state.sequence || null,
     calendar_filter: state.calendarFilter || null,
+    ai_drafting_enabled: !!state.aiDraftingEnabled,
     email_enabled: !!state.emailEnabled,
     auto_send_email: !!state.autoSendEmail,
     email_from_name: state.emailFromName || null,

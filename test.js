@@ -9241,6 +9241,96 @@ console.log('\n--- an inbound text finds its contact ---');
   });
 }
 
+console.log('\n--- client text does not reach Google unless somebody said so ---');
+
+{
+  const read = (...p) => fs.readFileSync(path.join(__dirname, ...p), 'utf8');
+
+  test('gemini-draft refuses unless the account switched drafting on', () => {
+    /* The function's own header used to argue that none of a client's notes
+       or conversation text is "secret", as if that answered it. It is
+       somebody else's words about somebody else's business, and the question
+       is whether anyone decided to send them. Nothing recorded that anyone
+       had. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    /* The SELECT must ask for the column, not merely mention it. Checking
+       the file for the name passes while the query fetches something else --
+       which fails closed, so the only symptom is drafting that never works
+       and no test complaining. */
+    assert.ok(/select=ai_drafting_enabled/.test(src),
+      'gemini-draft does not actually select the switch column');
+    assert.ok(/ai_drafting_enabled\s*!==\s*true/.test(src),
+      'the switch is not checked strictly — a truthy string would pass');
+    assert.ok(/\b403\b/.test(src), 'there is no refusal path');
+    /* Enforced where the browser cannot reach around it. A button that hides
+       itself is not a permission. */
+    assert.ok(/auth\/v1\/user/.test(src), 'the caller is not resolved server-side');
+  });
+
+  test('a switch is read as the caller, and only for the caller', () => {
+    /* app_settings is readable org-wide by a manager, so a select without the
+       user filter would let one person's switch authorise another's. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    const call = src.slice(src.indexOf('app_settings?'), src.indexOf('ai_drafting_enabled !== true'));
+    assert.ok(/user_id=eq\./.test(call), 'the settings read is not scoped to the caller');
+    assert.ok(/Authorization: `Bearer \$\{callerToken\}`/.test(call),
+      'the settings read does not go out as the caller, so RLS does not apply');
+  });
+
+  test('the drafting switch fails closed', () => {
+    /* One missing draft in one direction; a client's conversation leaving the
+       building in the other. A read that errors must refuse. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    assert.ok(/if \(!settings \|\| settings\.ai_drafting_enabled !== true\)/.test(src),
+      'an unreadable or missing settings row does not refuse');
+    /* Scoped to the settings fetch. A file-wide search for the catch matched
+       an unrelated one on the auth call above it, so removing this one left
+       the test green. */
+    const fetchBlock = src.slice(src.indexOf('app_settings?'),
+                                 src.indexOf('const settings'));
+    assert.ok(/\.catch\(\(\) => null\)/.test(fetchBlock),
+      'a failed settings fetch is not turned into a refusal');
+  });
+
+  test('the switch survives a save, so it cannot be silently dropped', () => {
+    /* buildSyncSnapshot writes app_settings as a whole row. A column it does
+       not carry is a column the next save sets back to its default — which
+       for this one would turn drafting off, or on, without anybody asking. */
+    const src = read('hosted', 'data.js');
+    assert.ok(/aiDraftingEnabled: !!\(settingsRes\.data && settingsRes\.data\.ai_drafting_enabled\)/.test(src),
+      'loadState does not read ai_drafting_enabled');
+    assert.ok(/ai_drafting_enabled: !!state\.aiDraftingEnabled/.test(src),
+      'buildSyncSnapshot does not carry ai_drafting_enabled, so a save would reset it');
+  });
+
+  test('a refusal reaches the person in the server’s own words', () => {
+    /* invoke() turns every non-2xx into "Edge Function returned a non-2xx
+       status code" and leaves the reason in the body. Reporting the generic
+       line sends somebody to look at Google for a refusal that came from a
+       setting on their own account. */
+    const src = read('hosted', 'app.js');
+    const fn = src.slice(src.indexOf('function callGemini('), src.indexOf('function generateAIMessage('));
+    assert.ok(/context/.test(fn) && /\.json\(\)/.test(fn),
+      'callGemini never reads the error body, so the reason is lost');
+    assert.ok(/body && body\.error/.test(fn),
+      'callGemini does not prefer the server’s message');
+  });
+
+  test('the assistant’s own AI switch is a separate decision', () => {
+    /* Two features, two switches. ghost-assistant requires
+       ASSISTANT_AI_ENABLED === 'true' AND a key, because a key being present
+       is not consent — it was already set for drafting, so keying off its
+       presence would have enabled the assistant silently. */
+    const src = read('supabase', 'functions', 'ghost-assistant', 'index.ts');
+    assert.ok(/ASSISTANT_AI_ENABLED'\) === 'true'/.test(src),
+      'the assistant no longer requires its own explicit switch');
+    assert.ok(/&&\s*!!Deno\.env\.get\('GEMINI_API_KEY'\)/.test(src),
+      'the assistant no longer requires a key as well as the switch');
+    assert.ok(!/ai_drafting_enabled/.test(src),
+      'the assistant is reading the drafting switch — they are different decisions');
+  });
+}
+
 console.log('\n--- linking a logged send to the message that really went out ---');
 
 {

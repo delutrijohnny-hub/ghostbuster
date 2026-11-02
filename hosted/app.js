@@ -4850,11 +4850,20 @@ function populatePrintSheet(state){
 
 /* ============================================================
    10.5) AI DRAFTING (Gemini, via server-side proxy)
-   The prompt is built here client-side (client notes/recap/voice-example
-   data is already loaded here, none of it secret) — the gemini-draft Edge
-   Function's only job is to hold the real API key and make the call, so it
-   never ships to the browser. Requires the caller to be a real signed-in
-   user (verified server-side), not just anyone holding the public anon key.
+
+   This said the prompt is built here and that none of the client's
+   notes/recap/voice-example data is "secret", as if that answered the
+   question. It is somebody else's words about somebody else's business, and
+   the question is whether anyone decided to send them to Google.
+
+   So drafting is now OFF unless app_settings.ai_drafting_enabled is true for
+   the account, refused by the Edge Function rather than by hiding this
+   button — a browser that decides its own permissions is not a permission.
+   STATE.aiDraftingEnabled is a copy for labelling only; the server is what
+   enforces it.
+
+   Still true, and still the gap: the prompt is composed here and sent as one
+   string, so the function can decide WHETHER anything goes and not WHAT.
    ============================================================ */
 
 function buildAIPrompt(client, stage){
@@ -4920,7 +4929,24 @@ function buildAIPrompt(client, stage){
 
 function callGemini(prompt){
   return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: {prompt: prompt}}).then(function(res){
-    if(res.error) throw new Error('Gemini request failed — ' + res.error.message);
+    if(res.error){
+      /* The server's own words, when it has any.
+         invoke() turns any non-2xx into a FunctionsHttpError whose message is
+         generic — "Edge Function returned a non-2xx status code" — and leaves
+         the reason in the body. The reason here is usually "drafting is
+         switched off for this account, so nothing was sent anywhere", and
+         reporting the generic line instead sends somebody to look at Google
+         for a refusal that came from a setting on their own account. */
+      var ctx = res.error.context;
+      if(ctx && typeof ctx.json === 'function'){
+        return ctx.json().then(function(body){
+          throw new Error((body && body.error) || res.error.message);
+        }, function(){
+          throw new Error('Gemini request failed — ' + res.error.message);
+        });
+      }
+      throw new Error('Gemini request failed — ' + res.error.message);
+    }
     var text = res.data && res.data.text;
     if(!text) throw new Error(res.data && res.data.error || 'Gemini returned an empty response');
     return text;
@@ -5465,7 +5491,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-agentcredit';
+var BUILD_STAMP = '20261102-aiswitch';
 
 /* Which settings section to scroll to once the modal is up.
 
