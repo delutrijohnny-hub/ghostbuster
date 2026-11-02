@@ -2168,8 +2168,16 @@ console.log('\n--- drafting from the notes of a call that just happened ---');
        The notes drafter forbade the first from the start; the older one that
        sits on the Today cards never did. Both are checked here so they cannot
        drift apart again. */
-    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-    const older = app.slice(app.indexOf('function buildAIPrompt'), app.indexOf('function callGemini'));
+    /* The card drafter moved to logic.js, so this can read the PROMPT IT
+       PRODUCES instead of its source. That is the point of the move: the
+       rules are checked as the model will receive them, not as they are
+       spelled. */
+    const st = GB.buildDefaultState();
+    st.senderName = 'Bob';
+    const cc = GB.sanitizeClient({id: 'cc', name: 'Dana Reed', phone: '2135550100',
+      timezone: 'America/New_York', notes: 'posts monthly'});
+    st.clients[cc.id] = cc;
+    const older = GB.aiMessagePrompt(st, cc, 'welcome');
 
     assert.ok(/do not speculate/i.test(older), 'the card drafter must forbid speculation');
     assert.ok(/I am assuming/i.test(older), 'and name the phrasing that went out');
@@ -3793,8 +3801,15 @@ test('a text never falls back to signing someone else\'s real name', () => {
 test('the AI prompt makes no claim about what the business does', () => {
   // It used to assert "a real estate YouTube coach" for every account, so a
   // plumber asking for a follow-up got one pitching video strategy.
-  const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
-  const fn = app.slice(app.indexOf('function buildAIPrompt'), app.indexOf('function callGemini'));
+  /* Still read as SOURCE, deliberately. The example messages legitimately
+     carry the business's own words -- that is what they are for -- so the
+     claim being checked is that the CODE asserts no industry, which is a
+     statement about the source and not about one account's output. It just
+     lives in logic.js now. */
+  const lg = fs.readFileSync(path.join(__dirname, 'hosted', 'logic.js'), 'utf8');
+  const fn = lg.slice(lg.indexOf('function aiMessagePrompt'),
+                      lg.indexOf('function conversationSummaryPrompt'));
+  assert.ok(fn.length > 500, 'the slice did not find the function');
   const code = codeOnly(fn);
   assert.ok(!/real estate/i.test(code), 'the prompt still asserts an industry');
   assert.ok(!/YouTube/i.test(code), 'the prompt still asserts a service');

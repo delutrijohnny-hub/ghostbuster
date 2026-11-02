@@ -4866,67 +4866,6 @@ function populatePrintSheet(state){
    string, so the function can decide WHETHER anything goes and not WHAT.
    ============================================================ */
 
-function buildAIPrompt(client, stage){
-  var sender = STATE.senderName || 'the sender';
-  /* voiceExamples, not eligibleVariants.
-
-     eligibleVariants gives a person's own wording exactly the same billing as
-     the starter templates, so somebody who had written their own copy still
-     got drafts in the stock voice -- outvoted in their own account. This puts
-     their writing first and says, below, that it is theirs. */
-  var voice = voiceExamples(STATE, stage, client, sender);
-  var samples = voice.examples.map(function(e){ return e.text; });
-  var callDate = safeDate(client.callDateTime);
-  var tz = client.timezone || 'America/New_York';
-  var lines = [
-    /* No claim about what business this is.
-
-       This used to say "a real estate YouTube coach" — true of exactly one
-       account. Every other business's AI drafts were written as if they
-       coached realtors on YouTube, so a plumber asking for a follow-up text
-       got one pitching video strategy. Same mistake as the calendar filter:
-       the first customer's details hard-coded as everyone's.
-
-       The example messages already carry the business, the voice AND the
-       industry, far more accurately than a label could — they are the
-       business's own texts for this exact stage. Describing the industry on
-       top of them added nothing even for the account it was true of. */
-    'You are drafting a single SMS text message for ' + sender + ', to send to a ' +
-      termLower('contact') + ' named ' + firstName(client.name) + '.',
-    voice.own
-      ? 'Match ' + sender + '\'s real texting voice exactly. The examples marked (their own wording) were written by ' + sender + ' personally \u2014 copy their rhythm, their punctuation and their level of formality from those above all else. The unmarked ones are stock templates: use them only to understand what this kind of message is for, never as a model for how ' + sender + ' writes.'
-      : 'Match ' + sender + '\'s real texting voice exactly, shown in these example messages they actually send for this same stage ("' + stage + '"):',
-    voice.examples.map(function(e){
-      return '- "' + e.text + '"' + (voice.own && e.mine ? '  (their own wording)' : '');
-    }).join('\n'),
-    'Casual, warm, short — texting voice, not email or ad copy. No corporate phrasing, no emoji unless the examples use them, no signing off with their name unless the examples do.',
-    'Infer what this business does from the examples. Never invent a service, industry or claim that is not in them.',
-  ];
-  if(callDate) lines.push('Their call is on ' + fmtDate(callDate, tz) + ' at ' + fmtTime(callDate, tz) + '.');
-  if(client.notes) lines.push('Notes ' + sender + ' has on this ' + termLower('contact') + ': ' + client.notes);
-  if(client.recap) lines.push('Recap from a prior call with them: ' + client.recap);
-
-  /* Three rules the drafts kept breaking, each taken from a real one.
-
-     A text that went out read: "I heard you mention you volunteer. I am
-     assuming this is with an organization within your town you work with id
-     love to hear more and answer your question based on that."
-
-     Three faults in one message. It SPECULATED — "I am assuming this is with
-     an organization within your town" is invented from a one-line note, and a
-     guess stated as fact is read by the customer as a claim. It ran two
-     sentences together with no full stop and wrote "id" for "I'd". And it was
-     sixty words, which is an email arriving on a lock screen.
-
-     The notes-based drafting added the first of these when it was written;
-     this one never had it. */
-  lines.push('Use only what the notes actually say. Do not speculate about them, do not guess at what they meant, and never write a sentence beginning "I am assuming" or "it sounds like" — a guess stated as fact reads to them as a claim. If the notes are thin, write less.');
-  lines.push('Complete sentences with full stops and apostrophes. Not "id" or "ill" or "wont".');
-  lines.push('Under 45 words. It is read on a lock screen.');
-  lines.push('Write ONE replacement text message personalized using those notes/recap where it naturally fits. Output ONLY the message text itself — no quotes, no preamble, no explanation.');
-  return lines.join('\n\n');
-}
-
 function callGemini(prompt){
   return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: {prompt: prompt}}).then(function(res){
     if(res.error){
@@ -4959,7 +4898,7 @@ function generateAIMessage(cid, stage, btn){
   var originalLabel = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Generating…';
-  callGemini(buildAIPrompt(client, stage)).then(function(text){
+  callGemini(aiMessagePrompt(STATE, client, stage)).then(function(text){
     editedTextCache[cid + '|' + stage] = text;
     /* Both surfaces, because this is now reachable from either. Rendering
        only the morning list left the draft invisible to somebody who asked
@@ -5491,7 +5430,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-aiswitch';
+var BUILD_STAMP = '20261102-promptmove';
 
 /* Which settings section to scroll to once the modal is up.
 
