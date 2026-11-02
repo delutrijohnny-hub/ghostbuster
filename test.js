@@ -9432,6 +9432,82 @@ console.log('\n--- the briefing for one call, fifteen minutes out ---');
     assert.doesNotThrow(() => GB.callBriefing(GB.buildDefaultState(), {id: 'x'}, NOW));
   });
 
+  /* The briefing squeezed into a notification. This Mac is the only thing in
+     the product that reaches Johnny with the app shut, and a notification is
+     a title and two short lines that vanish -- so what gets picked matters
+     more here than anywhere else. */
+  const remind = (over) => GB.callReminder(brief(over));
+
+  test('a question they asked outranks everything else in the notification', () => {
+    const r = remind({
+      messageLog: [sent(20, 'See you at 9am.')],
+      replies: [got(30, 'sounds good'), got(2, 'can we move to 9:30?')]
+    });
+    assert.ok(/^They asked: /.test(r.body.split('\n')[0]), r.body);
+    assert.ok(/9:30/.test(r.body), r.body);
+  });
+
+  test('with nothing unanswered it says when they last spoke', () => {
+    const r = remind({messageLog: [sent(1, 'ok')], replies: [got(48, 'thanks!')]});
+    assert.ok(/^Last reply 2d ago: /.test(r.body.split('\n')[0]), r.body);
+  });
+
+  test('a contact who never replied is named as such, with the count', () => {
+    const r = remind({messageLog: [sent(20, 'a'), sent(10, 'b')], replies: []});
+    assert.ok(/^Never replied · 2 messages sent/.test(r.body), r.body);
+  });
+
+  test('the flags that change whether to pick up the phone are carried', () => {
+    const r = remind({smsStatus: 'opted_out', status: 'Booked', rescheduleCount: 2});
+    assert.ok(/opted out — do not text/.test(r.body), r.body);
+    assert.ok(/not confirmed/.test(r.body), r.body);
+    assert.ok(/moved 2×/.test(r.body), r.body);
+  });
+
+  test('a long quote is cut at a word, with an ellipsis that admits it', () => {
+    /* Truncated here rather than by the notification centre, so the cut
+       lands between words instead of mid-syllable. */
+    const long = 'hey so I was thinking about what you said regarding the whole pricing thing and';
+    const r = remind({replies: [got(1, long + '?')]});
+    const quoted = r.body.match(/“(.*)”/)[1];
+    assert.ok(quoted.length <= GB.REMINDER_QUOTE_CHARS + 1, 'quote not truncated: ' + quoted);
+    assert.ok(/…$/.test(quoted), 'no ellipsis: ' + quoted);
+    const stem = quoted.replace(/…$/, '');
+    assert.ok(long.indexOf(stem) === 0, 'the quote was altered, not truncated: ' + stem);
+    /* The property, not a restatement of the code: whatever follows the cut
+       in the original must be a space, or the cut landed mid-word. Asserting
+       only "no trailing space" passed happily on a blunt 60-character slice,
+       which is exactly what this is supposed to rule out. */
+    const next = long.charAt(stem.length);
+    assert.ok(next === '' || next === ' ',
+      'the quote cut a word in half: …' + stem.slice(-14) + '|' + next);
+  });
+
+  test('a short quote is left exactly as they wrote it', () => {
+    const r = remind({replies: [got(1, 'what does it cost?')]});
+    assert.ok(/“what does it cost\?”/.test(r.body), r.body);
+  });
+
+  test('the countdown reads naturally at one minute', () => {
+    assert.ok(/in a minute$/.test(remind({callDateTime: inMin(1)}).title));
+    assert.ok(/in 14 min$/.test(remind({callDateTime: inMin(14)}).title));
+  });
+
+  test('it carries the pair the agent dedupes on', () => {
+    /* The Mac remembers what it has shown by (clientId, callAt). Without
+       both, a moved call is either announced twice or never again. */
+    const r = remind({});
+    assert.strictEqual(r.clientId, 'c1');
+    assert.ok(r.callAt, 'no call time for the agent to key on');
+    assert.strictEqual(typeof r.minutesUntil, 'number');
+  });
+
+  test('nothing is produced without a call to remind about', () => {
+    assert.strictEqual(GB.callReminder(null), null);
+    assert.strictEqual(GB.callReminder(brief({callDateTime: null})), null);
+    assert.doesNotThrow(() => GB.callReminder({}));
+  });
+
   test('the brief reaches the panel that owns the countdown', () => {
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     const od = app.slice(app.indexOf('function renderOnDeck('), app.indexOf('function renderCallsBoard('));

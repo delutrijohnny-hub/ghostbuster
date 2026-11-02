@@ -210,6 +210,76 @@ Deno.serve(async (req) => {
   }
 
   /* ------------------------------------------------------------------
+     BRIEFINGS: the calls close enough to be worth interrupting somebody for.
+
+     This Mac is the only thing in the product that can reach Johnny when the
+     app is shut: there is no Notification API in use, no service worker and no
+     push. So the agent asks for these on its ordinary cycle and raises a local
+     macOS notification.
+
+     THIS USER'S OWN CALLS, not the org's. The agent runs on one person's
+     machine and a teammate's appointments are not theirs to be interrupted by
+     -- the same reason ghost-assistant filters by user_id on top of RLS.
+
+     Composed by logic.js (callBriefing then callReminder) so the wording is
+     testable and the agent stays dumb: it displays a title and a body and
+     decides nothing. Returning the whole briefing would put a contact's
+     entire history on the wire for a notification that shows two lines.
+
+     Idempotency is the AGENT'S, by (clientId, callAt) in its state file.
+     Deliberately not a delivered_at column here: this is one machine, the
+     window is bounded to the next few minutes, and a row recording that a
+     notification was shown on somebody's laptop is a claim the server cannot
+     actually check.
+     ------------------------------------------------------------------ */
+  if (body?.action === 'briefings') {
+    const now = new Date();
+    const until = new Date(now.getTime() + GB.BRIEFING_LEAD_MINUTES * 60000);
+    const rows = await db(
+      `/clients?user_id=eq.${encodeURIComponent(tok.user_id)}&ignored=is.false` +
+      `&call_date_time=gte.${encodeURIComponent(now.toISOString())}` +
+      `&call_date_time=lte.${encodeURIComponent(until.toISOString())}` +
+      `&select=id,name,phone,email,status,call_date_time,booked_date,timezone,` +
+      `timezone_confirmed,organizer_email,event_title,notes,recap,ignored,` +
+      `close_outcome,sms_status,google_event_id,automation_paused_until,` +
+      `automation_paused_note,snoozed_until,skipped_stages,reschedules,` +
+      `reschedule_count,stalled_since,manually_added,conversation_summary,` +
+      `conversation_summary_at,conversation_summary_through,` +
+      `message_log(id,channel,stage,variant_key,text,sent_at,responded,` +
+      `responded_at,reviewed,delivery_status,provider_id)&order=call_date_time`);
+    const clients = await rows.json().catch(() => []);
+    if (!Array.isArray(clients) || !clients.length) {
+      return json({ ok: true, reminders: [] });
+    }
+
+    const ids = clients.map((c: any) => '"' + String(c.id).replace(/["\\]/g, '') + '"').join(',');
+    const [inboundRes, settingsRes] = await Promise.all([
+      db(`/sms_events?client_id=in.(${encodeURIComponent(ids)})&kind=eq.sms.inbound` +
+         `&select=id,client_id,body,created_at,provider_id&order=created_at.desc&limit=300`),
+      db(`/app_settings?user_id=eq.${encodeURIComponent(tok.user_id)}` +
+         `&select=sequence,pipeline,terminology&limit=1`),
+    ]);
+    const inbound = await inboundRes.json().catch(() => []);
+    const acct = ((await settingsRes.json().catch(() => [])) || [])[0] || {};
+
+    /* Always set, with null resetting each to its default: a warm instance
+       must not brief one account against another's cadence. */
+    GB.setPipeline(Array.isArray(acct.pipeline) && acct.pipeline.length ? acct.pipeline : null);
+    GB.setTerminology(acct.terminology || null);
+    GB.setSequence(Array.isArray(acct.sequence) && acct.sequence.length ? acct.sequence : null);
+
+    const state = GB.assistantStateFromRows(clients, inbound || [], 'UTC', []);
+    const reminders: unknown[] = [];
+    for (const row of clients) {
+      const c = state.clients[row.id];
+      if (!c) continue;
+      const rem = GB.callReminder(GB.callBriefing(state, c, now));
+      if (rem) reminders.push(rem);
+    }
+    return json({ ok: true, reminders });
+  }
+
+  /* ------------------------------------------------------------------
      OUTBOX: texts the person typed in Ghost Recall, for this Mac to send.
 
      A row is ours to send when delivery_status is 'queued' AND provider_id
@@ -383,7 +453,7 @@ Deno.serve(async (req) => {
   }
 
   if (body?.action !== 'push' || !Array.isArray(body?.messages)) {
-    return json({ error: "Expected {action:'numbers'|'outbox'|'sent'} or {action:'push', messages:[...]}" }, 400);
+    return json({ error: "Expected {action:'numbers'|'outbox'|'sent'|'briefings'} or {action:'push', messages:[...]}" }, 400);
   }
 
   /* One lookup for the whole batch rather than per message. The agent sends a

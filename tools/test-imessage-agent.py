@@ -22,6 +22,7 @@ two-byte little-endian length.
 import importlib.util
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location(
@@ -157,6 +158,91 @@ check('_typedstream_len two byte',
       agent._typedstream_len(b'\x81\x36\x01', 0), (310, 3))
 check('_typedstream_len four byte',
       agent._typedstream_len(b'\x82\x10\x27\x00\x00', 0), (10000, 5))
+
+
+
+# --- notifications for imminent calls ----------------------------------------
+#
+# This Mac is the only thing that reaches Johnny with the app shut, so these
+# cover the two things that make a reminder trustworthy: it appears once, and
+# a contact's own words cannot escape into AppleScript.
+
+check('the notification script takes its text from argv, never interpolated',
+      ('item 1 of argv' in agent.NOTIFY_SCRIPT
+       and 'item 2 of argv' in agent.NOTIFY_SCRIPT), True)
+check('nothing is substituted into the notification script',
+      ('%s' in agent.NOTIFY_SCRIPT or '{' in agent.NOTIFY_SCRIPT), False)
+
+_src = open(os.path.join(HERE, 'imessage-agent.py')).read()
+_notify = _src[_src.index('def notify(title, body):'):_src.index('BRIEFED_KEEP_HOURS')]
+check('the notification text is passed as arguments to osascript',
+      "['osascript', path, title, body]" in _notify, True)
+check('notify never raises out of a sync',
+      ('except subprocess.TimeoutExpired:' in _notify
+       and 'return False' in _notify), True)
+
+
+class _FakeState(dict):
+    pass
+
+
+def _with_briefings(reminders, notify_ok=True, start=None):
+    """Run check_briefings against stubbed server, notifier and state file."""
+    calls = []
+    saved = {'state': dict(start or {})}
+    real = (agent.post, agent.notify, agent.load_state, agent.save_state)
+    agent.post = lambda token, payload: {'ok': True, 'reminders': reminders}
+    agent.notify = lambda title, body: (calls.append((title, body)), notify_ok)[1]
+    agent.load_state = lambda: dict(saved['state'])
+    agent.save_state = lambda st: saved.update(state=dict(st))
+    try:
+        fired = agent.check_briefings('tok')
+    finally:
+        agent.post, agent.notify, agent.load_state, agent.save_state = real
+    return fired, calls, saved['state']
+
+
+_soon = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 600))
+_later = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 900))
+_old = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 40 * 3600))
+
+_rem = [{'clientId': 'c1', 'callAt': _soon, 'title': 'Dana in 10 min',
+         'body': 'They asked: "can we move it?"'}]
+
+_f, _c, _st = _with_briefings(_rem)
+check('a call close enough raises one notification', (_f, len(_c)), (1, 1))
+check('the notification carries the composed title and body',
+      _c[0], ('Dana in 10 min', 'They asked: "can we move it?"'))
+check('a shown call is remembered by contact AND call time',
+      list(_st['briefedCalls'].keys()), ['c1|' + _soon])
+
+_f2, _c2, _ = _with_briefings(_rem, start=_st)
+check('the same call is never announced twice', (_f2, len(_c2)), (0, 0))
+
+# A call that gets moved is a different call and deserves a second warning.
+_moved = [{'clientId': 'c1', 'callAt': _later, 'title': 'Dana in 15 min', 'body': 'x'}]
+_f3, _c3, _ = _with_briefings(_moved, start=_st)
+check('a rescheduled call is announced again', (_f3, len(_c3)), (1, 1))
+
+# A notification that did not appear must not be recorded, or it is lost.
+_f4, _c4, _st4 = _with_briefings(_rem, notify_ok=False)
+check('a notification that failed is not recorded as shown',
+      (_f4, _st4.get('briefedCalls')), (0, {}))
+
+# Pruning, by ISO string comparison rather than date parsing.
+_f5, _c5, _st5 = _with_briefings([], start={'briefedCalls': {
+    'old|' + _old: _old, 'new|' + _soon: _soon, 'junk|x': 'not-a-date'}})
+check('calls well past are forgotten',
+      sorted(_st5['briefedCalls'].keys()), ['new|' + _soon])
+
+# The agent's own sync position must survive a briefing save.
+_f6, _c6, _st6 = _with_briefings(_rem, start={'lastRowId': 58197})
+check('checking briefings does not clobber the sync position',
+      _st6.get('lastRowId'), 58197)
+
+check('a reminder with no contact or no time is ignored',
+      _with_briefings([{'clientId': '', 'callAt': _soon},
+                       {'clientId': 'c2', 'callAt': ''}])[0], 0)
 
 
 print('%d passed' % len(PASS))

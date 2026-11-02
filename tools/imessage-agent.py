@@ -549,6 +549,107 @@ def max_message_rowid():
         con.close()
 
 
+# A notification is the ONLY way anything in this product reaches Johnny with
+# the app shut: there is no Notification API in use, no service worker and no
+# push. This Mac is it.
+#
+# THE TEXT IS NEVER INTERPOLATED INTO APPLESCRIPT, for the same reason a send
+# is not: it carries a contact's own words, and a quote or a backslash in one
+# of their messages would either break the script or run as part of it. It
+# goes in through argv, exactly like the send path.
+NOTIFY_SCRIPT = '''
+on run argv
+    display notification (item 2 of argv) with title (item 1 of argv) sound name "Ping"
+end run
+'''
+
+
+def notify(title, body):
+    """Raise one macOS notification. True if osascript accepted it.
+
+    Never raises. A reminder that fails to appear is not worth failing a
+    sync over -- the notification is lost, the import is not -- so this
+    reports False and the caller decides what that means.
+    """
+    fd, path = tempfile.mkstemp(prefix='gr-notify-', suffix='.applescript')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(NOTIFY_SCRIPT)
+        try:
+            r = subprocess.run(['osascript', path, title, body],
+                               capture_output=True, text=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            return False
+        except OSError:
+            return False
+        return r.returncode == 0
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+# How long a shown reminder is remembered: long enough that one call cannot
+# be announced twice, short enough that the state file does not grow forever.
+BRIEFED_KEEP_HOURS = 6
+
+
+def check_briefings(token):
+    """Notify about calls close enough to matter. Returns how many fired.
+
+    Idempotent by (clientId, callAt), remembered in the agent's own state
+    file. The server deliberately keeps no record of this: it is one
+    machine, and a row claiming a notification appeared on somebody's
+    laptop is something the server cannot check.
+
+    The PAIR matters rather than the contact alone -- a call that gets moved
+    is a different call and deserves a second warning.
+
+    State is loaded fresh here rather than handed in. sync_once loads and
+    saves the same file, and holding a stale copy across both would drop
+    whichever change was written first.
+    """
+    res = post(token, {'action': 'briefings'})
+    reminders = (res or {}).get('reminders') or []
+
+    state = load_state()
+    shown = state.get('briefedCalls') or {}
+    fired = 0
+    for r in reminders:
+        cid = str(r.get('clientId') or '')
+        at = str(r.get('callAt') or '')
+        if not cid or not at:
+            continue
+        key = cid + '|' + at
+        if key in shown:
+            continue
+        if notify(r.get('title') or 'Call soon', r.get('body') or ''):
+            shown[key] = at
+            fired += 1
+        # A notification that did NOT appear is not recorded, so the next
+        # cycle tries again instead of swallowing the reminder.
+
+    # Forget calls well past, or this grows forever.
+    #
+    # Compared as STRINGS. Both sides are ISO-8601 in UTC and the first 19
+    # characters are YYYY-MM-DDTHH:MM:SS, which sorts chronologically -- so
+    # this needs no date parsing and no third way of handling timezones in
+    # this file. PostgREST writes '+00:00' where strftime writes 'Z', and
+    # truncating to 19 makes the two comparable. Anything that is not a
+    # timestamp is dropped rather than kept forever.
+    cutoff = time.strftime('%Y-%m-%dT%H:%M:%S',
+                           time.gmtime(time.time() - BRIEFED_KEEP_HOURS * 3600))
+    kept = {}
+    for key, at in shown.items():
+        stamp = str(at or '')[:19]
+        if len(stamp) == 19 and stamp >= cutoff:
+            kept[key] = at
+    state['briefedCalls'] = kept
+    save_state(state)
+    return fired
+
+
 def applescript_send(handle, body):
     """(ok, detail). ok means Messages ACCEPTED it, not that it arrived."""
     fd, path = tempfile.mkstemp(prefix='gr-send-', suffix='.applescript')
@@ -930,6 +1031,18 @@ def main():
                     say('delivery check failed: %s' % e)
                 except Exception as e:              # keep the watcher alive
                     say('delivery check failed: %r' % e)
+                # On the sync clock rather than the outbox one: a fifteen
+                # minute window does not need checking every few seconds, and
+                # each check costs a request.
+                try:
+                    woke = check_briefings(token)
+                    if woke:
+                        say('Reminded about %d upcoming call%s.'
+                            % (woke, '' if woke == 1 else 's'))
+                except SystemExit as e:
+                    say('briefing check failed: %s' % e)
+                except Exception as e:              # keep the watcher alive
+                    say('briefing check failed: %r' % e)
                 next_sync = time.time() + max(30, args.interval)
 
             try:

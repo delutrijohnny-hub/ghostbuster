@@ -5390,6 +5390,71 @@ function callBriefing(state, client, now){
   };
 }
 
+/* The briefing squeezed into a notification.
+ *
+ * A macOS notification is a title and two short lines that vanish, so this is
+ * not the brief -- it is the one thing worth interrupting somebody for, plus
+ * the flags that change whether they should pick up the phone at all.
+ *
+ * Priority is deliberate and comes from what the briefing already found:
+ * a question they asked that nothing has answered beats everything, because
+ * walking into a call not knowing they asked to move it is the failure this
+ * exists to prevent. After that, when they last said anything -- a reply 87
+ * days ago is a different call from one yesterday.
+ *
+ * Quotes are TRUNCATED here rather than by the notification centre, so the
+ * cut is at a word and the ellipsis is honest about there being more.
+ */
+var REMINDER_QUOTE_CHARS = 60;
+
+function reminderQuote(text){
+  var t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  if(t.length <= REMINDER_QUOTE_CHARS) return t;
+  var cut = t.slice(0, REMINDER_QUOTE_CHARS);
+  var space = cut.lastIndexOf(' ');
+  return (space > 20 ? cut.slice(0, space) : cut) + '…';
+}
+
+function callReminder(brief){
+  if(!brief || !brief.call) return null;
+  var mins = brief.call.minutesUntil;
+  if(mins === null || mins === undefined) return null;
+
+  /* Their first name and the countdown. The name alone is not enough on a
+     lock screen -- the whole point is the minutes. */
+  var title = brief.firstName + ' in ' + (mins <= 1 ? 'a minute' : mins + ' min');
+
+  var lines = [];
+  if(brief.history.openQuestions.length){
+    var q = brief.history.openQuestions[brief.history.openQuestions.length - 1];
+    lines.push('They asked: “' + reminderQuote(q.text) + '”');
+  } else if(brief.history.lastReply){
+    lines.push('Last reply ' +
+      (brief.history.lastReply.daysAgo <= 0 ? 'today'
+        : brief.history.lastReply.daysAgo + 'd ago') +
+      ': “' + reminderQuote(brief.history.lastReply.text) + '”');
+  } else {
+    lines.push('Never replied · ' + brief.history.sent +
+      (brief.history.sent === 1 ? ' message sent' : ' messages sent'));
+  }
+
+  /* The flags that change the call, not every limit the brief carries. A
+     notification that lists caveats is one nobody reads twice. */
+  var flags = [];
+  if(brief.cadence.optedOut) flags.push('opted out — do not text');
+  if(!brief.call.confirmed) flags.push('not confirmed');
+  if(brief.rescheduled) flags.push('moved ' + brief.rescheduled + '×');
+  if(flags.length) lines.push(flags.join(' · '));
+
+  return {
+    clientId: brief.clientId,
+    callAt: brief.call.at,
+    minutesUntil: mins,
+    title: title,
+    body: lines.join('\n')
+  };
+}
+
 function priorityCounts(rows, state, now){
   var all = rows || [];
   var upcoming = 0;
@@ -10275,6 +10340,9 @@ var __LOGIC_EXPORTS__ = {
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
   callBriefing: callBriefing,
+  callReminder: callReminder,
+  reminderQuote: reminderQuote,
+  REMINDER_QUOTE_CHARS: REMINDER_QUOTE_CHARS,
   BRIEFING_LEAD_MINUTES: BRIEFING_LEAD_MINUTES,
   BRIEFING_RECENT_TURNS: BRIEFING_RECENT_TURNS,
   nextInQueue: nextInQueue,
