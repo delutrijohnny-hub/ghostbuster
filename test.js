@@ -9321,15 +9321,30 @@ console.log('\n--- client text does not reach Google unless somebody said so ---
       'a failed settings fetch is not turned into a refusal');
   });
 
-  test('the switch survives a save, so it cannot be silently dropped', () => {
-    /* buildSyncSnapshot writes app_settings as a whole row. A column it does
-       not carry is a column the next save sets back to its default — which
-       for this one would turn drafting off, or on, without anybody asking. */
+  test('the browser reads the permission and never writes it', () => {
+    /* This test asserted the opposite, on backwards reasoning: that a column
+       buildSyncSnapshot does not carry is a column the next save resets. It
+       is not. An upsert's ON CONFLICT DO UPDATE sets only the columns in the
+       body, so an omitted one keeps its stored value — the NOT NULL trap that
+       broke every contact edit applies to the proposed INSERT row, and this
+       column has a default.
+
+       And carrying it was actively harmful. There is no UI here that changes
+       this permission, so writing it could only ever clobber it: a tab opened
+       before somebody turned drafting on holds false in memory, and the next
+       unrelated settings change would write that false back and switch it off
+       with nobody asking. Which is exactly what would have happened the first
+       time the account that enabled it changed its sender name. */
     const src = read('hosted', 'data.js');
     assert.ok(/aiDraftingEnabled: !!\(settingsRes\.data && settingsRes\.data\.ai_drafting_enabled\)/.test(src),
       'loadState does not read ai_drafting_enabled');
-    assert.ok(/ai_drafting_enabled: !!state\.aiDraftingEnabled/.test(src),
-      'buildSyncSnapshot does not carry ai_drafting_enabled, so a save would reset it');
+    /* codeOnly, because the comment explaining the deliberate absence names
+       the column -- and a search over prose found it and failed. */
+    const snap = codeOnly(src.slice(src.indexOf('snap.settings = {'),
+                                    src.indexOf('return snap;')));
+    assert.ok(/email_enabled/.test(snap), 'the slice did not find the snapshot');
+    assert.ok(!/ai_drafting_enabled/.test(snap),
+      'buildSyncSnapshot writes the permission, so a stale tab can switch it off');
   });
 
   test('a refusal reaches the person in the server’s own words', () => {

@@ -1287,7 +1287,20 @@ function buildSyncSnapshot(state, uid){
     terminology: state.terminology || null,
     sequence: state.sequence || null,
     calendar_filter: state.calendarFilter || null,
-    ai_drafting_enabled: !!state.aiDraftingEnabled,
+    /* ai_drafting_enabled is DELIBERATELY ABSENT.
+
+       It is a permission -- whether this account may send client text to
+       Google -- and there is no UI in this browser that changes it, so the
+       only thing writing it from here could ever do is clobber it. A tab
+       opened before somebody turned drafting on holds false in memory, and
+       the next unrelated settings change would have written that false back
+       and switched it off with nobody asking.
+
+       Omitting it is safe, which is the opposite of the rule for clients.
+       An upsert's ON CONFLICT DO UPDATE sets only the columns in the body, so
+       a column left out keeps its stored value; the NOT NULL trap that broke
+       every contact edit applies to the proposed INSERT row, and this column
+       has a default. */
     email_enabled: !!state.emailEnabled,
     auto_send_email: !!state.autoSendEmail,
     email_from_name: state.emailFromName || null,
