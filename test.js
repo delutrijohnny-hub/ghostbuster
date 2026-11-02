@@ -2138,30 +2138,55 @@ test('the examples came from the business, not from invention', () => {
     'the welcome should carry their own positioning line');
 });
 
-/* Strip comments so a guard can look at code that actually runs.
+/* Strip comments so a guard looks at the code that actually runs.
 
-   A line-based filter is not good enough: a block comment's continuation
-   lines start with ordinary words, so an explanation OF a hard-coded value
-   reads as the value itself. Both guards below first failed on their own
-   comments describing the bug they prevent. */
+   Two separate tests were fooled before this existed, and both lessons are
+   worth keeping. A guard for "this value is not hard-coded" passed on its own
+   comment EXPLAINING the hard-coded value, because a block comment's
+   continuation lines start with ordinary words and read as code. And a guard
+   for "the card still explains X" passed with the user-visible string
+   replaced by 'edited', because the slice it searched also held the comment
+   above that code explaining X. The comment is not the product.
+
+   `[^:'"\\]` before the line comment matters: without it a URL inside a
+   string -- https://... -- is read as a comment and everything after it on
+   that line disappears.
+
+   There were TWO of these, a thousand lines apart, with different
+   implementations. Declarations hoist and this file is not strict, so the
+   later one silently won for every caller, including those defined far above
+   it; editing the earlier had no effect at all. This is that one, at the
+   earlier position so it is defined before it is used. */
 function codeOnly(src){
-  let out = '', i = 0, n = src.length;
-  while(i < n){
-    const two = src.slice(i, i + 2);
-    if(two === '/*'){
-      const end = src.indexOf('*/', i + 2);
-      i = end === -1 ? n : end + 2;
-      out += ' ';
-    } else if(two === '//'){
-      const end = src.indexOf('\n', i);
-      i = end === -1 ? n : end;
-      out += ' ';
-    } else {
-      out += src[i]; i++;
-    }
-  }
-  return out;
+  return String(src)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
 }
+
+// Same rule as atHourInZone: a helper several guards lean on has to be right
+// before any of them mean anything. codeOnly had no test of its own while
+// being the thing that made two other tests trustworthy.
+(() => {
+  const block = 'const x = 1; /* the value 99 is wrong\n   99 again */ const y = 2;';
+  assert.ok(!/99/.test(codeOnly(block)),
+    'a block comment\u2019s continuation lines still read as code');
+  assert.ok(/const x = 1;/.test(codeOnly(block)) && /const y = 2;/.test(codeOnly(block)),
+    'codeOnly ate the code around a block comment');
+
+  const line = "const u = 'x'; // explaining 77\nconst v = 3;";
+  assert.ok(!/77/.test(codeOnly(line)), 'a line comment still reads as code');
+  assert.ok(/const v = 3;/.test(codeOnly(line)), 'codeOnly ate the next line');
+
+  // The protection the regex exists for.
+  const url = "const link = 'https://meet.google.com/abc-defg-hij';";
+  assert.ok(/meet\.google\.com\/abc-defg-hij/.test(codeOnly(url)),
+    'a URL in a string is being read as a comment, so everything after // on '
+      + 'that line disappears from every guard that uses this');
+
+  assert.strictEqual(codeOnly(''), '');
+  assert.doesNotThrow(() => codeOnly(undefined));
+  console.log('  ok  - codeOnly strips comments without eating code or URLs');
+})();
 
 console.log('\n--- drafting from the notes of a call that just happened ---');
 
@@ -13235,16 +13260,6 @@ test('the migration records why acceptance cannot be one-sided', () => {
     'accept_org_invite no longer limits its writes to the caller’s own rows');
 });
 
-/* Copy assertions have to run against code with the comments taken out.
-
-   A test for "the card still explains X" passed with the user-visible string
-   replaced by 'edited', because the slice it searched also contained the
-   comment above that code explaining X. The comment is not the product. */
-function codeOnly(src){
-  return String(src)
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .split('\n').map(l => l.replace(/(^|[^:'"\\])\/\/.*$/, '$1')).join('\n');
-}
 
 console.log('\n--- rewording a variant without corrupting what it learned ---');
 
