@@ -9432,6 +9432,49 @@ console.log('\n--- the briefing for one call, fifteen minutes out ---');
     assert.doesNotThrow(() => GB.callBriefing(GB.buildDefaultState(), {id: 'x'}, NOW));
   });
 
+  test('the brief reaches the panel that owns the countdown', () => {
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const od = app.slice(app.indexOf('function renderOnDeck('), app.indexOf('function renderCallsBoard('));
+    assert.ok(/renderCallBrief\(c, now\)/.test(od),
+      'On Deck does not render the brief, so callBriefing is composed for nobody');
+  });
+
+  test('the brief is open fifteen minutes out and collapsed before that', () => {
+    /* The brief asks for a reminder fifteen minutes ahead. With no
+       notification channel in this product, the honest version is "it is
+       already open when you look" -- and collapsed rather than hidden the
+       rest of the time, because wanting it an hour early is reasonable. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderCallBrief('), app.indexOf('function renderOnDeck('));
+    assert.ok(/mins <= BRIEFING_LEAD_MINUTES/.test(fn),
+      'the open-by-default window is not the briefing lead time');
+    assert.ok(/openNow \? ' open' : ''/.test(fn), 'the brief never opens itself');
+    assert.ok(/<details/.test(fn), 'the brief is not collapsible');
+  });
+
+  test('the limits are rendered, never dropped on the way to the screen', () => {
+    /* The half that stops somebody trusting a briefing that cannot see their
+       replies. Composing them and then not showing them would be worse than
+       not having them, because the briefing would look complete. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderCallBrief('), app.indexOf('function renderOnDeck('));
+    assert.ok(/b\.limits\.map/.test(fn), 'the brief drops its own limits');
+    assert.ok(/od-blim/.test(fn), 'the limits have nowhere to render');
+  });
+
+  test('every piece of a contact’s own text is escaped on the way in', () => {
+    /* Their words go straight into innerHTML. A quote, a note or a recap
+       containing a tag is somebody else's text, not markup. */
+    const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
+    const fn = app.slice(app.indexOf('function renderCallBrief('), app.indexOf('function renderOnDeck('));
+    ['t.text', 'b.recap.trim()', 'b.summary.text'].forEach((field) => {
+      assert.ok(new RegExp('escapeHtml\\(' + field.replace(/[.()]/g, '\\$&') + '\\)').test(fn),
+        field + ' reaches innerHTML unescaped');
+    });
+    const unescaped = fn.match(/\+ b\.(recap|summary\.text|history\.[a-z]+)\b(?! *\))/g) || [];
+    assert.deepStrictEqual(unescaped, [], 'raw contact text is concatenated into HTML: ' + unescaped);
+  });
+
   test('every claim says where it came from', () => {
     // The whole point: a line with a date can be checked against the thread.
     const b = brief({replies: [got(2, 'what does it cost?')]});

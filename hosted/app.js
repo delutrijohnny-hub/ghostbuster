@@ -3117,6 +3117,82 @@ function renderUnplacedReplies(){
     '</div>';
 }
 
+/* The pre-call brief, in the panel that already owns the countdown.
+ *
+ * callBriefing composes it from records; this only arranges it. Open by
+ * default inside BRIEFING_LEAD_MINUTES -- the brief asks for a reminder
+ * fifteen minutes out, and the honest version of that, with no notification
+ * channel in this product, is "it is already open when you look".
+ *
+ * Collapsed the rest of the time rather than hidden: wanting it an hour
+ * before a call is not an unreasonable thing to want.
+ *
+ * `limits` is rendered, not dropped. It is the half that stops somebody
+ * trusting a briefing that cannot see their replies -- and the first line of
+ * it always says objections and promises are not stored as facts yet.
+ */
+function briefAge(days){
+  if(days === null || days === undefined) return '';
+  if(days <= 0) return 'today';
+  if(days === 1) return 'yesterday';
+  return days + 'd ago';
+}
+
+function renderCallBrief(c, now){
+  var b = callBriefing(STATE, c, now);
+  if(!b) return '';
+  var mins = b.call ? b.call.minutesUntil : null;
+  var openNow = mins !== null && mins <= BRIEFING_LEAD_MINUTES;
+
+  var quote = function(t){
+    return '<div class="od-bq">\u201c' + escapeHtml(t.text) + '\u201d' +
+      '<span class="od-bwhen">' + escapeHtml(briefAge(t.daysAgo)) + '</span></div>';
+  };
+
+  var rows = [];
+
+  /* First, because it is the one thing that changes how the call opens. */
+  if(b.history.openQuestions.length){
+    rows.push('<div class="od-bsec od-bask"><strong>They asked, and nothing has gone back since</strong>' +
+      b.history.openQuestions.map(quote).join('') + '</div>');
+  }
+
+  var hist = [b.history.sent + ' sent', b.history.replies +
+    (b.history.replies === 1 ? ' reply' : ' replies')];
+  if(b.history.lastReply) hist.push('last reply ' + briefAge(b.history.lastReply.daysAgo));
+  else hist.push('never replied');
+  if(b.rescheduled) hist.push('moved ' + b.rescheduled + '\u00d7');
+  rows.push('<div class="od-bsec od-bhist">' + escapeHtml(hist.join(' \u00b7 ')) + '</div>');
+
+  if(b.history.theirWords.length){
+    rows.push('<div class="od-bsec"><strong>Their words</strong>' +
+      b.history.theirWords.map(quote).join('') + '</div>');
+  }
+  if(b.recap && b.recap.trim()){
+    rows.push('<div class="od-bsec"><strong>Recap</strong><div>' +
+      escapeHtml(b.recap.trim()) + '</div></div>');
+  }
+  if(b.summary.state !== 'none' && b.summary.text){
+    rows.push('<div class="od-bsec"><strong>Summary' +
+      (b.summary.state === 'stale' ? ' (out of date)' : '') + '</strong><div>' +
+      escapeHtml(b.summary.text) + '</div></div>');
+  }
+  if(!b.cadence.running || b.cadence.optedOut){
+    rows.push('<div class="od-bsec od-bask">' +
+      (b.cadence.optedOut ? '<strong>They replied STOP \u2014 do not text them.</strong>'
+                          : escapeHtml(b.cadence.automation)) + '</div>');
+  }
+  rows.push('<ul class="od-blim">' + b.limits.map(function(l){
+    return '<li>' + escapeHtml(l) + '</li>';
+  }).join('') + '</ul>');
+
+  return '<details class="od-brief"' + (openNow ? ' open' : '') + '>' +
+    '<summary>' + (openNow ? 'Before you call' : 'Brief me') +
+    (b.history.openQuestions.length
+      ? ' <span class="od-bflag">' + b.history.openQuestions.length + ' unanswered</span>' : '') +
+    '</summary>' + rows.join('') + '</details>';
+}
+
 function renderOnDeck(){
   var box = el('on-deck'); if(!box) return;
   var now = new Date();
@@ -3170,6 +3246,7 @@ function renderOnDeck(){
       (resched ? ('<span class="od-chip">↻ moved ' + resched + '×</span>') : '') +
     '</div>' +
     (c.notes && c.notes.trim() ? ('<div class="od-note"><strong>Notes:</strong> ' + escapeHtml(c.notes.trim()) + '</div>') : '') +
+    renderCallBrief(c, now) +
     (od.late ? ('<div class="od-note">' + Math.abs(od.mins) + ' minutes past the start. One "I\'m here whenever you\'re ready" text saves a lot of these before they become a no-show.</div>') : '') +
     '<div class="od-actions">' +
       (tel ? ('<a class="btn btn-sm" href="' + escapeHtml(tel) + '">📞 Call</a>') : '') +
@@ -5453,7 +5530,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-callbriefing';
+var BUILD_STAMP = '20261102-briefui';
 
 /* Which settings section to scroll to once the modal is up.
 
