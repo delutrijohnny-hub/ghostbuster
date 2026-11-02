@@ -276,6 +276,25 @@ green-bubble SMS the Mac never saw; some are drafts that opened and were never s
 building on 572 sends that may not have happened.** This, not `attributedBody`, is
 the data-quality item to settle before Stage 3.
 
+**The chooser is not learning at all, and the cause is not arithmetic.**
+`reviewMessage` is the only thing that increments `variant_stats`, and there
+are **zero** `message.replied` / `message.no_reply` events in this account's
+685 events, which begin 2026-09-30. `imessage-sync` attributes a reply by
+PATCHing `message_log` directly, so the browser's review path never runs — 139
+replies were attributed that way. `pickVariant` therefore explores forever and
+never exploits.
+
+The stored counters look alarming (450 sends / 94 responses, a 20.9% reply
+rate against 56.7% measured off the log) but are **vestigial**:
+`reconcileVariantStats` retires them in memory on every load, because
+`text_hash` is NULL on all 16 rows, and the retirement is never written back —
+`SYNCED` is snapshotted at data.js:1100, after the reconcile at data.js:862,
+so the diff is empty. Verified by simulation with this account's own variant
+keys: `{retired: 3}`, and 400 picks come out 146/120/134. Nothing is lost
+either; the first save that changes a counter persists `prior_sends`
+correctly. So no migration is needed here — crediting the variant when the
+agent attributes a reply is the change that would make learning work.
+
 Also still open:
 - §4 of the earlier plan: the taper (months 4–5) and **Dormant at month 6** are
   unbuilt. Monthly recovery currently runs forever.
