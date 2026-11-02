@@ -4866,8 +4866,12 @@ function populatePrintSheet(state){
    string, so the function can decide WHETHER anything goes and not WHAT.
    ============================================================ */
 
-function callGemini(prompt){
-  return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: {prompt: prompt}}).then(function(res){
+/* Names what it wants; does not compose it.
+   The prompt is built in gemini-draft now, from rows read under this user's
+   own token, so the server decides which of a contact's fields leave rather
+   than forwarding whatever this page chose to put in a string. */
+function callGemini(payload){
+  return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: payload}).then(function(res){
     if(res.error){
       /* The server's own words, when it has any.
          invoke() turns any non-2xx into a FunctionsHttpError whose message is
@@ -4898,7 +4902,7 @@ function generateAIMessage(cid, stage, btn){
   var originalLabel = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Generating…';
-  callGemini(aiMessagePrompt(STATE, client, stage)).then(function(text){
+  callGemini({mode: 'message', clientId: client.id, stage: stage}).then(function(text){
     editedTextCache[cid + '|' + stage] = text;
     /* Both surfaces, because this is now reachable from either. Rendering
        only the morning list left the draft invisible to somebody who asked
@@ -5430,7 +5434,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-promptmove';
+var BUILD_STAMP = '20261102-serverprompt';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -6503,24 +6507,16 @@ document.addEventListener('click', function(ev){
       ndc.recap = NOTES_PANEL.notes.trim();
       saveState(STATE);
 
-      /* The business's own words, so the model has a voice to match.
-
-         For sms this used to be `STATE.variants.welcome.map(v => v.text)`:
-         raw template source, so the model was shown "Hey {name}, ..." with
-         the placeholders still in it, and starter copy ranked equally with
-         anything the person had written themselves. voiceExamples renders
-         them against this contact and puts their own wording first. */
-      var examples = chan === 'sms'
-        ? voiceExamples(STATE, 'welcome', ndc, STATE.senderName).examples
-            .map(function(e){ return e.text; })
-        : emailLibrary(STATE).map(function(d){ return d.body; });
+      /* The examples used to be picked here and sent. gemini-draft picks
+         them now, from the same voiceExamples and emailLibrary, so the
+         lesson they encode -- a person's own wording outranks the starter
+         copy, and never raw template source with the placeholders still in
+         it -- lives in one place instead of two. */
 
       NOTES_PANEL.busy = true;
       renderEmailLibrary();
-      callGemini(buildNotesPrompt({
-        client: ndc, notes: NOTES_PANEL.notes, channel: chan,
-        senderName: STATE.senderName, examples: examples
-      })).then(function(text){
+      callGemini({mode: 'notes', clientId: ndc.id,
+                  notes: NOTES_PANEL.notes, channel: chan}).then(function(text){
         var parts = chan === 'email' ? splitDraftedEmail(text) : {subject: '', text: text.trim()};
         NOTES_PANEL.draft = {channel: chan, subject: parts.subject, text: parts.text};
         NOTES_PANEL.busy = false;
@@ -8197,7 +8193,7 @@ function doSummarise(cid, target){
   if(target){ target.disabled = true; target.textContent = 'Reading\u2026'; }
 
   var through = summaryThrough(client);
-  callGemini(conversationSummaryPrompt(STATE, client)).then(function(text){
+  callGemini({mode: 'summary', clientId: client.id}).then(function(text){
     if(target){ target.disabled = false; target.textContent = label; }
     var summary = String(text || '').trim();
     if(!summary){ showToast('Nothing came back \u2014 try again.'); return; }
@@ -8307,7 +8303,7 @@ function doDraftReply(cid, target){
   var label = target ? target.textContent : '';
   if(target){ target.disabled = true; target.textContent = 'Thinking\u2026'; }
 
-  callGemini(replyDraftPrompt(STATE, client)).then(function(text){
+  callGemini({mode: 'reply', clientId: client.id}).then(function(text){
     if(target){ target.disabled = false; target.textContent = label; }
     var draft = String(text || '').trim().replace(/^["\u201c]|["\u201d]$/g, '');
     if(!draft){ showToast('Nothing came back \u2014 try again.'); return; }

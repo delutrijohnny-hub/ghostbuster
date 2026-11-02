@@ -26,6 +26,15 @@
 // the caller to a real authenticated user first (same pattern as
 // google-calendar-sync's resolveTargetUserIds) and reject anyone who isn't.
 
+/* The prompt builders, and the only copy of them. aiMessagePrompt,
+   conversationSummaryPrompt, replyDraftPrompt and buildNotesPrompt all live in
+   logic.js, so the browser and this function compose the same words from the
+   same rules, and test.js checks them. This is the seventh function to bundle
+   logic.js, which means it joins the set needing a redeploy when logic.js
+   changes. */
+import '../_shared/logic.js';
+const GB = (globalThis as any).GBLogic;
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')!;
@@ -96,13 +105,155 @@ Deno.serve(async (req) => {
     }, 403);
   }
 
-  let prompt: string;
+  /* STRUCTURED INPUTS, NOT A PROMPT.
+   *
+   * This used to accept `{prompt}` -- a string the browser had already
+   * composed -- which is why the switch above could only decide WHETHER
+   * anything went to Google and never WHAT. Anything the page chose to put in
+   * that string went, and no rule here could narrow it.
+   *
+   * Now the caller names a mode and a contact, and the prompt is built HERE
+   * from rows read under the CALLER'S OWN token, so RLS decides which contact
+   * they may draft for and this function decides which of that contact's
+   * fields leave. The builders are logic.js's, the same ones the browser used,
+   * so the words are unchanged and test.js still checks them.
+   *
+   * `notes` is the exception and has to be: the notes drafter works on text
+   * somebody has just typed and not yet saved, so it cannot be read back from
+   * any row. It arrives as a bounded field rather than as a blob, and the
+   * prompt around it is still composed here.
+   */
+  const MODES = ['message', 'summary', 'reply', 'notes'];
+  const NOTES_MAX = 4000;
+  let body: any;
   try {
-    const body = await req.json();
-    prompt = body?.prompt;
-    if (!prompt || typeof prompt !== 'string') throw new Error('missing prompt');
+    body = await req.json();
   } catch {
-    return jsonResponse({ error: 'Request body must be JSON with a "prompt" string' }, 400);
+    return jsonResponse({ error: 'Request body must be JSON' }, 400);
+  }
+  const mode = String(body?.mode || '');
+  const clientId = String(body?.clientId || '');
+  const stage = body?.stage == null ? '' : String(body.stage);
+  const channel = body?.channel === 'email' ? 'email' : 'sms';
+  const notes = body?.notes == null ? '' : String(body.notes);
+  if (!MODES.includes(mode)) {
+    return jsonResponse({ error: 'Choose a mode: ' + MODES.join(', ') }, 400);
+  }
+  if (!clientId) return jsonResponse({ error: 'A contact is required' }, 400);
+  if (mode === 'message' && !stage) {
+    return jsonResponse({ error: 'A stage is required to draft a touch' }, 400);
+  }
+  if (mode === 'notes' && !notes.trim()) {
+    return jsonResponse({ error: 'There are no notes to draft from' }, 400);
+  }
+  if (notes.length > NOTES_MAX) {
+    return jsonResponse({ error: 'Those notes are longer than this can draft from' }, 413);
+  }
+
+  /* Read as the caller, with the anon key, so RLS answers "may this person
+     draft for this contact?" -- and no service-role key exists in this
+     function to reach around it. One contact, by id. */
+  const asCaller = { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` };
+  async function rest(path: string) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: asCaller, signal: AbortSignal.timeout(15000),
+    }).catch(() => null);
+    if (!r || !r.ok) return null;
+    return await r.json().catch(() => null);
+  }
+
+  const clients = await rest(
+    `clients?id=eq.${encodeURIComponent(clientId)}` +
+    `&select=id,name,phone,email,status,call_date_time,booked_date,timezone,` +
+    `timezone_confirmed,organizer_email,event_title,notes,recap,ignored,` +
+    `close_outcome,sms_status,google_event_id,automation_paused_until,` +
+    `snoozed_until,skipped_stages,reschedules,reschedule_count,stalled_since,` +
+    `manually_added,conversation_summary,conversation_summary_at,` +
+    `conversation_summary_through,` +
+    `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,` +
+    `reviewed,delivery_status,provider_id)&limit=1`);
+  if (!Array.isArray(clients) || !clients.length) {
+    // RLS hid it, or it does not exist. Both are "not yours to draft for".
+    return jsonResponse({ error: 'That contact could not be read on this account' }, 404);
+  }
+
+  const [inbound, settingsRows, variantRows] = await Promise.all([
+    rest(`sms_events?client_id=eq.${encodeURIComponent(clientId)}&kind=eq.sms.inbound` +
+         `&select=id,client_id,body,created_at,provider_id&order=created_at.desc&limit=200`),
+    rest(`app_settings?user_id=eq.${encodeURIComponent(userId)}` +
+         `&select=sender_name,pipeline,terminology,sequence&limit=1`),
+    rest(`variants?user_id=eq.${encodeURIComponent(userId)}` +
+         `&select=stage,variant_key,text,builtin,channel,retired`),
+  ]);
+
+  const settings = (settingsRows || [])[0] || {};
+  /* Always called, with null resetting each to its default -- a stale global
+     must not survive between requests on a warm instance. Same order
+     loadState uses. */
+  GB.setPipeline(Array.isArray(settings.pipeline) && settings.pipeline.length ? settings.pipeline : null);
+  GB.setTerminology(settings.terminology || null);
+  GB.setSequence(Array.isArray(settings.sequence) && settings.sequence.length ? settings.sequence : null);
+
+  const state = GB.assistantStateFromRows(clients, inbound || [], 'UTC', []);
+  state.senderName = settings.sender_name || 'the sender';
+  /* voiceExamples reads state.variants: a person's own wording must outrank
+     the starter templates, or somebody who wrote their own copy gets drafts
+     in the stock voice. Retired wordings are left out. */
+  state.variants = {};
+  (variantRows || []).forEach((v: any) => {
+    if (!v || v.retired || (v.channel && v.channel !== 'sms')) return;
+    (state.variants[v.stage] = state.variants[v.stage] || []).push(
+      { id: v.variant_key, text: v.text, builtin: !!v.builtin });
+  });
+
+  const client = state.clients[clientId];
+  if (!client) {
+    return jsonResponse({ error: 'That contact could not be read on this account' }, 404);
+  }
+
+  let prompt: string;
+  if (mode === 'message') {
+    prompt = GB.aiMessagePrompt(state, client, stage);
+  } else if (mode === 'summary') {
+    prompt = GB.conversationSummaryPrompt(state, client);
+  } else if (mode === 'reply') {
+    prompt = GB.replyDraftPrompt(state, client);
+  } else {
+    /* The business's own words, so the model has a voice to match -- picked
+       here now, exactly as the browser picked them.
+     *
+     * NOT raw template source: voiceExamples renders the wordings against
+     * this contact and puts anything the person wrote themselves ahead of the
+     * starter copy, or somebody who has written their own texts gets drafts
+     * in the stock voice. The stage is 'welcome' because that is the one the
+     * notes drafter has always used; it has no stage of its own.
+     *
+     * On email the examples are the account's library documents, which means
+     * loading them -- and a missing library degrades to no examples rather
+     * than to no draft. */
+    let pool: string[] = [];
+    if (channel === 'sms') {
+      pool = GB.voiceExamples(state, 'welcome', client, state.senderName)
+               .examples.map((e: any) => e.text);
+    } else {
+      const libRows = await rest(
+        `email_library?user_id=eq.${encodeURIComponent(userId)}` +
+        `&select=id,title,when_to_send,subject,body,touch,sort_order,archived,updated_at` +
+        `&order=sort_order`);
+      state.emailLibrary = (libRows || []).map((r: any) => ({
+        id: r.id, title: r.title, whenToSend: r.when_to_send || '',
+        subject: r.subject || '', body: r.body || '', touch: r.touch || '',
+        sortOrder: Number.isFinite(r.sort_order) ? r.sort_order : 0,
+        archived: !!r.archived, updatedAt: r.updated_at,
+      }));
+      pool = GB.emailLibrary(state).map((d: any) => d.body);
+    }
+    prompt = GB.buildNotesPrompt({
+      client, notes, channel, senderName: state.senderName, examples: pool,
+    });
+  }
+  if (!prompt || typeof prompt !== 'string') {
+    return jsonResponse({ error: 'Nothing could be drafted for that contact' }, 422);
   }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;

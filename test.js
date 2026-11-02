@@ -7952,7 +7952,10 @@ console.log('\n--- drafting a reply ---');
        enforcement. */
     const app = fs.readFileSync(path.join(__dirname, 'hosted', 'app.js'), 'utf8');
     const fn = app.slice(app.indexOf('function doDraftReply'), app.indexOf('/* Adding an internal note'));
-    assert.ok(/callGemini\(replyDraftPrompt/.test(fn), 'the draft does not use the reply prompt');
+    /* The browser names the mode now; gemini-draft composes the prompt from
+       rows under this user's own token. What is being guarded is unchanged:
+       this path asks for a reply draft and cannot reach a send. */
+    assert.ok(/callGemini\(\{mode: 'reply'/.test(fn), 'the draft does not ask for a reply draft');
     assert.ok(/b\.value = draft/.test(fn), 'the draft does not land in the composer');
     assert.ok(!/doMsgxSend|send-sms|doSendReply/.test(fn),
       'the draft path can reach the send path');
@@ -9329,6 +9332,67 @@ console.log('\n--- client text does not reach Google unless somebody said so ---
       'callGemini never reads the error body, so the reason is lost');
     assert.ok(/body && body\.error/.test(fn),
       'callGemini does not prefer the server’s message');
+  });
+
+  test('the browser no longer composes what gets sent to Google', () => {
+    /* The whole point. While the prompt was assembled in the page and posted
+       as one string, gemini-draft could decide WHETHER anything went and
+       never WHAT -- anything app.js chose to put in that string went, and no
+       server-side rule could narrow it. */
+    const app = read('hosted', 'app.js');
+    ['aiMessagePrompt(STATE', 'conversationSummaryPrompt(STATE',
+     'replyDraftPrompt(STATE', 'buildNotesPrompt('].forEach((composed) => {
+      assert.ok(!app.includes(composed),
+        'app.js still composes a prompt: ' + composed);
+    });
+    const fn = app.slice(app.indexOf('function callGemini('),
+                         app.indexOf('function generateAIMessage('));
+    assert.ok(/\{body: payload\}/.test(fn), 'callGemini no longer forwards a payload');
+    assert.ok(!/body: \{prompt/.test(fn), 'callGemini still posts a composed prompt');
+  });
+
+  test('gemini-draft refuses a prompt it was handed', () => {
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    assert.ok(!/body\?\.prompt/.test(src),
+      'the function still takes a prompt from the caller');
+    assert.ok(/MODES = \['message', 'summary', 'reply', 'notes'\]/.test(src),
+      'the accepted modes are not a closed list');
+    assert.ok(/!MODES\.includes\(mode\)/.test(src), 'an unknown mode is not rejected');
+    // Composed here, from the same builders the browser used.
+    ['GB.aiMessagePrompt(', 'GB.conversationSummaryPrompt(',
+     'GB.replyDraftPrompt(', 'GB.buildNotesPrompt('].forEach((b) => {
+      assert.ok(src.includes(b), 'the function does not build ' + b);
+    });
+  });
+
+  test('the contact is read as the caller, with no key that reaches around RLS', () => {
+    /* RLS answers "may this person draft for this contact?". A service-role
+       key in this function would answer "yes" to everything, so there is not
+       one — the same rule ghost-assistant keeps. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    assert.ok(!/SERVICE_ROLE|SERVICE_KEY/.test(src),
+      'gemini-draft holds a service-role key, which bypasses RLS');
+    /* Pinned to the shared header object the contact read uses. A file-wide
+       search matched the switch read's own inline header instead, so removing
+       the token from THIS one left the test green -- and every row would have
+       been fetched with the anon key alone. */
+    assert.ok(/const asCaller = \{ apikey: ANON_KEY, Authorization: `Bearer \$\{callerToken\}` \}/.test(src),
+      'the contact reads do not go out as the caller');
+    assert.ok(/clients\?id=eq\.\$\{encodeURIComponent\(clientId\)\}/.test(src),
+      'the contact is not fetched by id');
+    assert.ok(/\b404\b/.test(src),
+      'a contact RLS hides is not refused');
+  });
+
+  test('typed notes arrive as a bounded field, not an unbounded blob', () => {
+    /* The one input that cannot come from a row: the notes drafter works on
+       text somebody has just typed and not yet saved. So it is passed — but
+       as a field with a limit, and the prompt around it is still composed on
+       the server. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    assert.ok(/NOTES_MAX = \d+/.test(src), 'the notes field has no limit');
+    assert.ok(/notes\.length > NOTES_MAX/.test(src), 'the limit is not enforced');
+    assert.ok(/\b413\b/.test(src), 'an over-long field is not refused');
   });
 
   test('the assistant’s own AI switch is a separate decision', () => {
