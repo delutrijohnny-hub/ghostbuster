@@ -369,15 +369,26 @@ Deno.serve(async (req) => {
         `/message_log?client_id=eq.${encodeURIComponent(client.id)}&channel=eq.sms` +
         `&provider_id=is.null&sent_at=gte.${lo}&sent_at=lte.${hi}&select=id,text`);
       const candidates = (await near.json().catch(() => [])) || [];
-      const norm = (s: string) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const match = candidates.find((r: any) => norm(r.text) === norm(text));
+      /* The matching rule lives in logic.js, where test.js can run it against
+         the real pairs out of this book. Written here it would be a second
+         truth, in the one file the node suite cannot load -- and the first
+         version of it, an exact text comparison, is why 696 logged sends have
+         no provider id: the first name is edited before almost every send. */
+      const adopted = GB.adoptLoggedSend(candidates, text);
 
-      if (match) {
-        await db(`/message_log?id=eq.${match.id}`, {
+      if (adopted) {
+        const pat = await db(`/message_log?id=eq.${adopted.row.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ provider_id: providerId, delivery_status: 'delivered' }),
         });
-        linked++;
+        // Read, like the insert below. A PATCH counted as a link without
+        // looking is the same silent lie in a quieter place.
+        if (pat.ok) {
+          linked++;
+        } else {
+          failed++;
+          if (!firstError) firstError = (await pat.text().catch(() => '')).slice(0, 200);
+        }
       } else {
         const ins = await db('/message_log', {
           method: 'POST',
@@ -412,6 +423,9 @@ Deno.serve(async (req) => {
     // and the inbox do not need to know where it came from.
     const ins = await db('/sms_events', {
       method: 'POST',
+      // Ask for the row back, so the count below is of rows that exist rather
+      // than of requests that did not complain. See the check after this.
+      headers: { Prefer: 'return=representation' },
       body: JSON.stringify([{
         provider_id: providerId, kind: 'sms.inbound',
         from_phone: m.phone || '', to_phone: null, body: text,
@@ -426,6 +440,27 @@ Deno.serve(async (req) => {
       if (ins.status === 409) { skipped++; continue; }
       failed++;
       if (!firstError) firstError = (await ins.text().catch(() => '')).slice(0, 200);
+      continue;
+    }
+    /* A 2xx is not a row.
+     *
+     * On 2026-11-01 at 23:29 UTC this reported "5 replies, 0 skipped, 0
+     * REJECTED" and returned 200, and no sms_events row was written: the
+     * sequence never moved past 1341 and no message_log row was marked
+     * responded. inbound++ stood immediately after the ok check, so five
+     * replies were counted into the agent's log and into this account's
+     * history on the strength of a status code. The cause was never
+     * established -- which is the argument for not trusting the status code
+     * rather than for explaining it.
+     *
+     * Counting the rows that came back makes that failure loud and keeps the
+     * agent's cursor honest: a reply that was not stored is now REJECTED, and
+     * a rejected push leaves lastRowId where it was so the next sync tries
+     * again. */
+    const wrote = (await ins.json().catch(() => [])) || [];
+    if (!Array.isArray(wrote) || !wrote.length) {
+      failed++;
+      if (!firstError) firstError = 'sms_events accepted the insert and returned no row';
       continue;
     }
     inbound++;

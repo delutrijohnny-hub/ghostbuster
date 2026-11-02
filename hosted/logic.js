@@ -5994,6 +5994,100 @@ function matchInboundReply(state, fromPhone, at){
   return {client: best, idx: bestIdx, reason: null};
 }
 
+/* ---- adopting a send the Mac found afterwards ---- */
+
+/* U+FFFC OBJECT REPLACEMENT CHARACTER: where an attachment sits in a body.
+
+   The agent's decoder strips it from a message it read out of an
+   attributedBody blob, but a message whose `text` column is already populated
+   comes through untouched -- so a send and its own logged copy differed by one
+   character nobody can see and never matched. Eight of this account's
+   unconfirmed sends are that and nothing else. */
+var OBJECT_REPLACEMENT = '￼';
+
+/* Two texts are the same words if they read the same. An attachment marker
+   and a run of whitespace are not reading material. */
+function adoptionKey(text){
+  return String(text == null ? '' : text)
+    .split(OBJECT_REPLACEMENT).join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/* How much of two messages has to agree before they are the same send.
+
+   40 characters, because the openings this account's templates share run to
+   about 35 ("Hey Ryan, see you at 11:30 AM today!"), and a rule satisfied by
+   a shared opening alone would adopt a day-of reminder onto a confirmation
+   logged four minutes earlier. A Google Meet link pasted as its own message
+   is 36 and is excluded by the same number. */
+var ADOPT_MIN_AGREE = 40;
+
+/* Which logged-but-unconfirmed send a real message from Messages is proof of.
+
+   Clicking "Open in Messages" logs a send optimistically, before the message
+   exists; the agent links the two afterwards. That link used to require the
+   words to be IDENTICAL, which fails on every message edited before sending.
+   696 of this account's 1,578 logged texts carry no provider id, and the pile
+   grows every week.
+
+   Returns the candidate to adopt, or null to leave the gap honest. It never
+   guesses, because adopting the wrong row marks a message DELIVERED that was
+   never sent -- worse than leaving it unconfirmed, since an unconfirmed send
+   is already visible as something to ask a person about.
+
+   Measured on this book's 696 unconfirmed sends: 91 of them have a real
+   message from the same contact within twenty minutes, and of those, 8 agree
+   once the attachment marker is dropped, 18 agree from the start, and 5 agree
+   from the end. The other 60 sit next to a message with genuinely different
+   words, which is not an edited send and is left alone. */
+function adoptLoggedSend(candidates, sentText){
+  var sent = adoptionKey(sentText);
+  if(!sent) return null;
+  var rows = (candidates || []).map(function(c){
+    return {row: c, key: adoptionKey(c && c.text)};
+  }).filter(function(c){ return c.key; });
+
+  // Identical words: it cannot matter which of them is picked.
+  var exact = rows.filter(function(c){ return c.key === sent; });
+  if(exact.length) return {row: exact[0].row, reason: 'exact'};
+
+  /* Exactly one, or nothing at all. Two templates that agree over the
+     threshold and were logged minutes apart leave no way to tell which one
+     actually went out, and a coin flip there puts "delivered" on the wrong
+     message. */
+  function only(list, reason){
+    return list.length === 1 ? {row: list[0].row, reason: reason} : null;
+  }
+  function longEnough(key){
+    var shorter = key.length < sent.length ? key : sent;
+    return shorter.length >= ADOPT_MIN_AGREE;
+  }
+
+  /* They agree from the start, in either direction: the logged copy is the
+     longer one when a line was trimmed on the way out, and the shorter one
+     when a line was added. */
+  var tail = rows.filter(function(c){
+    return longEnough(c.key) &&
+      (c.key.indexOf(sent) === 0 || sent.indexOf(c.key) === 0);
+  });
+  /* Ambiguity here is not a reason to try the next rule -- it is evidence
+     that this send cannot be told apart, and the next rule is looser. So an
+     ambiguous first tier stops, and only an EMPTY one falls through. */
+  if(tail.length) return only(tail, 'trimmed');
+
+  /* They agree from the end: the greeting was edited. One template logged
+     "Hi Teresa" and the message that went out 27 seconds later opened "Hi
+     Margaret", which shares almost nothing at the front and everything
+     after it. */
+  var head = rows.filter(function(c){
+    return c.key.length >= ADOPT_MIN_AGREE && sent.length >= ADOPT_MIN_AGREE &&
+      c.key.slice(-ADOPT_MIN_AGREE) === sent.slice(-ADOPT_MIN_AGREE);
+  });
+  return only(head, 'greeting');
+}
+
 /* The shape of a sent message, with the per-person parts taken out.
 
    message_log stores what was actually sent -- rendered, with the name, the
@@ -9747,6 +9841,9 @@ var __LOGIC_EXPORTS__ = {
   pendingQuestion: pendingQuestion,
   phoneKey: phoneKey,
   matchInboundReply: matchInboundReply,
+  adoptionKey: adoptionKey,
+  adoptLoggedSend: adoptLoggedSend,
+  ADOPT_MIN_AGREE: ADOPT_MIN_AGREE,
   smsKeyword: smsKeyword,
   smsSendMode: smsSendMode, macSendReady: macSendReady,
   AGENT_SEND_STALE_MINUTES: AGENT_SEND_STALE_MINUTES,

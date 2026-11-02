@@ -8958,6 +8958,126 @@ console.log('\n--- an inbound text finds its contact ---');
   });
 }
 
+console.log('\n--- linking a logged send to the message that really went out ---');
+
+{
+  /* Every case here is a shape taken off the live book, where 696 of 1,578
+     logged texts carry no provider id. The counts in the comments are from
+     the 91 of those that have a real message from the same contact inside
+     twenty minutes. */
+  const TAIL = 'and we will go through your channel numbers then';   // 47 chars
+  const SENT = 'Hi Teresa, ' + TAIL;
+
+  test('identical words are adopted, which is the rule that already worked', () => {
+    const r = GB.adoptLoggedSend([{id: 'a', text: SENT}], SENT);
+    assert.ok(r, 'an exact match stopped being adopted');
+    assert.strictEqual(r.row.id, 'a');
+    assert.strictEqual(r.reason, 'exact');
+  });
+
+  test('the attachment marker is invisible, and must not cost a match', () => {
+    /* U+FFFC where a picture sits. The agent strips it from a body decoded
+       out of a blob but not from one the `text` column already held, so a
+       send and its own logged copy differed by one character nobody can see.
+       Eight rows on this book are this and nothing else. */
+    const r = GB.adoptLoggedSend([{id: 'a', text: SENT}], '￼' + SENT);
+    assert.ok(r, 'one invisible character still breaks adoption');
+    assert.strictEqual(r.reason, 'exact');
+  });
+
+  test('spacing and capitals are not reading material', () => {
+    const r = GB.adoptLoggedSend(
+      [{id: 'a', text: '  HI   TERESA,  ' + TAIL.toUpperCase() + ' '}], SENT);
+    assert.ok(r);
+    assert.strictEqual(r.reason, 'exact');
+  });
+
+  test('a line added on the way out is the same send', () => {
+    // 18 rows: the two agree from the start and one simply runs longer.
+    const r = GB.adoptLoggedSend([{id: 'a', text: SENT}], SENT + ' bring your laptop');
+    assert.ok(r, 'a send with a line added was left unconfirmed');
+    assert.strictEqual(r.reason, 'trimmed');
+  });
+
+  test('a line trimmed on the way out is the same send', () => {
+    const r = GB.adoptLoggedSend([{id: 'a', text: SENT + ' bring your laptop'}], SENT);
+    assert.ok(r);
+    assert.strictEqual(r.reason, 'trimmed');
+  });
+
+  test('an edited greeting is the same send', () => {
+    /* 5 rows. The template logged "Hi Teresa" and the message that went out
+       27 seconds later opened "Hi Margaret" -- almost nothing shared at the
+       front, everything after it. */
+    const r = GB.adoptLoggedSend([{id: 'a', text: SENT}], 'Hi Margaret, ' + TAIL);
+    assert.ok(r, 'an edited first name still loses the link');
+    assert.strictEqual(r.reason, 'greeting');
+  });
+
+  test('a genuinely different message is never adopted', () => {
+    /* 60 rows sit next to a message with different words. Adopting one marks
+       a text DELIVERED that was never sent, which is worse than leaving it
+       unconfirmed -- an unconfirmed send is already visible as something to
+       ask a person about. */
+    const r = GB.adoptLoggedSend(
+      [{id: 'a', text: 'Hey Theresa, Johnny here. Got you locked in for Aug 26 at 3:00 PM.'}],
+      'Hey, just wanted to check in and make sure we are still all set for ours');
+    assert.strictEqual(r, null, 'two different messages were treated as one send');
+  });
+
+  test('a pasted meeting link does not adopt the reminder it followed', () => {
+    /* A Google Meet link is 36 characters and goes out as its own message
+       seconds after the day-of text. Both are real, and they are not each
+       other. */
+    const link = 'https://meet.google.com/gxb-byez-pjm';
+    assert.ok(link.length < GB.ADOPT_MIN_AGREE, 'the guard no longer covers a meet link');
+    assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: SENT}], link), null);
+  });
+
+  test('two candidates that both fit are left for a human, not guessed at', () => {
+    const r = GB.adoptLoggedSend([
+      {id: 'a', text: SENT},
+      {id: 'b', text: SENT + ' bring your laptop'}
+    ], SENT + ' bring your laptop and a pen');
+    assert.strictEqual(r, null, 'adoption flipped a coin between two candidates');
+  });
+
+  test('an ambiguous match stops rather than falling through to a looser rule', () => {
+    /* The tiers get looser as they go, so ambiguity in an earlier one is
+       evidence this send cannot be told apart -- not an invitation to try a
+       rule that will match more things. Only an EMPTY tier falls through.
+
+       Here the greeting rule would find exactly one answer, and must not be
+       allowed to give it. */
+    const r = GB.adoptLoggedSend([
+      {id: 'greeting', text: 'Hi Margaret, ' + TAIL},
+      {id: 'longer',   text: SENT + ' bring your laptop'},
+      {id: 'shorter',  text: 'Hi Teresa, ' + TAIL.slice(0, 30)}
+    ], SENT);
+    assert.strictEqual(r, null, 'an ambiguous tier fell through to a looser one');
+    // The greeting rule really would have answered, or this proves nothing.
+    const alone = GB.adoptLoggedSend([{id: 'greeting', text: 'Hi Margaret, ' + TAIL}], SENT);
+    assert.ok(alone && alone.reason === 'greeting', 'the fallthrough test is vacuous');
+  });
+
+  test('nothing is adopted on empty or missing text', () => {
+    assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: SENT}], ''), null);
+    assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: SENT}], '   '), null);
+    assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: null}], SENT), null);
+    assert.strictEqual(GB.adoptLoggedSend([], SENT), null);
+    assert.doesNotThrow(() => GB.adoptLoggedSend(null, SENT));
+    assert.doesNotThrow(() => GB.adoptLoggedSend([null, undefined], SENT));
+  });
+
+  test('a short message still has to match exactly', () => {
+    /* Below the threshold the looser tiers are off, so "Yes" cannot adopt
+       anything -- but it can still match its own logged copy. */
+    const r = GB.adoptLoggedSend([{id: 'a', text: 'Yes'}], 'Yes');
+    assert.ok(r && r.reason === 'exact');
+    assert.strictEqual(GB.adoptLoggedSend([{id: 'a', text: 'Yes please'}], 'Yes'), null);
+  });
+}
+
 console.log('\n--- reply rate per wording, read off the log ---');
 
 {
