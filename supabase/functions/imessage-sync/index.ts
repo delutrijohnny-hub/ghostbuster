@@ -442,25 +442,49 @@ Deno.serve(async (req) => {
       if (!firstError) firstError = (await ins.text().catch(() => '')).slice(0, 200);
       continue;
     }
-    /* A 2xx is not a row.
+    /* A 2xx is not a row, and neither is a returned representation.
      *
      * On 2026-11-01 at 23:29 UTC this reported "5 replies, 0 skipped, 0
-     * REJECTED" and returned 200, and no sms_events row was written: the
-     * sequence never moved past 1341 and no message_log row was marked
-     * responded. inbound++ stood immediately after the ok check, so five
-     * replies were counted into the agent's log and into this account's
-     * history on the strength of a status code. The cause was never
-     * established -- which is the argument for not trusting the status code
-     * rather than for explaining it.
+     * REJECTED" and five replies went into the agent's log, and no sms_events
+     * row was written. The gateway log shows exactly five
+     * POST /rest/v1/sms_events, every one of them 201 Created. The table has
+     * 345 rows, max(id) 1341, the sequence sitting at 1341 with is_called
+     * true, and nothing dated that day -- yet nextval runs before any
+     * conflict clause or trigger could intervene, so five inserts that really
+     * executed could not have left it there. One table, one sequence, no
+     * triggers, no rules, no endpoint override, one project. The cause is NOT
+     * established, and that is the argument for verifying the write rather
+     * than for a theory about it.
      *
-     * Counting the rows that came back makes that failure loud and keeps the
-     * agent's cursor honest: a reply that was not stored is now REJECTED, and
-     * a rejected push leaves lastRowId where it was so the next sync tries
-     * again. */
+     * So it is checked twice, and the second check is the one that matters:
+     *
+     *   1. The insert must hand back a row (Prefer: return=representation).
+     *      This catches an empty body behind a success code.
+     *   2. The row must then be READABLE IN A SEPARATE REQUEST. A 201 whose
+     *      representation describes a row that does not survive the response
+     *      would pass check 1 -- which is exactly the shape of what happened
+     *      above -- and only a fresh read can tell the difference.
+     *
+     * One extra GET per inbound reply. Inbound runs to a handful a day on
+     * this account, and an uncounted reply is a client who looks ignored.
+     *
+     * A reply that cannot be read back is REJECTED, and a rejected push
+     * leaves the agent's lastRowId where it was, so the next sync tries the
+     * same message again rather than walking past it forever. */
     const wrote = (await ins.json().catch(() => [])) || [];
     if (!Array.isArray(wrote) || !wrote.length) {
       failed++;
       if (!firstError) firstError = 'sms_events accepted the insert and returned no row';
+      continue;
+    }
+    const back = await db(
+      `/sms_events?provider_id=eq.${encodeURIComponent(providerId)}&select=id&limit=1`);
+    const persisted = ((await back.json().catch(() => [])) || []);
+    if (!Array.isArray(persisted) || !persisted.length) {
+      failed++;
+      if (!firstError) {
+        firstError = 'sms_events returned 201 for this reply and the row could not be read back';
+      }
       continue;
     }
     inbound++;

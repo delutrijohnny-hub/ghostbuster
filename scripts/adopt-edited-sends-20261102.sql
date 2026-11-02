@@ -98,6 +98,19 @@ select now() as backed_up_at, 'agent' as half, m.*
     'fc4627b3-329f-4115-8594-22c27fc94478'
   );
 
+/* CREATE TABLE AS does NOT inherit RLS, and Supabase's default grants hand
+   public tables to anon -- the key that ships in the app's JavaScript. So for
+   the minutes between creating this table and this statement, 56 real client
+   messages were readable by anybody. Caught by the suite's own guard ("every
+   table created in SQL here also gets RLS turned on"), which is the only
+   reason it was a few minutes and not permanent.
+
+   No policies, deliberately: RLS with no policy denies everything except the
+   service role, which is exactly right for a backup nobody should read
+   through the API. The three older backup tables are set up the same way. */
+alter table public.message_log_adopt_backup_20261102 enable row level security;
+revoke all on public.message_log_adopt_backup_20261102 from anon, authenticated;
+
 -- Fail loudly rather than quietly doing the wrong thing to the wrong rows.
 do $$
 declare n int;
