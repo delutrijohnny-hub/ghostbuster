@@ -4871,7 +4871,26 @@ function populatePrintSheet(state){
    own token, so the server decides which of a contact's fields leave rather
    than forwarding whatever this page chose to put in a string. */
 function callGemini(payload){
-  return window.GB_SUPABASE.functions.invoke('gemini-draft', {body: payload}).then(function(res){
+  /* The invoke is WRAPPED, for the reason assistant.js already learned.
+     A bare `.functions.invoke(...)` that throws synchronously -- the client
+     not built yet in this tab, `functions` missing from it -- throws straight
+     out of the click handler. generateAIMessage has already set the button to
+     "Generating...", and the .catch that would restore it never runs, so the
+     button sits there forever with no toast and NO REQUEST IN ANY LOG. That
+     is indistinguishable from a button that is not wired up, and it is the
+     second time today that shape has cost an hour. */
+  var pending;
+  try {
+    pending = window.GB_SUPABASE.functions.invoke('gemini-draft', {body: payload});
+  } catch (e) {
+    pending = Promise.reject(new Error(
+      'Ghost Recall is still loading in this tab, so the draft could not be '
+      + 'requested. Reload the page and try again.'));
+  }
+  if(!pending || typeof pending.then !== 'function'){
+    pending = Promise.reject(new Error('The draft could not be requested.'));
+  }
+  return pending.then(function(res){
     if(res.error){
       /* The server's own words, when it has any.
          invoke() turns any non-2xx into a FunctionsHttpError whose message is
@@ -5434,7 +5453,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-permfix';
+var BUILD_STAMP = '20261102-draftguard';
 
 /* Which settings section to scroll to once the modal is up.
 

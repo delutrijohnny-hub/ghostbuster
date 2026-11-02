@@ -9402,6 +9402,29 @@ console.log('\n--- client text does not reach Google unless somebody said so ---
     assert.ok(!/body: \{prompt/.test(fn), 'callGemini still posts a composed prompt');
   });
 
+  test('a draft request cannot hang the button with no error', () => {
+    /* assistant.js learned this and callGemini had not. A bare
+       `.functions.invoke(...)` that throws synchronously throws out of the
+       click handler, and generateAIMessage has already set the button to
+       "Generating..." -- so the .catch that restores it never runs. The
+       button sits there forever, no toast, and NO REQUEST IN ANY LOG, which
+       is indistinguishable from a button that was never wired up. */
+    const app = read('hosted', 'app.js');
+    const fn = app.slice(app.indexOf('function callGemini('),
+                         app.indexOf('function generateAIMessage('));
+    assert.ok(/try \{/.test(fn) && /catch \(e\)/.test(fn),
+      'the invoke is not wrapped, so a synchronous throw escapes the handler');
+    assert.ok(/typeof pending\.then !== 'function'/.test(fn),
+      'a non-promise return is not turned into a rejection');
+    assert.ok(/Reload the page/.test(fn),
+      'the failure does not tell the person what to do about it');
+    // And the button must be restored on any failure, not just some.
+    const gen = app.slice(app.indexOf('function generateAIMessage('),
+                          app.indexOf('/* ============================================================\n   11) TOASTS'));
+    assert.ok(/\.catch\(function\(e\)\{[\s\S]*btn\.disabled = false/.test(gen),
+      'a failed draft leaves the button disabled');
+  });
+
   test('gemini-draft refuses a prompt it was handed', () => {
     const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
     assert.ok(!/body\?\.prompt/.test(src),
