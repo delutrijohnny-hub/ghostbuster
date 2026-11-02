@@ -9457,6 +9457,21 @@ console.log('\n--- the briefing for one call, fifteen minutes out ---');
     assert.ok(/^Never replied · 2 messages sent/.test(r.body), r.body);
   });
 
+  test('nothing sent and nothing received does not blame the contact', () => {
+    /* The first real notification this feature would have produced read
+       "Never replied · 0 messages sent" -- contradictory, and pointing at
+       them for a silence nobody broke. It is also the more alarming case:
+       a confirmed call in fifteen minutes with somebody never texted. */
+    const r = remind({messageLog: [], replies: []});
+    assert.strictEqual(r.body.split('\n')[0], 'You have never texted them');
+    assert.ok(!/Never replied/.test(r.body), r.body);
+    const b = brief({messageLog: [], replies: []});
+    assert.ok(b.limits.some(l => /Nothing has been sent to them and nothing received/.test(l)),
+      JSON.stringify(b.limits));
+    assert.ok(!b.limits.some(l => /They have never replied/.test(l)),
+      'it still says they never replied when nothing was ever sent');
+  });
+
   test('the flags that change whether to pick up the phone are carried', () => {
     const r = remind({smsStatus: 'opted_out', status: 'Booked', rescheduleCount: 2});
     assert.ok(/opted out — do not text/.test(r.body), r.body);

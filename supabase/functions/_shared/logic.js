@@ -5339,7 +5339,10 @@ function callBriefing(state, client, now){
     limits.push('The timezone is inferred from the phone number, not confirmed with them.');
   }
   if(!inbound.length){
-    limits.push('They have never replied, so nothing here is in their own words.');
+    limits.push(outbound.length
+      ? 'They have never replied, so nothing here is in their own words.'
+      : 'Nothing has been sent to them and nothing received, so there is no '
+        + 'conversation to go on at all.');
   }
 
   return {
@@ -5433,9 +5436,17 @@ function callReminder(brief){
       (brief.history.lastReply.daysAgo <= 0 ? 'today'
         : brief.history.lastReply.daysAgo + 'd ago') +
       ': “' + reminderQuote(brief.history.lastReply.text) + '”');
-  } else {
+  } else if(brief.history.sent){
     lines.push('Never replied · ' + brief.history.sent +
       (brief.history.sent === 1 ? ' message sent' : ' messages sent'));
+  } else {
+    /* Nothing sent AND nothing received is not "they never replied" --
+       that blames the contact for a silence nobody broke. It is also the
+       more alarming of the two: a confirmed call in fifteen minutes with
+       somebody who has never been texted. The first real notification
+       this would have produced read "Never replied · 0 messages sent",
+       which is contradictory and points the wrong way. */
+    lines.push('You have never texted them');
   }
 
   /* The flags that change the call, not every limit the brief carries. A
