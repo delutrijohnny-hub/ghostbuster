@@ -94,7 +94,15 @@ async function creditWording(userId: string, row: any) {
   const hash = GB.variantTextHash(v.text);
   if (!hash) return;
 
-  await db('/rpc/credit_variant_reply', {
+  /* READ IT. fetch resolves on 4xx, so `.catch` alone would have swallowed
+     every rejection this rpc can raise -- a parameter it will not accept, a
+     missing hash, a credit outside 0..1 -- and learning would have stayed
+     broken with nothing anywhere saying why. That is the exact shape of the
+     failure that cost this account 139 replies in the first place.
+
+     Still not fatal: a lost credit must never cost the reply itself, which is
+     already recorded. So it is logged and the sync carries on. */
+  const credited = await db('/rpc/credit_variant_reply', {
     method: 'POST',
     body: JSON.stringify({
       p_user: userId,
@@ -104,7 +112,12 @@ async function creditWording(userId: string, row: any) {
       p_responses: credit.responses,
       p_text_hash: hash,
     }),
-  }).catch(() => { /* a lost credit must never cost the reply itself */ });
+  }).catch(() => null);
+  if (!credited || !credited.ok) {
+    const why = credited ? (await credited.text().catch(() => '')).slice(0, 200) : 'unreachable';
+    console.error('credit_variant_reply refused %s/%s (+%d send, +%d reply): %s',
+      row.stage, row.variant_key, credit.sends, credit.responses, why);
+  }
 }
 
 function json(body: unknown, status = 200) {
