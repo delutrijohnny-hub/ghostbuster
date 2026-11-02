@@ -4935,7 +4935,13 @@ function assistantStateFromRows(clientRows, inboundRows, viewerTz, myCalendars){
           /* Written by the webhooks and the agent, never by a browser.
              Dropping it here would turn every unconfirmed send into a
              confirmed one in the assistant's eyes. */
-          deliveryStatus: m.delivery_status || null
+          deliveryStatus: m.delivery_status || null,
+          /* agentSeesThread reads this to tell the two silences apart.
+             Dropped, every contact looks like one whose texts never reach
+             this Mac, so all 370 sends with no sign they went out would be
+             reported as merely unconfirmable -- the opposite of the truth,
+             and the half that points at the send route. */
+          providerId: m.provider_id || null
         };
       })
     });
@@ -4949,7 +4955,10 @@ function assistantStateFromRows(clientRows, inboundRows, viewerTz, myCalendars){
        personal pilot. */
     if(!c) return;
     c.replies.push({id: r.id, at: r.created_at, text: r.body || '',
-                    direction: 'in', channel: 'sms'});
+                    direction: 'in', channel: 'sms',
+                    // Same reason as the message log above: four contacts on
+                    // this book have only ever been received from.
+                    providerId: r.provider_id || null});
   });
   Object.keys(state.clients).forEach(function(cid){
     state.clients[cid].replies.sort(function(a, b){

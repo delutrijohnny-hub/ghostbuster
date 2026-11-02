@@ -17572,6 +17572,62 @@ console.log('\n--- the private assistant, deterministic part ---');
       'be describing a different account from the one on screen');
   });
 
+  test('the assistant can tell the two silences apart from raw rows', () => {
+    /* The guard above compares CLIENT-level fields, so it cannot see a field
+       dropped from inside message_log -- and provider_id was. Without it
+       agentSeesThread answers false for everybody, every contact looks like
+       one whose texts never reach this Mac, and the briefing reports all 512
+       silences as merely unconfirmable instead of naming the 370 with no sign
+       they ever sent. That is the half that points at the send route, so the
+       finding would have been exactly backwards.
+
+       Behavioural, not a source scan: it asserts the answer, not the
+       spelling. */
+    const rows = [{
+      id:'seen', name:'Dana', phone:'2015551212', status:'Booked',
+      call_date_time: inD(2), booked_date: agoD(3), timezone:'America/Denver',
+      message_log:[
+        {id:'a', channel:'sms', stage:'custom', variant_key:'custom', text:'typed by hand',
+         sent_at: agoD(2), delivery_status:'delivered', provider_id:'imsg:AAA', responded:false},
+        {id:'b', channel:'sms', stage:'welcome', variant_key:'w1', text:'hello',
+         sent_at: agoD(1), delivery_status:null, provider_id:null, responded:false}
+      ]
+    }, {
+      id:'blind', name:'Marcus', phone:'2015553434', status:'Booked',
+      call_date_time: inD(2), booked_date: agoD(3), timezone:'America/Denver',
+      message_log:[
+        {id:'c', channel:'sms', stage:'welcome', variant_key:'w1', text:'hello',
+         sent_at: agoD(1), delivery_status:null, provider_id:null, responded:false}
+      ]
+    }, {
+      id:'inboundonly', name:'Priya', phone:'2015555656', status:'Booked',
+      call_date_time: inD(2), booked_date: agoD(3), timezone:'America/Denver',
+      message_log:[
+        {id:'d', channel:'sms', stage:'welcome', variant_key:'w1', text:'hello',
+         sent_at: agoD(1), delivery_status:null, provider_id:null, responded:false}
+      ]
+    }];
+    const inbound = [{id:'r1', client_id:'inboundonly', body:'yes please',
+                      created_at: agoM(20), provider_id:'imsg:BBB'}];
+    const s = GB.assistantStateFromRows(rows, inbound, 'UTC');
+
+    assert.strictEqual(s.clients.seen.messageLog[0].providerId, 'imsg:AAA',
+      'message_log.provider_id never reached the assistant');
+    assert.strictEqual(s.clients.inboundonly.replies[0].providerId, 'imsg:BBB',
+      'sms_events.provider_id never reached the assistant');
+
+    assert.strictEqual(GB.agentSeesThread(s.clients.seen), true);
+    assert.strictEqual(GB.agentSeesThread(s.clients.blind), false);
+    assert.strictEqual(GB.agentSeesThread(s.clients.inboundonly), true,
+      'a contact only ever received from read as one the Mac cannot see');
+
+    const silence = (cid) => GB.sendSilence(
+      s.clients[cid], s.clients[cid].messageLog[s.clients[cid].messageLog.length - 1]);
+    assert.strictEqual(silence('seen'), 'not_seen');
+    assert.strictEqual(silence('blind'), 'unknowable');
+    assert.strictEqual(silence('inboundonly'), 'not_seen');
+  });
+
   test('a colleague\u2019s booking is not counted as your work', () => {
     /* The first briefing ever run against the real book said "20 jobs across
        43 people" while the screen beside it said 11. The cause: the endpoint

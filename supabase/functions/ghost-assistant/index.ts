@@ -102,7 +102,7 @@ Deno.serve(async (req) => {
       `notes,recap,ignored,close_outcome,sms_status,automation_paused_until,snoozed_until,` +
       `skipped_stages,reschedules,reschedule_count,stalled_since,manually_added,google_event_id,` +
       `conversation_summary,conversation_summary_at,conversation_summary_through,` +
-      `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,reviewed,delivery_status)` +
+      `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,reviewed,delivery_status,provider_id)` +
       `&order=id&limit=1001`);
 
     if (clients.length > 1000) {
@@ -149,7 +149,7 @@ Deno.serve(async (req) => {
       if (!slice) continue;
       const rows = await rest(
         `sms_events?client_id=in.(${encodeURIComponent(slice)})&kind=eq.sms.inbound` +
-        `&select=id,client_id,body,created_at&order=created_at.desc&limit=600`);
+        `&select=id,client_id,body,created_at,provider_id&order=created_at.desc&limit=600`);
       // RLS already scopes these; the id check is belt and braces against a
       // filter that silently matched nothing and returned everything.
       rows.forEach((r: any) => { if (ids.has(r.client_id)) inbound.push(r); });
