@@ -9469,6 +9469,25 @@ console.log('\n--- client text does not reach Google unless somebody said so ---
     assert.ok(/\b413\b/.test(src), 'an over-long field is not refused');
   });
 
+  test('every outbound call in gemini-draft has a deadline', () => {
+    /* The first real draft took 92 SECONDS -- the function's own reads
+       finished inside 600ms and the rest was Google, on a fetch with no
+       timeout. A wedged call there hangs until the worker is reclaimed and
+       the button sits on "Generating..." with no error, which is exactly the
+       silence that cost an evening to chase. Counted rather than eyeballed,
+       so a fetch added later without one fails here. */
+    const src = read('supabase', 'functions', 'gemini-draft', 'index.ts');
+    const fetches = (src.match(/await fetch\(/g) || []).length;
+    const deadlines = (src.match(/AbortSignal\.timeout\(/g) || []).length;
+    assert.ok(fetches > 0, 'the slice found no outbound calls at all');
+    assert.strictEqual(deadlines, fetches,
+      fetches + ' outbound calls but only ' + deadlines + ' deadlines — one can hang forever');
+    assert.ok(/GEMINI_TIMEOUT_MS = 45000/.test(src), 'the Google deadline is not 45s');
+    // And a deadline reached must be reported as one, not as a hang.
+    assert.ok(/'TimeoutError'/.test(src) && /\b504\b/.test(src),
+      'a timed-out draft does not come back as an error the person can read');
+  });
+
   test('the assistant’s own AI switch is a separate decision', () => {
     /* Two features, two switches. ghost-assistant requires
        ASSISTANT_AI_ENABLED === 'true' AND a key, because a key being present

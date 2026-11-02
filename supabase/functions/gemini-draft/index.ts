@@ -40,6 +40,20 @@ const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')!;
 const GEMINI_MODEL = 'gemini-flash-latest';
 
+/* Deadlines on every outbound call, matching ghost-assistant's.
+ *
+ * The first real draft on this account took 92 SECONDS: the function's own
+ * reads all finished inside 600ms and the rest was Google. There was no
+ * timeout on that fetch, so a slow or wedged Gemini call hangs until the
+ * worker is reclaimed -- and the button sits on "Generating..." with no
+ * error, which is precisely the symptom that cost an evening to chase
+ * earlier today. A second way to produce it is not worth keeping.
+ *
+ * The two Supabase calls had no deadline either. They are fast, but a hang
+ * there is the same silence from a different direction. */
+const GEMINI_TIMEOUT_MS = 45000;
+const SUPABASE_TIMEOUT_MS = 10000;
+
 // Called from the browser via supabase-js, which is a cross-origin fetch
 // (the app runs on its own domain, the function on *.functions.supabase.co) —
 // the browser sends a CORS preflight OPTIONS request first and silently
@@ -67,7 +81,17 @@ Deno.serve(async (req) => {
   const callerToken = authHeader.replace(/^Bearer\s+/i, '');
   const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` },
-  });
+    signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS),
+  }).catch(() => null);
+  /* Distinguished from "not signed in" on purpose: a check that could not be
+     made is not a caller who failed it, and telling somebody they are signed
+     out when the auth service was slow sends them to re-authenticate for no
+     reason. Still refuses, either way. */
+  if (!userRes) {
+    return jsonResponse({
+      error: 'Could not check who you are just now, so nothing was drafted. Try again.',
+    }, 503);
+  }
   const who = userRes.ok ? await userRes.json().catch(() => null) : null;
   const userId = who?.id;
   if (!userId) {
@@ -92,7 +116,8 @@ Deno.serve(async (req) => {
   const setRes = await fetch(
     `${SUPABASE_URL}/rest/v1/app_settings?user_id=eq.${encodeURIComponent(userId)}` +
     `&select=ai_drafting_enabled&limit=1`,
-    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` } },
+    { headers: { apikey: ANON_KEY, Authorization: `Bearer ${callerToken}` },
+      signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS) },
   ).catch(() => null);
   const settings = setRes && setRes.ok
     ? ((await setRes.json().catch(() => [])) || [])[0] : null;
@@ -263,17 +288,34 @@ Deno.serve(async (req) => {
   }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // thinkingBudget:0 — without it this model can spend its whole output
-    // budget on internal "thinking" and return finishReason STOP with empty
-    // visible text; not needed for a short texting-voice draft anyway.
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      // thinkingBudget:0 — without it this model can spend its whole output
+      // budget on internal "thinking" and return finishReason STOP with empty
+      // visible text; not needed for a short texting-voice draft anyway.
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
+      }),
+    });
+  } catch (e) {
+    /* A deadline, reported as one. The prompt went to Google and no draft
+       came back; nothing was sent to the contact, and nothing was stored. */
+    const name = e instanceof Error ? e.name : '';
+    const timedOut = name === 'TimeoutError' || name === 'AbortError';
+    console.error('Gemini unreachable (%s): %s', name,
+      e instanceof Error ? e.message : String(e));
+    return jsonResponse({
+      error: timedOut
+        ? 'Google did not answer within 45 seconds, so no draft was written. '
+          + 'Nothing was sent to anybody — try again.'
+        : 'Google could not be reached, so no draft was written.',
+    }, 504);
+  }
 
   const json = await res.json();
   if (!res.ok) {
