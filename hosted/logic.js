@@ -6414,14 +6414,36 @@ function reviewMessage(state, clientId, msgIndex, didReply){
     if(vCur && !stats.textHash) stats.textHash = variantTextHash(vCur.text);
   }
 
-  if(!m.reviewed){
-    m.reviewed = true;
-    if(stats){
-      stats.sends++;
-      if(didReply) stats.responses++;
-    }
-  } else if(stats && didReply !== m.responded){
-    stats.responses = Math.max(0, stats.responses + (didReply ? 1 : -1));
+  /* A send this Mac was watching for and never saw go out teaches the bandit
+     nothing, so it must not enter its denominator either.
+
+     computeVariantPerformance already refuses these -- the panel and the
+     chooser were disagreeing about the same sends, with the panel honest and
+     the bandit still being told a wording had been rejected 37 times over
+     texts that never left. pickVariant reads (responses+1)/(sends+2), so a
+     phantom send is a thumb on the scale against whichever wording happened
+     to carry it.
+
+     A REPLY always counts, whatever the receipts say: somebody answering is
+     proof the text arrived. And 'unknowable' sends count too -- on a number
+     this Mac cannot read, the text almost certainly went, and dropping those
+     would starve the chooser of most of its evidence.
+
+     Whether a send is in the counters is DERIVED, never stored. counts() is a
+     function of the verdict, so flipping an answer later recomputes both
+     sides and adjusts by the difference. A stored "I counted this one" flag
+     would be a fourth place for these numbers to disagree. */
+  var silence = sendSilence(client, m);
+  function counts(replied){ return !!replied || silence !== 'not_seen'; }
+  var wasCounted = !!m.reviewed && counts(m.responded);
+  var wasReplied = !!m.reviewed && !!m.responded;
+
+  m.reviewed = true;
+  if(stats){
+    if(counts(didReply) && !wasCounted) stats.sends++;
+    else if(wasCounted && !counts(didReply)) stats.sends = Math.max(0, stats.sends - 1);
+    if(didReply && !wasReplied) stats.responses++;
+    else if(!didReply && wasReplied) stats.responses = Math.max(0, stats.responses - 1);
   }
 
   m.responded = didReply;

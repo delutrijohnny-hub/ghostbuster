@@ -1476,6 +1476,121 @@ test('changing the answer moves responses but never double-counts the send', () 
   assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
 });
 
+/* The chooser's counters, which were disagreeing with the panel.
+   computeVariantPerformance already refuses a send this Mac never saw go out;
+   reviewMessage was still telling pickVariant that the wording had been
+   rejected. `seen` gives a contact a confirmed send the agent placed, which is
+   what makes their thread readable here. */
+function clientSeenByAgent(extra) {
+  const c = freshClient(Object.assign({ callDateTime: isoDaysFromNow(2) }, extra || {}));
+  c.messageLog.push({
+    id: 'ev', stage: 'custom', variantId: 'custom', text: 'typed by hand',
+    sentAt: isoDaysAgo(3), responded: false, reviewed: true, channel: 'sms',
+    providerId: 'imsg:AAA', deliveryStatus: 'delivered'
+  });
+  return c;
+}
+
+test('a send this Mac never saw go out teaches the chooser nothing', () => {
+  const state = GB.buildDefaultState();
+  const c = clientSeenByAgent();
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  const idx = c.messageLog.length - 1;
+  assert.strictEqual(GB.sendSilence(c, c.messageLog[idx]), 'not_seen', 'fixture is not a silence');
+  GB.reviewMessage(state, c.id, idx, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 0,
+    'the bandit was told a wording failed on a text that never left');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 0);
+  assert.strictEqual(state.clients[c.id].messageLog[idx].reviewed, true,
+    'it must still stop nagging');
+});
+
+test('a reply counts the send even when the Mac never saw it', () => {
+  // Somebody answering is proof the text arrived, whatever the receipts say.
+  const state = GB.buildDefaultState();
+  const c = clientSeenByAgent();
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  const idx = c.messageLog.length - 1;
+  GB.reviewMessage(state, c.id, idx, true);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1);
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
+});
+
+test('correcting a silent send to "replied" adds the send back, once', () => {
+  /* The transition that a stored "already counted" flag would have got
+     wrong. First answer: no reply, and the send stays out. Corrected to
+     replied: the send is now proven, so it joins -- and only once. */
+  const state = GB.buildDefaultState();
+  const c = clientSeenByAgent();
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  const idx = c.messageLog.length - 1;
+  GB.reviewMessage(state, c.id, idx, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 0);
+  GB.reviewMessage(state, c.id, idx, true);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1, 'the proven send never joined');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
+  GB.reviewMessage(state, c.id, idx, true);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1, 'counted twice');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 1);
+});
+
+test('correcting "replied" back to no reply removes the silent send again', () => {
+  const state = GB.buildDefaultState();
+  const c = clientSeenByAgent();
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  const idx = c.messageLog.length - 1;
+  GB.reviewMessage(state, c.id, idx, true);
+  GB.reviewMessage(state, c.id, idx, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 0,
+    'the send stayed in the counters with no evidence it ever went');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 0);
+  // And never below zero, however many times somebody changes their mind.
+  GB.reviewMessage(state, c.id, idx, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 0);
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 0);
+});
+
+test('on a number this Mac cannot read, the chooser still learns', () => {
+  /* The opposite error. Those texts almost certainly went, and dropping them
+     would starve the chooser of most of its evidence. */
+  const state = GB.buildDefaultState();
+  const c = freshClient({ callDateTime: isoDaysFromNow(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  assert.strictEqual(GB.sendSilence(c, c.messageLog[0]), 'unknowable');
+  GB.reviewMessage(state, c.id, 0, false);
+  assert.strictEqual(state.variantStats.welcome[v.id].sends, 1,
+    'an unknowable send was discarded as if it had never been sent');
+  assert.strictEqual(state.variantStats.welcome[v.id].responses, 0);
+});
+
+test('the panel and the chooser agree about the same send', () => {
+  /* They disagreed, and that is the whole point of this change: the panel
+     refused these sends while the bandit counted them. */
+  const state = GB.buildDefaultState();
+  const c = clientSeenByAgent({ status: 'Completed', callDateTime: isoDaysAgo(2) });
+  state.clients[c.id] = c;
+  const v = GB.pickVariant(state, 'welcome', c);
+  GB.markSent(state, c.id, 'welcome', GB.renderTemplate(v.text, c, state.senderName));
+  const idx = c.messageLog.length - 1;
+  GB.reviewMessage(state, c.id, idx, false);
+  const g = GB.computeVariantPerformance(state, new Date()).find(x => x.stage === 'welcome');
+  const row = g && g.rows.find(r => r.variantId === v.id);
+  const panelSends = row ? row.sends : 0;
+  assert.strictEqual(panelSends, state.variantStats.welcome[v.id].sends,
+    'the panel says ' + panelSends + ' sends and the chooser says ' +
+    state.variantStats.welcome[v.id].sends);
+});
+
 test('hand-edited text carries no template stats but still reviews clean', () => {
   const state = GB.buildDefaultState();
   const c = freshClient({ callDateTime: isoDaysFromNow(2) });
