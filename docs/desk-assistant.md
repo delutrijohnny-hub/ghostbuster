@@ -120,12 +120,14 @@ rolled-back transaction, as a signed-in user in no org:
 
 ## Setup
 
-1. **Apply `supabase/migrations/20261104010000_todos_client_and_due.sql`.**
-   Additive and nullable: `todos.client_id` and `todos.due_at`, no RLS change.
-   **It is not applied.** The feature works without it — the insert falls back
-   to omitting those two columns, and the date is written into the task text
-   either way — so applying it adds sorting and the contact link and changes
-   nothing else.
+1. ~~Apply `todos_client_and_due`.~~ **Done** — applied 2026-11-04 as remote
+   version `20261104013414`. `todos.client_id` and `todos.due_at`, both
+   nullable, `ON DELETE SET NULL`, no RLS change. Verified in a rolled-back
+   transaction: the owner can write a task linked to a contact, an outsider
+   cannot, and a retry carrying the same `id` is refused `23505` — the
+   idempotency guarantee checked against the real database rather than a
+   stub. (`todos.id` has no default, so the caller supplies it; the Desk
+   Assistant already does, which is what makes that retry safe.)
 2. Deploy the hosted assets. `desk.js`, `desk.css` and `app.html` are new or
    changed; `logic.js` changed, so the Edge Functions that bundle it want a
    redeploy on the usual terms.
@@ -159,6 +161,18 @@ rolled-back transaction, as a signed-in user in no org:
 - Speech recognition and synthesis are the browser's. Where either is missing
   the panel says so and the written brief and typed recap carry the whole
   flow — verified with both disabled.
+- **`supabase db push` does not work on this repo**, and the fix the CLI
+  suggests would make it worse. The remote history holds 46 versions with no
+  local file, because migrations applied through the Supabase connector get
+  clock-based version numbers while the files hand-written here use round
+  ones — so the same change exists twice under two numbers, for example
+  remote `20261102145321 client_facts` and local
+  `20261102040000_client_facts.sql`. Running
+  `supabase migration repair --status reverted …` on those 46 would record
+  genuinely-applied migrations as reverted, and the next push would try to
+  re-create objects that already exist. Until the two histories are
+  reconciled — its own job — apply DDL directly and name the repo file after
+  the version the remote assigns, as the two newest files do.
 - `docs/assistant-pilot.md` is stale: it says nothing is live and sits on a
   branch, but `ghost-assistant` is deployed and enrolled, and
   `reserve_assistant_run` is **not** `SECURITY DEFINER` as that doc claims

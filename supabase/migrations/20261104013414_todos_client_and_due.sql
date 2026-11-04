@@ -1,10 +1,15 @@
 /* A task that knows who it is about and when it is due.
  *
- * NOT YET APPLIED. Written for an operator to run; see docs/desk-assistant.md.
+ * Applied to production 2026-11-04 as `todos_client_and_due`. The filename
+ * carries the REMOTE version number so the repo and
+ * supabase_migrations.schema_migrations agree about this change -- most of
+ * the older pairs do not, which is why `supabase db push` cannot be used on
+ * this repo until that history is reconciled.
+ *
  * The Desk Assistant works without it -- the proposed date is always written
  * into `text` as well, and the insert falls back to omitting these two columns
- * if the database does not have them yet -- so applying this adds sorting and
- * the contact link, and changes nothing else.
+ * if the database does not have them -- so this added sorting and the contact
+ * link, and changed nothing else.
  *
  * todos was a flat checklist: id, user_id, text, done, created_at, done_at,
  * org_id. That is enough for "ring the plumber" and not enough for the thing a
