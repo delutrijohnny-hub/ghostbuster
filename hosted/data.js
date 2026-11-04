@@ -1066,6 +1066,58 @@ async function loadState(){
     });
   });
 
+  /* What is known about each contact, one checkable fact at a time.
+     Objections, goals, budgets, promises, preferences, timing, next actions.
+
+     Org-scoped by RLS like the notes above, because a teammate covering a
+     call needs to know what the contact already objected to. Degrades to no
+     facts rather than failing the load: a missing table means this account
+     has never recorded one, which is the normal state for every account
+     until today and not an error.
+
+     'proposed' rows are fetched too, and deliberately. factDigest counts
+     them as waiting rather than known, and the queue of things to accept is
+     only visible if they are loaded -- filtering them out here would hide
+     the review step that the whole approval rule exists to create.
+
+     A fact superseded a year ago is still worth reading, so this is not
+     filtered by status. It IS capped, and ordered newest-first, so a book
+     with a long history loads the facts that still matter: the cap can only
+     ever drop the oldest, which are the ones already closed. */
+  var factsRes = await sb.from('client_facts')
+    .select('id, client_id, user_id, kind, body, status, confidence, origin, '
+      + 'source_kind, source_id, source_at, approved_by, approved_at, '
+      + 'superseded_by, created_at, updated_at')
+    .order('created_at', {ascending: false})
+    .limit(4000);
+  ((factsRes && factsRes.data) || []).forEach(function(row){
+    if(!row || !row.client_id || !state.clients[row.client_id]) return;
+    var c = state.clients[row.client_id];
+    c.facts = c.facts || [];
+    c.facts.push({
+      id: row.id ? String(row.id) : null,
+      clientId: row.client_id,
+      kind: row.kind,
+      body: row.body || '',
+      status: row.status,
+      confidence: row.confidence,
+      origin: row.origin,
+      sourceKind: row.source_kind || null,
+      sourceId: row.source_id || '',
+      sourceAt: row.source_at || null,
+      approvedBy: row.approved_by || '',
+      approvedAt: row.approved_at || null,
+      supersededBy: row.superseded_by || null,
+      userId: row.user_id || '',
+      /* Same names the notes use, from app_settings.sender_name. A fact
+         whose author RLS withholds still shows -- unattributed beats
+         invisible, because the fact is the useful part. */
+      author: (state.teamNames && state.teamNames[row.user_id]) || '',
+      createdAt: row.created_at,
+      updatedAt: row.updated_at || null
+    });
+  });
+
   /* Per-contact wording for a cadence touch.
 
      Degrades to no overrides rather than failing the load: a missing table

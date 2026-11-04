@@ -2519,6 +2519,7 @@ function stashDraft(){
   var b = el('msgx-email'); if(b) d.body = b.value;
   var j = el('msgx-subj');  if(j) d.subject = j.value;
   var n = el('msgx-note');  if(n) d.note = n.value;
+  var f = el('mx-fbody');   if(f) d.fact = f.value;
   var anything = Object.keys(d).some(function(x){ return (d[x] || '').trim(); });
   if(anything) UI.drafts[k] = d; else delete UI.drafts[k];
 }
@@ -2533,6 +2534,7 @@ function restoreDraft(){
   var b = el('msgx-email'); if(b && d.body !== undefined) b.value = d.body;
   var j = el('msgx-subj');  if(j && d.subject !== undefined) j.value = d.subject;
   var n = el('msgx-note');  if(n && d.note !== undefined) n.value = d.note;
+  var f = el('mx-fbody');   if(f && d.fact !== undefined) f.value = d.fact;
 }
 
 function clearDraft(cid, chan){
@@ -2891,6 +2893,9 @@ function renderMsgxThread(){
     '</div>' +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
     msgxTouchPanel(c, new Date()) +
+    /* Above the composer, below the touch panel: what you know comes before
+       what you are about to say about it. */
+    msgxFactsPanel(c) +
     '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>' +
     /* Working the list is the point: deal with one, move to the next,
        without going back to hunt for where you were. */
@@ -5530,7 +5535,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261102-nevertexted';
+var BUILD_STAMP = '20261103-knownfacts';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -7170,6 +7175,51 @@ document.addEventListener('click', function(ev){
     case 'msgx-add-note':
       doAddNote(cid, target);
       break;
+    /* The facts panel. Each case is one write, except edit and cancel, which
+       only change what is on screen. */
+    case 'fact-add':
+      doAddFact(cid, target);
+      break;
+    case 'fact-edit':
+      UI.factEdit = target.getAttribute('data-fid');
+      renderMsgxThread();
+      break;
+    case 'fact-cancel':
+      UI.factEdit = null;
+      renderMsgxThread();
+      break;
+    case 'fact-save':
+      doSaveFact(cid, target.getAttribute('data-fid'), target);
+      break;
+    case 'fact-resolve':
+      factWrite(cid, target.getAttribute('data-fid'), {status: 'resolved'},
+        target, 'Resolved', function(){ showToast('Settled. It is kept, not deleted.'); });
+      break;
+    case 'fact-reject':
+      /* 'rejected', not deleted. A fact that turned out to be wrong is worth
+         keeping: it is the record of a wrong belief somebody acted on. */
+      factWrite(cid, target.getAttribute('data-fid'), {status: 'rejected'},
+        target, 'Wrong', function(){ showToast('Marked wrong. It stays in the history.'); });
+      break;
+    case 'fact-reopen':
+      factWrite(cid, target.getAttribute('data-fid'), {status: 'active'},
+        target, 'Still true', function(){ showToast('Back to current.'); });
+      break;
+    case 'fact-accept':
+      /* The approval rule, as one write. client_facts_ai_needs_approval
+         refuses an assistant fact that claims to be current with no
+         approval recorded, so these two columns travel together or the
+         database rejects the row. */
+      factWrite(cid, target.getAttribute('data-fid'),
+        {status: 'active', approved_at: nowISO(), approved_by: STATE.userId},
+        target, 'Accept', function(){ showToast('Accepted. It counts from now on.'); });
+      break;
+    case 'fact-replace':
+      doReplaceFact(cid, target.getAttribute('data-fid'), target);
+      break;
+    case 'fact-history':
+      doFactHistory(cid, target.getAttribute('data-fid'), target);
+      break;
     case 'msgx-draft':
       doDraftReply(cid, target);
       break;
@@ -8410,6 +8460,360 @@ function doDraftReply(cid, target){
     if(target){ target.disabled = false; target.textContent = label; }
     showToast('Could not write a draft \u2014 ' + (e && e.message ? e.message : 'try again') + '.');
   });
+}
+
+/* ============================================================
+   WHAT WE KNOW, and the handful of things you can do to it
+   ============================================================
+
+   Stage 1 of the AI work, with NO AI IN IT. A salesperson records an
+   objection, rewords it, resolves it and reads the history, and nothing
+   proposes anything. That order is deliberate: the approval rule, the
+   provenance and the revision history are worth nothing if they are only
+   ever exercised by a model, because then the first time anybody tests them
+   is the first time they matter.
+
+   Every button here maps to one write. Nothing is inferred, nothing is
+   summarised, and a fact somebody else wrote is shown but not editable --
+   RLS allows UPDATE only to the author, so offering the button would be
+   offering a click that fails. */
+
+/* Which of a fact's buttons this person may actually press.
+
+   The author, and only the author. The read policy is the whole org so a
+   teammate's objection is visible -- that is the point of shared contacts --
+   but the write policies are `user_id = auth.uid()`, and a UI that renders
+   Resolve for a row the database will refuse is a UI that lies twice: once
+   when it offers, once when it silently fails. */
+function canEditFact(f){
+  return !!(f && f.userId && STATE.userId && f.userId === STATE.userId);
+}
+
+function factMetaLine(f){
+  var bits = [];
+  /* Confidence first, because it changes how everything after it reads. */
+  bits.push(f.confidence === 'inferred' ? 'inferred' : 'stated');
+  if(f.origin === 'ai') bits.push('proposed by the assistant');
+  if(f.author) bits.push(f.author);
+  if(f.daysAgo !== null && f.daysAgo !== undefined) bits.push(briefAge(f.daysAgo));
+  if(f.sourceKind) bits.push('from a ' + f.sourceKind);
+  return bits.join(' \u00b7 ');
+}
+
+function factRow(c, f, opts){
+  opts = opts || {};
+  var editing = UI.factEdit === f.id;
+  var mine = canEditFact(f);
+  var cid = escapeHtml(c.id), fid = escapeHtml(f.id || '');
+
+  var body = editing
+    ? '<textarea class="mx-fedit" id="mx-fedit" rows="2">' + escapeHtml(f.body) + '</textarea>'
+    : '<div class="mx-fb">' + escapeHtml(f.body) + '</div>';
+
+  var acts = [];
+  function btn(action, label, cls){
+    return '<button class="linkish' + (cls ? ' ' + cls : '') + '" data-action="' + action +
+      '" data-cid="' + cid + '" data-fid="' + fid + '">' + label + '</button>';
+  }
+  if(editing){
+    acts.push(btn('fact-save', 'Save'));
+    acts.push(btn('fact-cancel', 'Cancel'));
+  } else if(mine){
+    if(opts.pending){
+      /* Accept is the whole approval rule, as one button. The database
+         refuses to let an assistant-written fact be active without this,
+         so this click is not a formality -- it is the only way the row
+         ever counts. */
+      acts.push(btn('fact-accept', 'Accept', 'mx-fyes'));
+      acts.push(btn('fact-reject', 'Not true'));
+      acts.push(btn('fact-edit', 'Reword'));
+    } else if(f.status === 'active'){
+      acts.push(btn('fact-resolve', 'Resolved'));
+      acts.push(btn('fact-edit', 'Reword'));
+      acts.push(btn('fact-replace', 'Replace'));
+      acts.push(btn('fact-reject', 'Wrong'));
+    } else {
+      acts.push(btn('fact-reopen', 'Still true'));
+    }
+  }
+  acts.push(btn('fact-history', 'History'));
+
+  return '<div class="mx-fact' + (f.status === 'active' ? '' : ' closed') +
+      (f.confidence === 'inferred' ? ' guessed' : '') + '" data-fid="' + fid + '">' +
+    '<div class="mx-fk">' + escapeHtml(f.kindLabel) +
+      (f.status !== 'active' && !opts.pending ? ' \u00b7 ' + escapeHtml(f.status) : '') + '</div>' +
+    body +
+    '<div class="mx-fm">' + escapeHtml(factMetaLine(f)) + '</div>' +
+    '<div class="mx-fa">' + acts.join('') + '</div>' +
+    '<div class="mx-fh" id="mx-fh-' + fid + '"></div>' +
+  '</div>';
+}
+
+function msgxFactsPanel(c){
+  var d = factDigest(c, new Date());
+
+  /* Open when there is something unresolved pointing at you, or when two
+     facts disagree. Collapsed when it is just a tidy list -- the panel
+     earns the space by having something in it that changes the call. */
+  var openNow = !!(d.owed.length || d.contradictions.length || d.counts.pending);
+
+  var out = [];
+
+  d.contradictions.forEach(function(x){
+    out.push('<div class="mx-fwarn">' + escapeHtml(x.limit) + '</div>');
+  });
+
+  if(d.pending.length){
+    out.push('<div class="mx-fsec"><strong>Waiting on you</strong>' +
+      d.pending.map(function(f){ return factRow(c, f, {pending: true}); }).join('') +
+      '</div>');
+  }
+
+  if(d.live.length){
+    out.push('<div class="mx-fsec">' +
+      d.live.map(function(f){ return factRow(c, f); }).join('') + '</div>');
+  } else if(!d.counts.total){
+    out.push('<div class="mx-fnone">Nothing recorded yet. An empty list means ' +
+      'nobody wrote one down \u2014 not that there is nothing to know.</div>');
+  }
+
+  if(d.closed.length){
+    /* Kept, not hidden: "we talked them out of the price worry in March" is
+       worth knowing before quoting a price again, and a deleted row cannot
+       say it. */
+    out.push('<details class="mx-fclosed"><summary>' + d.closed.length +
+      (d.closed.length === 1 ? ' settled' : ' settled') + '</summary>' +
+      d.closed.map(function(f){ return factRow(c, f); }).join('') + '</details>');
+  }
+
+  out.push('<details class="mx-faddwrap"><summary>Record something</summary>' +
+    '<div class="mx-fadd">' +
+      '<select id="mx-fkind" class="lib-input">' +
+        FACT_KINDS.map(function(k){
+          return '<option value="' + escapeHtml(k.id) + '">' + escapeHtml(k.label) + '</option>';
+        }).join('') +
+      '</select>' +
+      '<textarea id="mx-fbody" rows="2" placeholder="One thing, in their words if you have them\u2026"></textarea>' +
+      '<label class="mx-fguess"><input type="checkbox" id="mx-finferred"> ' +
+        'I am inferring this \u2014 they did not say it</label>' +
+      '<div class="row">' +
+        '<button class="btn btn-sm btn-note" data-action="fact-add" data-cid="' +
+          escapeHtml(c.id) + '">Record</button>' +
+        '<span class="msgx-sub">' + escapeHtml(firstName(c.name)) +
+          ' never sees this. It shows in their pre-call brief.</span>' +
+      '</div>' +
+    '</div></details>');
+
+  var flag = d.contradictions.length
+    ? '<span class="mx-fbad">' + d.contradictions.length + ' disagree</span>'
+    : (d.counts.pending ? '<span class="mx-fbad">' + d.counts.pending + ' to accept</span>' : '');
+
+  return '<details class="mx-facts"' + (openNow ? ' open' : '') + '>' +
+    '<summary>What we know' +
+      (d.counts.active ? ' <span class="mx-fn">' + d.counts.active + '</span>' : '') +
+      flag + '</summary>' + out.join('') + '</details>';
+}
+
+/* ------------------------------------------------------------ the six writes
+
+   One PATCH or one INSERT each, and then STATE is updated in place rather
+   than reloaded: a reload here would cost the whole book to change one
+   sentence, and the row that came back is the row that was written.
+
+   The revision history is NOT written from here. A database trigger records
+   the previous body, status and origin on every meaningful UPDATE, which is
+   the only version of this that cannot be skipped -- by this code, by an
+   Edge Function, or by the extraction pass that does not exist yet. */
+function factById(c, fid){
+  return (c.facts || []).filter(function(f){ return f.id === fid; })[0] || null;
+}
+
+function factWrite(cid, fid, patch, target, label, done){
+  var c = STATE.clients[cid];
+  var row = c && factById(c, fid);
+  if(!row){ showToast('That fact is no longer here \u2014 try reloading.'); return; }
+  if(target){ target.disabled = true; target.textContent = 'Saving\u2026'; }
+
+  window.GB_SUPABASE.from('client_facts').update(patch).eq('id', fid)
+    .select('id, body, status, origin, confidence, superseded_by, approved_at, approved_by, updated_at')
+    .then(function(res){
+      if(target){ target.disabled = false; target.textContent = label; }
+      if(res && res.error){
+        /* Named, not swallowed. The commonest cause is somebody else's
+           fact: the read policy is the org, the write policy is the author,
+           and canEditFact is meant to have hidden the button already. */
+        showToast('Could not change that \u2014 ' +
+          (res.error.message || 'it may not be yours to edit') + '.');
+        return;
+      }
+      /* The returned row, not the patch: the trigger may have changed more
+         than was asked for -- a reworded assistant fact comes back owned by
+         the person who reworded it. */
+      var back = (res && res.data && res.data[0]) || patch;
+      row.body = back.body !== undefined ? back.body : row.body;
+      row.status = back.status !== undefined ? back.status : row.status;
+      row.origin = back.origin !== undefined ? back.origin : row.origin;
+      row.confidence = back.confidence !== undefined ? back.confidence : row.confidence;
+      row.supersededBy = back.superseded_by !== undefined ? back.superseded_by : row.supersededBy;
+      row.approvedAt = back.approved_at !== undefined ? back.approved_at : row.approvedAt;
+      row.updatedAt = back.updated_at || row.updatedAt;
+      if(done) done(row);
+      renderMsgxThread();
+    }, function(){
+      if(target){ target.disabled = false; target.textContent = label; }
+      showToast('Could not change that \u2014 try again.');
+    });
+}
+
+function doAddFact(cid, target){
+  var c = STATE.clients[cid];
+  if(!c) return;
+  var kindSel = el('mx-fkind'), bodyBox = el('mx-fbody'), guess = el('mx-finferred');
+  var kind = kindSel && kindSel.value;
+  var body = bodyBox && bodyBox.value.trim();
+  if(!body){ showToast('Nothing to record yet.'); return; }
+  if(!factKind(kind)){ showToast('Pick what kind of thing that is.'); return; }
+  if(!STATE.userId || !STATE.orgId){
+    // org_id is NOT NULL and the insert would be refused. Saying so beats a
+    // silent failure that looks like it saved.
+    showToast('Could not tell which account you are in \u2014 try reloading.');
+    return;
+  }
+
+  if(target){ target.disabled = true; target.textContent = 'Saving\u2026'; }
+  /* source_kind 'manual' and no source_id: somebody typed this, and saying
+     so is the honest provenance. A fact with no source at all is the one
+     Stage 3 will refuse from a model; from a person it is normal. */
+  window.GB_SUPABASE.from('client_facts')
+    .insert({client_id: cid, user_id: STATE.userId, org_id: STATE.orgId,
+             kind: kind, body: body,
+             confidence: (guess && guess.checked) ? 'inferred' : 'stated',
+             origin: 'human', source_kind: 'manual', source_at: nowISO()})
+    .select('id, created_at, updated_at')
+    .then(function(res){
+      if(target){ target.disabled = false; target.textContent = 'Record'; }
+      if(res && res.error){ showToast('Could not record that.'); return; }
+      var back = (res.data && res.data[0]) || {};
+      c.facts = c.facts || [];
+      c.facts.push({
+        id: back.id ? String(back.id) : uid(), clientId: cid, kind: kind, body: body,
+        status: 'active', confidence: (guess && guess.checked) ? 'inferred' : 'stated',
+        origin: 'human', sourceKind: 'manual', sourceId: '', sourceAt: nowISO(),
+        approvedAt: null, approvedBy: '', supersededBy: null,
+        userId: STATE.userId,
+        author: (STATE.teamNames && STATE.teamNames[STATE.userId]) || STATE.senderName || '',
+        createdAt: back.created_at || nowISO(), updatedAt: back.updated_at || null
+      });
+      if(bodyBox) bodyBox.value = '';
+      if(guess) guess.checked = false;
+      renderMsgxThread();
+      showToast('Recorded. It will show in the brief before your next call.');
+    }, function(){
+      if(target){ target.disabled = false; target.textContent = 'Record'; }
+      showToast('Could not record that.');
+    });
+}
+
+function doSaveFact(cid, fid, target){
+  var box = el('mx-fedit');
+  var body = box && box.value.trim();
+  if(!body){ showToast('A fact cannot be blank \u2014 use Wrong to retire it.'); return; }
+  var c = STATE.clients[cid];
+  var row = c && factById(c, fid);
+  if(row && row.body === body){ UI.factEdit = null; renderMsgxThread(); return; }
+  factWrite(cid, fid, {body: body}, target, 'Save', function(){
+    UI.factEdit = null;
+    showToast('Reworded. The old wording is in its history.');
+  });
+}
+
+/* Replace, rather than edit, when the new thing contradicts the old one.
+ *
+ * Two writes: the replacement goes in first, because it needs an id before
+ * anything can point at it. If the second write fails, BOTH facts are left
+ * active -- and that is the better failure, because factContradictions
+ * notices two current facts of a single-valued kind and says so at the top
+ * of this panel. A half-finished replace is visible; a lost one is not. */
+function doReplaceFact(cid, fid, target){
+  var c = STATE.clients[cid];
+  var old = c && factById(c, fid);
+  if(!old) return;
+  var body = window.prompt('What is true now instead?\n\nThe old one is kept and '
+    + 'linked, not deleted:\n\u201c' + old.body + '\u201d', '');
+  if(body === null) return;
+  body = String(body).trim();
+  if(!body){ showToast('Nothing to replace it with.'); return; }
+  if(!STATE.userId || !STATE.orgId){
+    showToast('Could not tell which account you are in \u2014 try reloading.');
+    return;
+  }
+
+  if(target){ target.disabled = true; target.textContent = 'Saving\u2026'; }
+  window.GB_SUPABASE.from('client_facts')
+    .insert({client_id: cid, user_id: STATE.userId, org_id: STATE.orgId,
+             kind: old.kind, body: body, confidence: old.confidence,
+             origin: 'human', source_kind: 'manual', source_at: nowISO()})
+    .select('id, created_at')
+    .then(function(res){
+      if(target){ target.disabled = false; target.textContent = 'Replace'; }
+      if(res && res.error || !res.data || !res.data[0]){
+        showToast('Could not record the new one \u2014 nothing was changed.');
+        return;
+      }
+      var back = res.data[0];
+      c.facts.push({
+        id: String(back.id), clientId: cid, kind: old.kind, body: body,
+        status: 'active', confidence: old.confidence, origin: 'human',
+        sourceKind: 'manual', sourceId: '', sourceAt: nowISO(),
+        approvedAt: null, approvedBy: '', supersededBy: null,
+        userId: STATE.userId,
+        author: (STATE.teamNames && STATE.teamNames[STATE.userId]) || STATE.senderName || '',
+        createdAt: back.created_at || nowISO(), updatedAt: null
+      });
+      renderMsgxThread();
+      factWrite(cid, fid, {status: 'superseded', superseded_by: String(back.id)},
+        null, '', function(){
+          showToast('Replaced. The old one is kept, linked to the new.');
+        });
+    }, function(){
+      if(target){ target.disabled = false; target.textContent = 'Replace'; }
+      showToast('Could not record the new one \u2014 nothing was changed.');
+    });
+}
+
+/* What this fact used to say, read on demand.
+ *
+ * Fetched per fact rather than loaded with the book: a thousand contacts'
+ * revisions is a lot of rows to carry so that somebody can occasionally ask
+ * one question. Append-only in the database -- there is no UPDATE or DELETE
+ * policy on the table -- so what comes back cannot have been tidied. */
+function doFactHistory(cid, fid, target){
+  var slot = el('mx-fh-' + fid);
+  if(!slot) return;
+  if(slot.innerHTML){ slot.innerHTML = ''; return; }
+  slot.innerHTML = '<div class="mx-fm">Reading\u2026</div>';
+  window.GB_SUPABASE.from('client_fact_revisions')
+    .select('at, actor, was_body, was_status, was_origin, note')
+    .eq('fact_id', fid).order('at', {ascending: false}).limit(50)
+    .then(function(res){
+      if(res && res.error){ slot.innerHTML = '<div class="mx-fm">Could not read its history.</div>'; return; }
+      var rows = res.data || [];
+      if(!rows.length){
+        slot.innerHTML = '<div class="mx-fm">Never changed since it was recorded.</div>';
+        return;
+      }
+      slot.innerHTML = '<div class="mx-fhist">' + rows.map(function(r){
+        var who = (STATE.teamNames && STATE.teamNames[r.actor]) || '';
+        return '<div class="mx-fhrow"><span class="mx-fm">' +
+          escapeHtml(fmtDate(safeDate(r.at) || new Date(), STATE.myTimezone || 'America/New_York')) +
+          (who ? ' \u00b7 ' + escapeHtml(who) : '') +
+          (r.note ? ' \u00b7 ' + escapeHtml(r.note) : '') + '</span>' +
+          '<div>was: \u201c' + escapeHtml(r.was_body || '') + '\u201d' +
+          (r.was_origin === 'ai' ? ' <em>(the assistant\u2019s wording)</em>' : '') + '</div></div>';
+      }).join('') + '</div>';
+    }, function(){
+      slot.innerHTML = '<div class="mx-fm">Could not read its history.</div>';
+    });
 }
 
 /* Adding an internal note.

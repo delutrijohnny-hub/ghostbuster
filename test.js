@@ -2021,6 +2021,146 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+/* The fact lists live in logic.js AND in a database CHECK, which is the exact
+   shape of the 'revival' outage above: a kind logic.js can produce and the
+   constraint refuses does not fail that row, it fails the whole batched save.
+   Parsed out of the migration rather than copied here, so the test cannot
+   agree with a stale copy of the list it is checking. */
+{
+  const factSql = fs.readFileSync(path.join(__dirname, 'supabase', 'migrations',
+    '20261102040000_client_facts.sql'), 'utf8');
+
+  function allowed(column){
+    const m = factSql.match(new RegExp('check \\(' + column + ' in \\(([^)]+)\\)\\)'));
+    assert.ok(m, 'no ' + column + ' constraint found in the client_facts migration');
+    return new Set(m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')));
+  }
+
+  const kinds = allowed('kind');
+  const produced = GB.FACT_KINDS.map(k => k.id);
+  assert.deepStrictEqual(produced.filter(k => !kinds.has(k)), [],
+    'logic.js can produce fact kind(s) the database will reject, which fails the whole save');
+  assert.deepStrictEqual([...kinds].filter(k => produced.indexOf(k) === -1), [],
+    'the database accepts fact kind(s) logic.js cannot produce, so a column is unreachable');
+
+  const statuses = allowed('status');
+  assert.deepStrictEqual(GB.FACT_STATUSES.filter(st => !statuses.has(st)), [],
+    'logic.js can produce fact status(es) the database will reject');
+  assert.ok(statuses.has('proposed'),
+    'there is nowhere for a fact awaiting review to sit: an unreviewed row is not resolved, '
+    + 'not superseded, not rejected, and may not be active');
+
+  ['confidence', 'origin'].forEach(col => {
+    const ok = allowed(col);
+    const mine = col === 'confidence' ? GB.FACT_CONFIDENCE : GB.FACT_ORIGINS;
+    assert.deepStrictEqual(mine.filter(v => !ok.has(v)), [],
+      'logic.js can produce a ' + col + ' the database will reject');
+  });
+
+  /* The rule the whole approval design rests on. If this constraint is ever
+     dropped, a model's guess can present itself as something a person said,
+     and nothing downstream can tell the difference. */
+  assert.ok(/not \(origin = 'ai' and status = 'active' and approved_at is null\)/.test(factSql),
+    'nothing stops an unapproved AI fact from claiming to be known');
+  assert.ok(/enable row level security/.test(factSql),
+    'client_facts ships without RLS, which is how 56 client messages were once left public');
+
+  console.log('  ok  - the fact model and the database agree about what a fact may be');
+}
+
+{
+  const facts = rows => GB.sanitizeClient({id: 'c1', name: 'A', facts: rows});
+
+  // A kind or a body the database refuses is dropped here rather than carried
+  // into a save that would fail for every other row travelling with it.
+  assert.strictEqual(facts([{kind: 'vibe', body: 'x'}]).facts.length, 0,
+    'an unknown kind survives sanitising and would fail the batch');
+  assert.strictEqual(facts([{kind: 'budget', body: '   '}]).facts.length, 0,
+    'a blank body survives sanitising');
+  assert.strictEqual(facts([{kind: 'budget', body: '20k'}]).facts.length, 1);
+
+  /* Nothing a model wrote counts as known until a person accepts it. The
+     database forbids the combination; this keeps a row built anywhere else
+     from reporting itself as known. */
+  const unapproved = facts([{kind: 'goal', body: 'g', origin: 'ai', status: 'active'}]).facts[0];
+  assert.strictEqual(unapproved.status, 'proposed',
+    'an unapproved AI fact passes itself off as current');
+  const approved = facts([{kind: 'goal', body: 'g', origin: 'ai', status: 'active',
+                           approvedAt: '2026-11-01T00:00:00Z'}]).facts[0];
+  assert.strictEqual(approved.status, 'active', 'an accepted AI fact is still held back');
+  console.log('  ok  - a fact the database would refuse never reaches a save');
+}
+
+{
+  /* A fact is dated by when it became true, not when somebody typed it in.
+     Sorting by createdAt puts a note about March above this morning's news. */
+  const c = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'f1', kind: 'objection', body: 'older', sourceAt: '2026-01-01T00:00:00Z',
+     createdAt: '2026-11-01T00:00:00Z'},
+    {id: 'f2', kind: 'objection', body: 'newer', sourceAt: '2026-10-01T00:00:00Z',
+     createdAt: '2026-02-01T00:00:00Z'}
+  ]});
+  assert.deepStrictEqual(GB.clientFacts(c).map(f => f.body), ['newer', 'older'],
+    'facts are ordered by when they were typed, not by when they were true');
+
+  // Live by default: "what is true about them" is the question nearly every
+  // caller is asking, and a settled objection answers a different one.
+  const mixed = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'a', kind: 'objection', body: 'current'},
+    {id: 'b', kind: 'objection', body: 'settled', status: 'resolved'}
+  ]});
+  assert.deepStrictEqual(GB.clientFacts(mixed).map(f => f.body), ['current']);
+  assert.strictEqual(GB.clientFacts(mixed, {all: true}).length, 2,
+    'a settled fact is unreachable, so the history it carries is lost');
+
+  // computeDue threw on a client with no messageLog once; the same unguarded
+  // read here would take the screen down for any client not sanitised.
+  assert.deepStrictEqual(GB.clientFacts({id: 'bare'}), [],
+    'reading facts off an unsanitised client throws instead of returning none');
+  assert.deepStrictEqual(GB.clientFacts(null), []);
+  console.log('  ok  - facts read newest-first, live by default, and never throw');
+}
+
+{
+  /* Two current facts of a single-valued kind is an unresolved question, and
+     the briefing says so rather than picking one. Two objections is not: a
+     contact is allowed to have two worries. */
+  const twoBudgets = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'a', kind: 'budget', body: 'about 5k'},
+    {id: 'b', kind: 'budget', body: 'closer to 20k'}
+  ]});
+  const d = GB.factDigest(twoBudgets);
+  assert.strictEqual(d.contradictions.length, 1, 'two live budgets pass without comment');
+  assert.strictEqual(d.contradictions[0].reason, 'two_active');
+
+  const twoObjections = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'a', kind: 'objection', body: 'price'},
+    {id: 'b', kind: 'objection', body: 'timing'}
+  ]});
+  assert.strictEqual(GB.factDigest(twoObjections).contradictions.length, 0,
+    'a contact is not allowed to have two worries');
+
+  /* A half-finished replace: the link was written, the old row never closed.
+     Both read as current, which is the failure mode doReplaceFact is built
+     to leave visible rather than silent. */
+  const dangling = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'a', kind: 'timing', body: 'next quarter', supersededBy: 'b'},
+    {id: 'b', kind: 'timing', body: 'this month'}
+  ]});
+  const dd = GB.factDigest(dangling);
+  assert.ok(dd.contradictions.some(x => x.reason === 'replaced_but_active'),
+    'a fact that names its own replacement while still current goes unreported');
+
+  // What is owed to them, which is what a briefing leads with.
+  const owed = GB.sanitizeClient({id: 'c1', name: 'A', facts: [
+    {id: 'a', kind: 'preference', body: 'prefers mornings'},
+    {id: 'b', kind: 'promise', body: 'send the pricing sheet'}
+  ]});
+  assert.deepStrictEqual(GB.factDigest(owed).owed.map(f => f.kind), ['promise'],
+    'a promise nobody kept is not counted as owed');
+  console.log('  ok  - facts that disagree are reported, and what is owed is separated out');
+}
+
 /* The same guard, for stages the UI hard-codes.
 
    The check above derives stages from logic.js. It would not have caught the
@@ -9368,13 +9508,28 @@ console.log('\n--- the briefing for one call, fifteen minutes out ---');
     assert.strictEqual(b.history.replies, 4, 'the count must be of all of them, not the quoted few');
   });
 
-  test('it always says that objections and promises are not tracked yet', () => {
-    /* Until client_facts exists, the absence of a recorded objection means
-       nothing was recorded -- not that there is none. A briefing that looks
-       complete is worse than one that names its gaps. */
-    const b = brief({notes: 'x', recap: 'y'});
-    assert.ok(b.limits.some(l => /not stored as separate\s+facts yet/.test(l)),
-      'the briefing implies it knows about objections: ' + JSON.stringify(b.limits));
+  test('with nothing on file it says so, and stops saying it once there is', () => {
+    /* This limit used to be unconditional and about the PRODUCT: objections
+       and promises were not stored as facts at all. client_facts exists now,
+       so the same sentence would be a lie -- and the gap it was protecting
+       against has not gone anywhere, it has just moved. An empty list still
+       has to read as "nobody wrote one down", never as "there is none".
+
+       Both halves are asserted, because a limit that is always printed is
+       noise and a limit that is never printed is the original bug. */
+    const empty = brief({notes: 'x', recap: 'y'});
+    assert.ok(empty.limits.some(l => /Nothing has been recorded as a fact/.test(l)),
+      'an empty fact list is passed off as knowledge: ' + JSON.stringify(empty.limits));
+    assert.ok(!empty.limits.some(l => /not stored as separate/.test(l)),
+      'it still claims facts are not tracked at all');
+
+    const known = brief({notes: 'x', facts: [
+      {kind: 'objection', body: 'the price', sourceAt: ago(3)}
+    ]});
+    assert.ok(!known.limits.some(l => /Nothing has been recorded as a fact/.test(l)),
+      'a contact with a recorded objection is still described as having none: '
+      + JSON.stringify(known.limits));
+    assert.strictEqual(known.facts.counts.active, 1);
   });
 
   test('a stale summary names how many messages it predates', () => {

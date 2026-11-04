@@ -713,6 +713,41 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .od-chip.warn{background:var(--red-soft);border-color:#eeb3ac;color:var(--red-dark);}
 .od-note{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:12.5px;color:var(--ink-soft);margin-bottom:10px;}
 .od-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+/* What we know, in the thread. Quiet by default: this sits above the
+   composer and must not compete with it for attention. A fact that disagrees
+   with another, or one waiting to be accepted, is the only thing here allowed
+   to be loud. */
+.mx-facts{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;margin:0 0 10px;font-size:12.5px;color:var(--ink-soft);}
+.mx-facts>summary{cursor:pointer;font-weight:700;color:var(--ink);font-size:12px;letter-spacing:.02em;}
+.mx-fn{font-weight:700;font-size:10.5px;padding:1px 7px;border-radius:99px;background:var(--bg);border:1px solid var(--border);margin-left:6px;}
+.mx-fbad{font-weight:700;font-size:10.5px;padding:1px 7px;border-radius:99px;background:var(--bg);border:1px solid var(--ink-faint);color:var(--ink);margin-left:6px;}
+.mx-fwarn{margin-top:8px;padding:6px 8px;border-left:2px solid var(--ink);background:var(--bg);border-radius:var(--radius-sm);color:var(--ink);font-size:12px;}
+.mx-fsec{margin-top:8px;}
+.mx-fsec>strong{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin-bottom:4px;}
+.mx-fact{padding:6px 0;border-top:1px solid var(--border);}
+.mx-fsec>.mx-fact:first-of-type,.mx-fclosed .mx-fact:first-of-type{border-top:0;}
+/* A settled fact is readable but plainly past: kept because "we talked them
+   out of the price worry in March" is worth knowing, dimmed because it is
+   not true now. */
+.mx-fact.closed{opacity:.6;}
+.mx-fk{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);}
+.mx-fb{color:var(--ink);font-size:13px;line-height:1.4;}
+/* Inferred, not stated. Marked in the margin rather than only in words, so
+   a guess never reads like a quote at a glance. */
+.mx-fact.guessed .mx-fb{border-left:2px dashed var(--ink-faint);padding-left:7px;}
+.mx-fm{color:var(--ink-faint);font-size:11px;margin-top:2px;}
+.mx-fa{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;}
+.mx-fa .linkish{font-size:11.5px;}
+.mx-fyes{font-weight:700;color:var(--ink);}
+.mx-fedit{width:100%;font:inherit;padding:5px 7px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);}
+.mx-fnone{margin-top:8px;color:var(--ink-faint);font-size:12px;line-height:1.5;}
+.mx-fclosed,.mx-faddwrap{margin-top:8px;}
+.mx-fclosed>summary,.mx-faddwrap>summary{cursor:pointer;font-size:11.5px;color:var(--ink-faint);}
+.mx-fadd{margin-top:6px;display:flex;flex-direction:column;gap:6px;}
+.mx-fadd textarea{width:100%;font:inherit;padding:5px 7px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--ink);}
+.mx-fguess{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-faint);}
+.mx-fhist{margin-top:6px;padding-left:8px;border-left:2px solid var(--border);}
+.mx-fhrow{margin-bottom:5px;font-size:12px;color:var(--ink-soft);}
 .od-brief{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:12.5px;color:var(--ink-soft);margin-bottom:10px;}
 .od-brief>summary{cursor:pointer;font-weight:700;color:var(--ink);font-size:12px;letter-spacing:.02em;}
 .od-bflag{font-weight:700;font-size:10.5px;padding:1px 7px;border-radius:99px;background:var(--warn-bg,var(--card));border:1px solid var(--border);color:var(--ink-soft);margin-left:6px;}
@@ -1780,7 +1815,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   .container{padding:10px;}
 }
 </style>
-<link rel="stylesheet" href="assistant.css?v=20261102-nevertexted">
+<link rel="stylesheet" href="assistant.css?v=20261103-knownfacts">
 </head>
 <body>
 
@@ -2171,10 +2206,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261102-nevertexted"></script>
-<script src="data.js?v=20261102-nevertexted"></script>
-<script src="app.js?v=20261102-nevertexted"></script>
-<script src="assistant.js?v=20261102-nevertexted"></script>
-<script src="auth.js?v=20261102-nevertexted"></script>
+<script src="logic.js?v=20261103-knownfacts"></script>
+<script src="data.js?v=20261103-knownfacts"></script>
+<script src="app.js?v=20261103-knownfacts"></script>
+<script src="assistant.js?v=20261103-knownfacts"></script>
+<script src="auth.js?v=20261103-knownfacts"></script>
 </body>
 </html>

@@ -1900,6 +1900,265 @@ function buildDefaultState(){
 }
 
 
+/* ============================================================
+   WHAT IS KNOWN ABOUT A CONTACT — one fact at a time
+   ============================================================
+
+   The only memory before this was conversationSummary: one block of prose,
+   rewritten whole, which could not say WHEN something was true, WHO said it,
+   whether it was stated or guessed, or whether it still holds. Every pre-call
+   briefing therefore had to open by admitting that objections, promises and
+   budgets were not tracked at all.
+
+   A fact is ONE SENTENCE WITH A PROVENANCE, and the provenance is the whole
+   point. "They asked what it costs, on the 14th, in this message" can be
+   checked against the thread in ten seconds. "They are price sensitive"
+   cannot be checked at all, and is the kind of claim that walks into a call
+   as a fact.
+
+   NO MODEL IS INVOLVED YET, deliberately. These are written and corrected by
+   hand first, so the mechanism is trustworthy before anything proposes a fact
+   automatically — but the shape a later extraction pass needs (origin,
+   confidence, source, approval) is enforced from the first row rather than
+   retrofitted to a table already full of data.
+
+   The lists below MUST agree with the CHECK constraints on client_facts. A
+   value this file can produce and the database refuses does not fail that one
+   row — PostgREST refuses the whole batch — which is how 'revival' once broke
+   saving outright. test.js parses the migration and asserts the two match. */
+
+/* `single` means only one can be true at a time, and the distinction is real
+   rather than tidiness: two active objections are a contact with two worries,
+   while two active budgets is a contradiction somebody has to resolve before
+   quoting a price.
+
+   `owed` means the fact points at YOU — an objection nobody answered, a
+   promise nobody kept, a step somebody said they would take. Those are what a
+   briefing leads with, because they are what makes the first thirty seconds
+   of a call go wrong. */
+var FACT_KINDS = [
+  {id: 'objection',   label: 'Objection',   single: false, owed: true},
+  {id: 'goal',        label: 'Goal',        single: false, owed: false},
+  {id: 'budget',      label: 'Budget',      single: true,  owed: false},
+  {id: 'promise',     label: 'Promise',     single: false, owed: true},
+  {id: 'preference',  label: 'Preference',  single: false, owed: false},
+  {id: 'timing',      label: 'Timing',      single: true,  owed: false},
+  {id: 'next_action', label: 'Next action', single: false, owed: true}
+];
+
+/* 'proposed' is a candidate nobody has looked at yet. It is counted as known
+   nowhere, and it exists because the other four all assert something false
+   about an unreviewed row: not resolved, not superseded, not rejected, and —
+   by the database's own constraint — not allowed to be active either. */
+var FACT_STATUSES = ['active', 'proposed', 'resolved', 'superseded', 'rejected'];
+var FACT_LIVE_STATUS = 'active';
+var FACT_CLOSED_STATUSES = ['resolved', 'superseded', 'rejected'];
+var FACT_CONFIDENCE = ['stated', 'inferred'];
+var FACT_ORIGINS = ['human', 'ai'];
+var FACT_SOURCE_KINDS = ['message', 'reply', 'call', 'note', 'manual'];
+
+function factKind(id){
+  for(var i = 0; i < FACT_KINDS.length; i++){
+    if(FACT_KINDS[i].id === id) return FACT_KINDS[i];
+  }
+  return null;
+}
+
+function factKindLabel(id){
+  var k = factKind(id);
+  return k ? k.label : '';
+}
+
+/* One fact, as everything downstream may assume it looks.
+
+   An unknown kind or a blank body is DROPPED rather than repaired. Both are
+   values the database refuses, and a row that cannot be saved is worse than a
+   row that is not shown: it fails the whole batch it travels in. Nothing in
+   the browser can invent a kind, so a bad one means the data came from
+   somewhere else, and the honest response is not to carry it forward.
+
+   An AI fact claiming to be active with nobody's approval is moved to
+   'proposed' rather than dropped. The database forbids that combination
+   outright; this is so a row built in a test, or read back from an export,
+   reports itself as waiting instead of as known. */
+function sanitizeFact(raw){
+  if(!raw || typeof raw !== 'object') return null;
+  if(!factKind(raw.kind)) return null;
+  var body = typeof raw.body === 'string' ? raw.body : '';
+  if(!body.trim()) return null;
+
+  function stamp(v){
+    return (typeof v === 'string' && v && !isNaN(Date.parse(v))) ? v : null;
+  }
+  function oneOf(list, v, fallback){
+    return list.indexOf(v) !== -1 ? v : fallback;
+  }
+
+  var origin = oneOf(FACT_ORIGINS, raw.origin, 'human');
+  var status = oneOf(FACT_STATUSES, raw.status, FACT_LIVE_STATUS);
+  var approvedAt = stamp(raw.approvedAt);
+  if(origin === 'ai' && status === FACT_LIVE_STATUS && !approvedAt) status = 'proposed';
+
+  return {
+    id: (typeof raw.id === 'string' && raw.id) ? raw.id : uuid(),
+    clientId: typeof raw.clientId === 'string' ? raw.clientId : '',
+    kind: raw.kind,
+    kindLabel: factKindLabel(raw.kind),
+    body: body,
+    status: status,
+    /* "She agreed to Friday" and "she asked about Friday" are different
+       facts, and a briefing that blurs them sends somebody into a call
+       believing the wrong one. Anything not plainly said is 'inferred' and
+       reads as such wherever it is shown. */
+    confidence: oneOf(FACT_CONFIDENCE, raw.confidence, 'stated'),
+    origin: origin,
+    /* Where it came from, so it can be checked. Null for something somebody
+       simply knows — but a model-proposed fact with no resolvable source is
+       the single rule that removes most invention, so Stage 3 will require
+       it even though the column does not. */
+    sourceKind: oneOf(FACT_SOURCE_KINDS, raw.sourceKind, null),
+    sourceId: typeof raw.sourceId === 'string' ? raw.sourceId : '',
+    sourceAt: stamp(raw.sourceAt),
+    approvedAt: approvedAt,
+    approvedBy: typeof raw.approvedBy === 'string' ? raw.approvedBy : '',
+    /* A contradiction is a link, not a delete: the older fact explains how
+       the newer one came about. */
+    supersededBy: (typeof raw.supersededBy === 'string' && raw.supersededBy) ? raw.supersededBy : null,
+    userId: typeof raw.userId === 'string' ? raw.userId : '',
+    author: typeof raw.author === 'string' ? raw.author : '',
+    createdAt: stamp(raw.createdAt) || nowISO(),
+    updatedAt: stamp(raw.updatedAt)
+  };
+}
+
+/* When a fact became true, which is not when the row was written. A fact
+   recorded today about something said in March is three months old, and
+   sorting by createdAt would put it above this morning's news. */
+function factAt(f){
+  return (f && (f.sourceAt || f.createdAt)) || '';
+}
+
+/* Kind order first — the order of FACT_KINDS is the order they matter in
+   before a call — then newest within a kind. */
+function factOrder(a, b){
+  var ia = 0, ib = 0;
+  for(var i = 0; i < FACT_KINDS.length; i++){
+    if(FACT_KINDS[i].id === a.kind) ia = i;
+    if(FACT_KINDS[i].id === b.kind) ib = i;
+  }
+  if(ia !== ib) return ia - ib;
+  return String(factAt(b)).localeCompare(String(factAt(a)));
+}
+
+/* This contact's facts. Live ones by default, because "what is true about
+   them" is the question nearly every caller is asking.
+
+   client.facts is guarded rather than assumed. hasSentStage read
+   client.messageLog unguarded and threw on any client not built by
+   sanitizeClient, which turned one skipped row into one stopped run. */
+function clientFacts(client, opts){
+  opts = opts || {};
+  var list = (client && Array.isArray(client.facts) ? client.facts : [])
+    .map(sanitizeFact).filter(Boolean);
+  if(opts.kind) list = list.filter(function(f){ return f.kind === opts.kind; });
+  if(opts.status) list = list.filter(function(f){ return f.status === opts.status; });
+  else if(!opts.all) list = list.filter(function(f){ return f.status === FACT_LIVE_STATUS; });
+  return list.sort(factOrder);
+}
+
+/* Facts that disagree with each other, which are the ones worth showing
+   somebody rather than quietly picking a winner.
+
+   Two kinds of disagreement, and they are different problems. A single-valued
+   kind with two current facts is an unresolved question: which budget is the
+   real one. A fact that names its own replacement while still being current
+   is bookkeeping somebody left half-done — both read as true, and the UI that
+   wrote the link is the thing that should have closed the old one. */
+function factContradictions(live, all){
+  var out = [];
+  var byId = {};
+  (all || live || []).forEach(function(f){ if(f && f.id) byId[f.id] = f; });
+
+  FACT_KINDS.forEach(function(k){
+    if(!k.single) return;
+    var rows = (live || []).filter(function(f){ return f.kind === k.id; });
+    if(rows.length < 2) return;
+    out.push({
+      reason: 'two_active',
+      kind: k.id, kindLabel: k.label, facts: rows,
+      limit: (rows.length === 2
+        ? 'Two ' + k.label.toLowerCase() + ' facts are both recorded as current'
+        : rows.length + ' ' + k.label.toLowerCase() + ' facts are all recorded as current')
+        + ', and only one of them can be — nobody has said which.'
+    });
+  });
+
+  (live || []).forEach(function(f){
+    var next = f.supersededBy ? byId[f.supersededBy] : null;
+    if(!next) return;
+    out.push({
+      reason: 'replaced_but_active',
+      kind: f.kind, kindLabel: factKindLabel(f.kind), facts: [f, next],
+      limit: 'A ' + factKindLabel(f.kind).toLowerCase() + ' fact has a replacement '
+        + 'recorded but was never closed, so both of them read as current.'
+    });
+  });
+  return out;
+}
+
+/* Everything the facts can say about one contact, arranged for a reader.
+
+   `closed` is kept rather than discarded: "we talked them out of the price
+   worry in March" is itself worth knowing before quoting a price again, and
+   a deleted row cannot say it. */
+function factDigest(client, now){
+  now = now || new Date();
+  var all = clientFacts(client, {all: true});
+  var live = all.filter(function(f){ return f.status === FACT_LIVE_STATUS; });
+
+  live.forEach(function(f){
+    var t = Date.parse(factAt(f));
+    f.daysAgo = isNaN(t) ? null : Math.floor((now.getTime() - t) / 86400000);
+  });
+
+  var byKind = {};
+  FACT_KINDS.forEach(function(k){ byKind[k.id] = []; });
+  live.forEach(function(f){ byKind[f.kind].push(f); });
+
+  var closed = all.filter(function(f){
+    return FACT_CLOSED_STATUSES.indexOf(f.status) !== -1;
+  });
+  var pending = all.filter(function(f){ return f.status === 'proposed'; });
+  var inferred = live.filter(function(f){ return f.confidence === 'inferred'; });
+
+  return {
+    live: live,
+    byKind: byKind,
+    /* What is owed to them, which is what a briefing leads with. */
+    owed: live.filter(function(f){
+      var k = factKind(f.kind);
+      return !!(k && k.owed);
+    }),
+    closed: closed,
+    pending: pending,
+    counts: {
+      active: live.length, closed: closed.length,
+      pending: pending.length, inferred: inferred.length,
+      total: all.length
+    },
+    contradictions: factContradictions(live, all)
+  };
+}
+
+/* One fact as a line of text. The confidence is part of the sentence, not a
+   badge beside it, because this is also what goes into a notification where
+   there is nowhere to put a badge. */
+function factSentence(f){
+  if(!f) return '';
+  return f.kindLabel + ': ' + String(f.body).replace(/\s+/g, ' ').trim()
+    + (f.confidence === 'inferred' ? ' (inferred)' : '');
+}
+
 function sanitizeClient(raw, fallbackId){
   if(!raw || typeof raw !== 'object') return null;
   var id = (typeof raw.id === 'string' && raw.id) ? raw.id : fallbackId;
@@ -1972,6 +2231,14 @@ function sanitizeClient(raw, fallbackId){
     /* What they texted back. Written by sms-webhook into sms_events and read
        in by data.js; never written from the browser, because the browser is
        not the thing that received them. */
+    /* What is known about them, one checkable fact at a time -- objections,
+       goals, budgets, promises, preferences, timing, next actions. Loaded
+       from client_facts; see clientFacts and factDigest for reading them,
+       and sanitizeFact for the shape of one. Deliberately NOT written back
+       through the clients row: a fact has its own table, its own author and
+       its own revision history, and a snapshot of the book is not where any
+       of that belongs. */
+    facts: Array.isArray(raw.facts) ? raw.facts.map(sanitizeFact).filter(Boolean) : [],
     /* Internal notes. Never sent, never counted, never fed to the learning --
        they live in their own table for exactly that reason. */
     threadNotes: Array.isArray(raw.threadNotes) ? raw.threadNotes.filter(function(n){
@@ -5303,6 +5570,7 @@ function callBriefing(state, client, now){
   }).map(turn);
 
   var summary = summaryState(client);
+  var facts = factDigest(client, now);
   var due = computeDue(client, now) || [];
   /* automationState returns `running`, not `paused`, and a label that already
      explains itself -- "Holding until Nov 5 -- they replied. Appointment
@@ -5317,8 +5585,29 @@ function callBriefing(state, client, now){
      briefing that looks complete is worse than one that names its gaps,
      because somebody walks into the call trusting it. */
   var limits = [];
-  limits.push('Objections, promises and budgets are not stored as separate '
-    + 'facts yet, so anything of that kind is only in the words below.');
+  /* This used to open, unconditionally, with "objections, promises and
+     budgets are not stored as separate facts yet". That was a limit of the
+     PRODUCT. They are stored now, so the honest sentence is about this
+     CONTACT instead, and the two are different claims: one says the feature
+     is missing, the other says nobody has used it here yet. Both need
+     saying, neither should be said when it is untrue. */
+  if(!facts.counts.total){
+    limits.push('Nothing has been recorded as a fact about this contact — no '
+      + 'objection, goal, budget or promise — so an empty list means nobody '
+      + 'wrote one down, not that there is none.');
+  }
+  if(facts.counts.inferred){
+    limits.push(facts.counts.inferred + ' of the facts below '
+      + (facts.counts.inferred === 1 ? 'was inferred' : 'were inferred')
+      + ' rather than said in so many words.');
+  }
+  if(facts.counts.pending){
+    limits.push(facts.counts.pending + ' proposed '
+      + (facts.counts.pending === 1 ? 'fact is' : 'facts are')
+      + ' waiting to be accepted, and '
+      + (facts.counts.pending === 1 ? 'is' : 'are') + ' not counted as known.');
+  }
+  facts.contradictions.forEach(function(c){ limits.push(c.limit); });
   if(!client.notes && !client.recap && summary.state === 'none'){
     limits.push('Nothing has been written down about this contact beyond their messages.');
   }
@@ -5368,6 +5657,10 @@ function callBriefing(state, client, now){
     recap: client.recap || '',
     summary: {state: summary.state, text: summary.text,
               at: summary.at, newSince: summary.newSince},
+    /* What is known, with provenance. The briefing does not rank these
+       beyond the order the kinds already have -- it reports them, and
+       `limits` reports what is wrong with them. */
+    facts: facts,
     /* What happened, with dates. */
     history: {
       replies: inbound.length,
@@ -5447,6 +5740,27 @@ function callReminder(brief){
        this would have produced read "Never replied · 0 messages sent",
        which is contradictory and points the wrong way. */
     lines.push('You have never texted them');
+  }
+
+  /* One thing that is owed to them, if anything is.
+   *
+   * Exactly one, and only the most recent. An unanswered objection or a
+   * promise nobody kept is the other half of "what do I need to know in the
+   * next fifteen minutes" -- but a notification that lists everything on
+   * file is one nobody reads twice, which is the same reason the flags below
+   * are a subset of the brief's limits rather than all of them.
+   *
+   * Skipped when it would only repeat the quote already on the line above. */
+  var owed = (brief.facts && brief.facts.owed) || [];
+  if(owed.length){
+    var top = owed[0];
+    var already = lines.length && lines[0].indexOf(reminderQuote(top.body)) !== -1;
+    if(!already){
+      lines.push('Open — ' + factSentence({
+        kindLabel: top.kindLabel, body: reminderQuote(top.body),
+        confidence: top.confidence
+      }) + (owed.length > 1 ? ' (+' + (owed.length - 1) + ' more)' : ''));
+    }
   }
 
   /* The flags that change the call, not every limit the brief carries. A
@@ -10351,6 +10665,14 @@ var __LOGIC_EXPORTS__ = {
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
   callBriefing: callBriefing,
+  FACT_KINDS: FACT_KINDS, FACT_STATUSES: FACT_STATUSES,
+  FACT_CONFIDENCE: FACT_CONFIDENCE, FACT_ORIGINS: FACT_ORIGINS,
+  FACT_SOURCE_KINDS: FACT_SOURCE_KINDS, FACT_LIVE_STATUS: FACT_LIVE_STATUS,
+  FACT_CLOSED_STATUSES: FACT_CLOSED_STATUSES,
+  factKind: factKind, factKindLabel: factKindLabel, sanitizeFact: sanitizeFact,
+  clientFacts: clientFacts, factContradictions: factContradictions,
+  factDigest: factDigest, factSentence: factSentence, factAt: factAt,
+  factOrder: factOrder,
   callReminder: callReminder,
   reminderQuote: reminderQuote,
   REMINDER_QUOTE_CHARS: REMINDER_QUOTE_CHARS,
