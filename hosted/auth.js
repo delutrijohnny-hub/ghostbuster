@@ -21,6 +21,7 @@ function gbShowSignedOut(){
      one account's findings in the DOM, and leaving them behind a hidden
      container would survive into whoever signs in next. */
   if(window.gbAssistantStop) window.gbAssistantStop();
+  if(window.gbDeskStop) window.gbDeskStop();
   document.getElementById('app-root').classList.add('hidden');
   document.getElementById('signin-screen').classList.remove('hidden');
 }
@@ -37,6 +38,10 @@ async function gbBoot(session){
        it is enrolled must not hold up the CRM behind it. It draws itself
        when it is ready, or never, and either way the app is already usable. */
     if(window.gbAssistantStart) window.gbAssistantStart();
+    /* Same terms as the assistant above: not awaited, draws itself when
+       it knows whether this account is in the pilot, and the CRM is
+       already usable either way. */
+    if(window.gbDeskStart) window.gbDeskStart();
   }catch(e){
     console.error('Ghost Recall: failed to load your data', e);
     document.getElementById('signin-error').textContent =

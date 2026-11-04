@@ -1,0 +1,265 @@
+/* The Desk Assistant — sized for a phone on a stand, at arm's length.
+ *
+ * Phone-first rather than phone-adapted: the base rules below ARE the phone
+ * layout, and the one media query widens it on a desktop. A rep holding the
+ * thing at arm's length between calls is the only posture this view has, so
+ * the small screen is not the edge case here.
+ *
+ * It borrows the app's own custom properties (--card, --ink, --border and the
+ * rest) so it follows light and dark with everything else and defines no
+ * colours of its own. Each falls back to a readable literal, because this
+ * panel must stay legible even if a future rename drops a token.
+ */
+
+.dk-launcher {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 70;
+  /* Thumb-sized. Anything smaller is a miss on a moving phone. */
+  min-height: 48px;
+  padding: 0 18px;
+  font: 600 15px/1 inherit;
+  letter-spacing: .02em;
+  color: var(--ink, #111);
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .14);
+  cursor: pointer;
+}
+.dk-launcher:focus-visible { outline: 2px solid var(--ink, #111); outline-offset: 2px; }
+
+.dk-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 71;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 14px calc(28px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg, #fafafa);
+  color: var(--ink, #111);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.dk-panel[hidden] { display: none; }
+
+.dk-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -14px 10px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+  background: var(--bg, #fafafa);
+  border-bottom: 1px solid var(--border, #d8d8d8);
+}
+.dk-head h1 { margin: 0; font-size: 16px; letter-spacing: .02em; }
+.dk-head h1:focus { outline: none; }
+.dk-x {
+  min-width: 44px; min-height: 44px;
+  font-size: 18px;
+  color: var(--ink-soft, #444);
+  background: none; border: 0; cursor: pointer;
+}
+
+.dk-panel section,
+.dk-panel > #dk-body > details {
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 10px;
+}
+
+.dk-k {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--ink-faint, #777);
+  margin-bottom: 5px;
+}
+.dk-appt h2 { margin: 0 0 3px; font-size: 21px; line-height: 1.2; }
+/* The time is the thing being read from a stand, so it is the biggest text
+   on the screen after the name. */
+.dk-when { font-size: 16px; }
+.dk-when strong { font-size: 19px; }
+.dk-tz, .dk-meta { color: var(--ink-faint, #777); font-size: 12.5px; }
+.dk-meta { margin-top: 3px; }
+.dk-sep { margin: 0 6px; color: var(--ink-faint, #777); }
+.dk-warn { color: var(--ink, #111); font-weight: 700; }
+
+.dk-note, .dk-src {
+  color: var(--ink-faint, #777);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 5px;
+}
+.dk-src { font-style: italic; }
+
+.dk-pick { display: block; margin-top: 10px; font-size: 12.5px; color: var(--ink-faint, #777); }
+.dk-pick select,
+.dk-lbl input, .dk-lbl textarea, .dk-lbl select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 10px;
+  /* 16px: anything smaller and iOS zooms the page on focus, which on a stand
+     leaves the rep looking at a corner of the brief. */
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink, #111);
+  background: var(--bg, #fafafa);
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 8px;
+}
+.dk-lbl {
+  display: block;
+  margin-top: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft, #444);
+}
+
+.dk-btn {
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0 16px;
+  font: 600 15px/1 inherit;
+  color: var(--ink, #111);
+  background: var(--card, #fff);
+  border: 1px solid var(--ink-faint, #777);
+  border-radius: 9px;
+  cursor: pointer;
+}
+.dk-btn:focus-visible { outline: 2px solid var(--ink, #111); outline-offset: 2px; }
+.dk-btn[disabled] { opacity: .45; cursor: default; }
+/* Read brief and Start listening are pressed while holding a phone and
+   thinking about something else. They get the whole width. */
+.dk-big { display: block; width: 100%; min-height: 54px; font-size: 17px; }
+.dk-ghost { color: var(--ink-soft, #444); border-color: var(--border, #d8d8d8); }
+.dk-sub { min-height: 38px; font-size: 13px; }
+
+.dk-play { display: block; }
+.dk-live {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink, #111);
+}
+#dk-status { min-height: 1.2em; padding: 0 2px; }
+#dk-listening::before {
+  content: '';
+  display: inline-block;
+  width: 9px; height: 9px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dk-brief blockquote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--border, #d8d8d8);
+  font-size: 15px;
+}
+.dk-owed { margin: 0; padding-left: 20px; }
+.dk-owed li { margin-bottom: 3px; }
+
+.dk-fact { margin-bottom: 9px; }
+.dk-fact:last-child { margin-bottom: 0; }
+.dk-flab {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-faint, #777);
+}
+.dk-ftext { font-size: 15px; }
+
+/* The suggested half is bordered and headed so it cannot be mistaken, at a
+   glance, for the sourced half above it. A rep who confuses "she said her
+   budget is 20k" with "ask about budget" will eventually say the second as
+   though it were the first, to the person who would know. */
+.dk-sugg { border-left: 3px dashed var(--ink-faint, #777) !important; }
+.dk-s { margin-bottom: 9px; font-size: 15px; }
+.dk-s:last-child { margin-bottom: 0; }
+.dk-slab {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-faint, #777);
+}
+.dk-qs { margin: 3px 0 0; padding-left: 20px; }
+.dk-qs li { margin-bottom: 5px; }
+
+.dk-alarm {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--card, #fff);
+  border: 2px solid var(--ink, #111);
+  border-radius: 10px;
+  font-size: 15px;
+}
+.dk-warn-box {
+  margin-top: 7px;
+  padding: 8px 10px;
+  background: var(--bg, #fafafa);
+  border-left: 3px solid var(--ink, #111);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.dk-gaps > summary, .dk-res > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-faint, #777);
+}
+.dk-gaps ul { margin: 8px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--ink-faint, #777); }
+.dk-gaps li { margin-bottom: 5px; }
+.dk-resq {
+  padding-left: 10px;
+  border-left: 3px dotted var(--ink-faint, #777);
+  font-size: 14px;
+}
+
+.dk-dest {
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  background: var(--bg, #fafafa);
+  border-radius: 7px;
+  font-size: 14px;
+}
+.dk-acts { display: flex; flex-wrap: wrap; gap: 10px; }
+.dk-acts .dk-big { flex: 1 1 100%; }
+.dk-acts .dk-ghost { flex: 1 1 100%; }
+
+.dk-empty { padding: 22px 13px; text-align: center; }
+.dk-empty strong { display: block; margin-bottom: 6px; font-size: 17px; }
+.dk-empty p { margin: 0; color: var(--ink-faint, #777); font-size: 13.5px; }
+
+/* Wider than a phone: centre it and let the two halves of the brief sit side
+   by side. Nothing is revealed or hidden here that the phone does not get --
+   the layout changes, the content does not. */
+@media (min-width: 760px) {
+  .dk-panel { padding: 0 24px 32px; }
+  .dk-head { margin: 0 -24px 14px; padding-left: 24px; padding-right: 24px; }
+  #dk-body { max-width: 720px; margin: 0 auto; }
+  .dk-play { display: flex; gap: 12px; }
+  .dk-play .dk-big { flex: 1; }
+  .dk-acts .dk-big { flex: 2 1 auto; }
+  .dk-acts .dk-ghost { flex: 1 1 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dk-launcher { box-shadow: none; }
+}

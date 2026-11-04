@@ -6474,6 +6474,622 @@ function canDraftReply(client){
    archived is not merely paused, and saying "paused until Friday" about
    somebody whose status already ended the sequence would be wrong. */
 /* ============================================================
+   THE DESK ASSISTANT
+   ============================================================
+
+   Thirty seconds before a call, and two minutes after it. A rep on a phone on
+   a stand: pick the appointment, read or hear a brief, talk, then say what was
+   promised and have it become a note and a task.
+
+   COMPOSED, NOT GENERATED, for the same reason callBriefing is -- and this
+   goes further by splitting the output in two. `sourced` entries each carry
+   WHERE THEY CAME FROM and are quoted, never paraphrased. `suggested` entries
+   are templates filled from those records, and are labelled as suggestions
+   everywhere they appear, including in the spoken script. A rep who cannot
+   tell "she said her budget is 20k" from "ask about budget" will eventually
+   say the second as though it were the first, on a call, to the person who
+   would know.
+
+   Nothing here calls a model. Everything is arithmetic over records the
+   account already holds, so a claim can be checked against the thread in ten
+   seconds -- which is the only reason a brief is worth trusting at speed. */
+
+/* How much rep-pasted research is kept. Long enough for an About paragraph,
+   short enough that it cannot push the brief off a phone screen. */
+var DESK_RESEARCH_CHARS = 1200;
+/* How recent a conversation still counts as "last time we spoke" for the
+   opener, rather than history. */
+var DESK_RECENT_DAYS = 45;
+
+/* The appointments this rep can actually act on, soonest first.
+ *
+ * loadState already scopes clients to the signed-in user, so this is their own
+ * book rather than the org's -- the same decision the Mac briefings made, and
+ * for the same reason: a teammate's appointment is not yours to be prepared
+ * for. isOthersLead drops a booking that landed on somebody else's calendar.
+ *
+ * `confirmTouch` is the stage of the EXISTING confirmation follow-up when one
+ * is due, so an unconfirmed appointment links to the action the app already
+ * has instead of inventing a second way to chase it. */
+function deskAppointments(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  var cals = (state && state.myCalendars) || [];
+  return upcomingCalls(state, now).filter(function(r){
+    var c = clients[r.clientId];
+    return !!c && !isOthersLead(c, cals);
+  }).map(function(r){
+    var c = clients[r.clientId];
+    var due = computeDue(c, now) || [];
+    var confirmTouch = null;
+    ['hourbefore', 'dayof'].forEach(function(st){
+      if(!confirmTouch && due.indexOf(st) !== -1) confirmTouch = st;
+    });
+    var when = safeDate(r.callAt);
+    var theirTz = c.timezone || 'America/New_York';
+    return {
+      clientId: r.clientId, name: r.name, phone: r.phone || '',
+      status: r.status, callAt: r.callAt, minsUntil: r.minsUntil,
+      confirmed: r.confirmed,
+      /* Both clocks, labelled. The rep is the one standing up to take the
+         call, so their own time is what they need -- but every other screen
+         in this app prints the contact's zone, and a brief that silently
+         switched would be the way somebody rings an hour early. */
+      theirTimezone: theirTz,
+      theirTime: when ? fmtTime(when, theirTz) : '',
+      theirDate: when ? fmtDate(when, theirTz) : '',
+      confirmTouch: confirmTouch,
+      /* Surfaced rather than filtered: an appointment with somebody who said
+         no is exactly what a rep needs warning about before dialling. */
+      declined: hasDeclined(c)
+    };
+  });
+}
+
+/* The rep's own clock, for an appointment time. Kept beside deskAppointments
+   rather than inside it so the zone can be passed in from the browser, which
+   is the only thing that actually knows where the rep is -- there is no
+   column for it. */
+function deskLocalTime(callAt, repTz){
+  var d = safeDate(callAt);
+  if(!d) return {time: '', date: ''};
+  return {time: fmtTime(d, repTz || 'UTC'), date: fmtDate(d, repTz || 'UTC')};
+}
+
+/* Research a rep pasted in, treated as untrusted throughout.
+ *
+ * It is DATA, never instruction. Nothing in it is parsed for commands, it
+ * reaches no model, it is truncated, its control characters are stripped, and
+ * every surface that shows it labels it rep-provided with the URL they said
+ * it came from. The app has no retrieval integration, so this is the whole of
+ * step 2's external input -- and the honest framing is that a human vouched
+ * for it, which is a different and weaker claim than "we fetched it". */
+function deskResearch(raw){
+  if(!raw || typeof raw !== 'object') return null;
+  var excerpt = String(raw.excerpt == null ? '' : raw.excerpt)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+  if(!excerpt) return null;
+  var url = String(raw.url == null ? '' : raw.url).trim();
+  /* Shown back to the rep, so only an http(s) URL is echoed -- a javascript:
+     or data: string in this field has no business being rendered as the
+     provenance of anything. */
+  var safeUrl = /^https?:\/\/[^\s]+$/i.test(url) ? url : '';
+  return {
+    url: safeUrl,
+    urlRejected: !!url && !safeUrl,
+    excerpt: excerpt.length > DESK_RESEARCH_CHARS
+      ? excerpt.slice(0, DESK_RESEARCH_CHARS) + '\u2026' : excerpt,
+    truncated: excerpt.length > DESK_RESEARCH_CHARS,
+    providedBy: 'rep'
+  };
+}
+
+/* A short brief for one call, in the order somebody reads it under pressure.
+ *
+ * For a FOLLOW-UP the last conversation and the outstanding promises come
+ * first, because they are the two things that make a second call go wrong.
+ * For a first call there is nothing to put there and the brief says so rather
+ * than padding. */
+function deskCheatSheet(state, client, now, opts){
+  now = now || new Date();
+  if(!client) return null;
+  opts = opts || {};
+  var research = deskResearch(opts.research);
+  var brief = callBriefing(state, client, now);
+  var facts = brief.facts;
+
+  var thread = conversationThread(client).filter(function(it){ return it.dir !== 'note'; });
+  var inbound = thread.filter(function(it){ return it.dir === 'in'; });
+  var lastIn = inbound.length ? inbound[inbound.length - 1] : null;
+  /* A follow-up is a call where something has already been said, or where a
+     real call already happened. Both, because a contact can have had a call
+     and never texted, and a brief that opened "thanks for booking" on a
+     second call is the mistake this distinction prevents. */
+  var priorCall = !!client.hadPriorCall || isWon(client.status) ||
+                  (client.status || '') === 'No-show';
+  var kind = (inbound.length || priorCall) ? 'follow_up' : 'first';
+
+  function days(t){ return t ? Math.floor((now.getTime() - t) / 86400000) : null; }
+  /* In the contact's zone, as every other screen in this app prints a date.
+     A brief that quietly switched zones is how somebody rings an hour early. */
+  var theirTz = client.timezone || 'America/New_York';
+  function when(iso){
+    var d = safeDate(iso);
+    return d ? fmtDate(d, theirTz) : '';
+  }
+
+  /* ---- sourced: quoted, with where it came from ---- */
+  var sourced = [];
+  function source(label, text, from, at){
+    if(!text || !String(text).trim()) return;
+    sourced.push({label: label, text: String(text).trim(), source: from, at: at || null});
+  }
+
+  var promises = facts.owed.filter(function(f){
+    return f.kind === 'promise' || f.kind === 'next_action';
+  });
+  promises.forEach(function(f){
+    source('Outstanding', f.body,
+      'recorded ' + f.kindLabel.toLowerCase() + ' (' + f.confidence + ')' +
+      (f.daysAgo === null ? '' : ', ' + f.daysAgo + 'd ago'), f.sourceAt || f.createdAt);
+  });
+  facts.byKind.objection.forEach(function(f){
+    source('Objection', f.body, 'recorded objection (' + f.confidence + ')',
+      f.sourceAt || f.createdAt);
+  });
+  ['goal', 'budget', 'timing', 'preference'].forEach(function(k){
+    facts.byKind[k].forEach(function(f){
+      source(f.kindLabel, f.body, 'recorded ' + f.kindLabel.toLowerCase() +
+        ' (' + f.confidence + ')', f.sourceAt || f.createdAt);
+    });
+  });
+  brief.history.openQuestions.forEach(function(q){
+    source('They asked', q.text, 'their message, ' + when(q.at), q.at);
+  });
+  if(lastIn && !brief.history.openQuestions.length){
+    source('They said', lastIn.text, 'their message, ' + when(lastIn.at), lastIn.at);
+  }
+  if(client.notes && client.notes.trim()){
+    source('Your note', client.notes, 'the contact record', null);
+  }
+  if(client.recap && client.recap.trim()){
+    source('Your recap', client.recap, 'the contact record', null);
+  }
+  if(research){
+    source('Research', research.excerpt,
+      'rep-provided' + (research.url ? ', from ' + research.url : ', source not given'), null);
+  }
+
+  /* ---- suggested: templates filled from the above, never confused with it ---- */
+  var firstName_ = firstName(client.name);
+  var topObjection = facts.byKind.objection[0] || null;
+  var topPromise = promises[0] || null;
+  var openQ = brief.history.openQuestions.length
+    ? brief.history.openQuestions[brief.history.openQuestions.length - 1] : null;
+
+  var opener;
+  if(brief.declined){
+    /* Nothing else can be the opener. Pitching somebody who said no is the
+       failure the decline mark exists to prevent, and a cheerful suggested
+       opener above that warning would undo it. */
+    opener = 'They said no' + (brief.declined.reason ? ' \u2014 \u201c' +
+      brief.declined.reason + '\u201d' : '') +
+      '. Ask whether they want to be left alone. Do not pitch.';
+  } else if(topPromise){
+    opener = 'Open with what you owe them: \u201c' + topPromise.body + '\u201d.';
+  } else if(openQ){
+    opener = 'They asked \u201c' + reminderQuote(openQ.text) +
+      '\u201d and nothing has gone back. Answer that first.';
+  } else if(lastIn && days(lastIn.t) !== null && days(lastIn.t) <= DESK_RECENT_DAYS){
+    opener = 'Pick up where you left off \u2014 ' + (days(lastIn.t) <= 0 ? 'today' :
+      days(lastIn.t) + ' days ago') + ' they said \u201c' + reminderQuote(lastIn.text) + '\u201d.';
+  } else if(kind === 'first'){
+    opener = 'First call. Thank ' + firstName_ + ' for booking and ask what prompted it.';
+  } else {
+    opener = 'It has been a while. Check this is still live before anything else.';
+  }
+
+  /* ONE thing, and an objection outranks an opportunity: an unanswered worry
+     loses the call faster than a missed upside wins it. */
+  var focus;
+  if(topObjection){
+    focus = {kind: 'objection', text: topObjection.body,
+             source: 'recorded objection (' + topObjection.confidence + ')'};
+  } else if(openQ){
+    focus = {kind: 'objection', text: openQ.text, source: 'their message, ' + when(openQ.at)};
+  } else if(facts.byKind.goal[0]){
+    focus = {kind: 'opportunity', text: facts.byKind.goal[0].body,
+             source: 'recorded goal (' + facts.byKind.goal[0].confidence + ')'};
+  } else if(research){
+    focus = {kind: 'opportunity', text: research.excerpt.slice(0, 180),
+             source: 'rep-provided' + (research.url ? ', from ' + research.url : '')};
+  } else {
+    focus = {kind: 'none',
+             text: 'Nothing recorded. Ask what they are trying to fix and write it down.',
+             source: null};
+  }
+
+  /* Two questions, picked from what the records do NOT know. A question whose
+     answer is already on file wastes the one thing a call has. */
+  var questions = [];
+  /* Dedupe only. The CAP is the slice(0, 2) at the return, which is the one
+     place that decides how many a rep gets -- two checks for one rule meant
+     neither could be falsified, because removing either left the other doing
+     the job. Candidates are pushed in priority order, so taking the first two
+     here and capping there are the same two questions. */
+  function ask(q){ if(questions.indexOf(q) === -1) questions.push(q); }
+  /* Their words are QUOTED into the question rather than conjugated into it.
+     A fact is a sentence somebody else wrote, in whatever grammar they chose,
+     and "send the sample script" dropped into "Did the ___ land?" produced
+     "Did the send the sample script land". Quoting sidesteps grammar for
+     every phrasing at once, and has the better property too: the part that
+     came from the record stays visibly theirs. */
+  if(topPromise) ask('You said you would \u201c' + topPromise.body.replace(/\.$/, '') +
+    '\u201d \u2014 has that landed, and was it what they needed?');
+  /* THEY raised it, not the rep. An objection fact records what the prospect
+     is worried about; `owed` includes it because the ANSWER is owed, not the
+     worry. Getting this backwards puts a rep on a call telling somebody they
+     said something they did not. */
+  if(topObjection) ask('They raised \u201c' + topObjection.body.replace(/\.$/, '') +
+    '\u201d \u2014 what would have to change for this to work?');
+  if(openQ) ask('You asked \u201c' + reminderQuote(openQ.text) +
+    '\u201d \u2014 shall we start there?');
+  if(!facts.byKind.goal.length) ask('What does a good outcome look like in ninety days?');
+  if(!facts.byKind.timing.length) ask('When would you want this live?');
+  if(!facts.byKind.budget.length) ask('What range were you expecting to spend?');
+  ask('What would stop this going ahead?');
+
+  var goal;
+  if(brief.declined){
+    goal = 'Confirm whether to close the file. Nothing is being sold on this call.';
+  } else if(topPromise){
+    goal = 'Close the loop on what you promised, then agree the next step and a date.';
+  } else if(kind === 'first'){
+    goal = 'Qualify, find the real problem, and book a concrete next step.';
+  } else if(topObjection){
+    goal = 'Answer the objection on record, then agree the next step and a date.';
+  } else {
+    goal = 'Find out whether this is still live, and agree a next step and a date.';
+  }
+
+  /* ---- what it could not tell you ---- */
+  var gaps = [];
+  if(!research) gaps.push('No outside research. There is no retrieval integration in '
+    + 'this app, so anything here came from your own records \u2014 paste a public '
+    + 'excerpt above if you have one.');
+  if(research && research.urlRejected) gaps.push('That URL was not a plain http or https '
+    + 'address, so it is not shown as the source. The excerpt is still here, '
+    + 'labelled rep-provided.');
+  if(research && research.truncated) gaps.push('The pasted excerpt was shortened to fit.');
+  if(!facts.counts.total) gaps.push('Nothing is recorded as a fact about them, so the '
+    + 'objection and goal lines below are guesses from the conversation, not from '
+    + 'anything they confirmed.');
+  if(kind === 'follow_up' && !inbound.length) gaps.push('They have never written back, so '
+    + 'nothing here is in their own words.');
+  /* The brief's own caveats, which already name a stale summary, a thread this
+     Mac cannot read, unconfirmed sends and an inferred timezone. Carried
+     rather than restated, so the two can never drift apart. */
+  brief.limits.forEach(function(l){ if(gaps.indexOf(l) === -1) gaps.push(l); });
+
+  return {
+    clientId: client.id,
+    name: client.name,
+    firstName: firstName_,
+    kind: kind,
+    call: brief.call,
+    declined: brief.declined,
+    /* FIRST for a follow-up, and null for a first call rather than faked.
+       `kind` is not re-checked here: any inbound message makes kind
+       'follow_up' by definition above, so `kind === 'follow_up' && lastIn`
+       could never differ from `lastIn` alone. Mutation testing found it --
+       deleting the kind check changed no behaviour and no test could tell,
+       which is the signature of a condition that was never doing anything. */
+    lastConversation: lastIn ? {
+      at: lastIn.at, daysAgo: days(lastIn.t), text: lastIn.text
+    } : null,
+    promises: promises.map(function(f){
+      return {id: f.id, text: f.body, kind: f.kind, kindLabel: f.kindLabel,
+              confidence: f.confidence, daysAgo: f.daysAgo};
+    }),
+    sourced: sourced,
+    suggested: {opener: opener, focus: focus, questions: questions.slice(0, 2), goal: goal},
+    research: research,
+    gaps: gaps,
+    asOf: now.toISOString()
+  };
+}
+
+/* The brief as something to say out loud.
+ *
+ * Returns plain strings, so the speaking is the browser's problem and this
+ * stays testable in node. Suggestions are announced as suggestions: a voice
+ * has no italics and no column headings, so the only way to keep the two
+ * halves apart in the ear is to say which is which. */
+function deskScript(sheet){
+  if(!sheet) return [];
+  var lines = [];
+  var call = sheet.call;
+  lines.push(sheet.name + (call ? ', at ' + call.time + ' their time.' : '.'));
+  if(sheet.declined){
+    lines.push('Warning. They said no. Do not pitch on this call.');
+  }
+  if(sheet.lastConversation){
+    lines.push('Last time, ' + (sheet.lastConversation.daysAgo <= 0 ? 'today'
+      : sheet.lastConversation.daysAgo + ' days ago') + ', they said: ' +
+      sheet.lastConversation.text);
+  }
+  if(sheet.promises.length){
+    lines.push('You owe them: ' + sheet.promises.map(function(p){ return p.text; }).join('; ') + '.');
+  }
+  /* The sourced half, said as quotes with their origin. */
+  var onRecord = sheet.sourced.filter(function(x){
+    return x.label === 'Objection' || x.label === 'Goal' || x.label === 'Budget' ||
+           x.label === 'Timing';
+  });
+  if(onRecord.length){
+    lines.push('On record: ' + onRecord.map(function(x){
+      return x.label.toLowerCase() + ', ' + x.text;
+    }).join('. ') + '.');
+  }
+  lines.push('Suggested opener: ' + sheet.suggested.opener);
+  if(sheet.suggested.focus.kind !== 'none'){
+    lines.push('Suggested focus, the ' + sheet.suggested.focus.kind + ': ' +
+      sheet.suggested.focus.text);
+  }
+  if(sheet.suggested.questions.length){
+    lines.push('Suggested questions. ' + sheet.suggested.questions.join(' '));
+  }
+  lines.push('Suggested goal: ' + sheet.suggested.goal);
+  if(sheet.gaps.length){
+    lines.push('One thing this cannot tell you: ' + sheet.gaps[0]);
+  }
+  return lines;
+}
+
+/* ---- after the call ----
+
+   A spoken or typed recap becomes an editable note and ONE proposed task.
+   Nothing is saved here; this returns a proposal and the rep approves it. */
+
+var DESK_WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday',
+                     'friday', 'saturday'];
+var DESK_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july',
+                   'august', 'september', 'october', 'november', 'december'];
+/* Phrases that sound like a date and are not one. Left for the rep rather
+   than resolved, because "next week" guessed as Monday is a promise the rep
+   did not make -- and a wrong date on a follow-up task is worse than none,
+   since a blank asks a question and a wrong one does not. */
+var DESK_VAGUE = ['next week', 'next month', 'later this week', 'later',
+                  'soon', 'in a bit', 'a few days', 'couple of days',
+                  'couple days', 'end of the month', 'end of month',
+                  'end of the week', 'sometime', 'after the holidays',
+                  'next quarter', 'asap', 'shortly'];
+
+/* What day it is where the REP is, as [y, m, d]. Date arithmetic for "Friday"
+   has to happen in their zone or a recap given at 9pm lands on tomorrow. */
+function deskTodayParts(now, tz){
+  var key = tzDateKey(now, tz || 'UTC');          // YYYY-MM-DD in that zone
+  var p = String(key).split('-');
+  return [Number(p[0]), Number(p[1]), Number(p[2])];
+}
+
+function deskWeekdayIn(now, tz){
+  try{
+    var name = new Intl.DateTimeFormat('en-US', {timeZone: tz || 'UTC', weekday: 'long'})
+      .format(now).toLowerCase();
+    return DESK_WEEKDAYS.indexOf(name);
+  }catch(e){ return now.getUTCDay(); }
+}
+
+/* A date the rep can check, or nothing at all.
+ *
+ * Returns {date: 'YYYY-MM-DD', phrase, exact} when it is sure, or
+ * {date: null, phrase, why} when the words were a date-shaped guess. Never a
+ * best effort: the caller shows a blank field and asks. */
+function deskParseDate(text, now, tz){
+  var t = String(text == null ? '' : text).toLowerCase();
+  now = now || new Date();
+  var today = deskTodayParts(now, tz);
+
+  function iso(y, m, d){
+    var dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.toISOString().slice(0, 10);
+  }
+  function shift(n){
+    var dt = new Date(Date.UTC(today[0], today[1] - 1, today[2]));
+    dt.setUTCDate(dt.getUTCDate() + n);
+    return dt.toISOString().slice(0, 10);
+  }
+
+  for(var v = 0; v < DESK_VAGUE.length; v++){
+    if(t.indexOf(DESK_VAGUE[v]) !== -1){
+      return {date: null, phrase: DESK_VAGUE[v],
+              why: '\u201c' + DESK_VAGUE[v] + '\u201d could be several days. Pick one.'};
+    }
+  }
+  if(/\btoday\b/.test(t))     return {date: shift(0), phrase: 'today', exact: true};
+  if(/\btomorrow\b/.test(t))  return {date: shift(1), phrase: 'tomorrow', exact: true};
+
+  var inDays = t.match(/\bin (\d{1,2}) (day|days|week|weeks)\b/);
+  if(inDays){
+    var n = Number(inDays[1]) * (inDays[2].indexOf('week') === 0 ? 7 : 1);
+    return {date: shift(n), phrase: inDays[0], exact: true};
+  }
+
+  /* An explicit month and day, either order. Numeric-only dates are
+     deliberately NOT accepted: 11/4 is two different days depending on who
+     typed it, and this is spoken input from one of two reps. */
+  for(var mi = 0; mi < DESK_MONTHS.length; mi++){
+    var mon = DESK_MONTHS[mi], abbr = mon.slice(0, 3);
+    var re = new RegExp('\\b(?:' + mon + '|' + abbr + ')\\.?\\s+(\\d{1,2})\\b|' +
+                        '\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:' + mon + '|' + abbr + ')\\b');
+    var m = t.match(re);
+    if(m){
+      var day = Number(m[1] || m[2]);
+      if(day >= 1 && day <= 31){
+        /* Next year when the month has already gone by -- "January" said in
+           November means the January coming. */
+        var y = (mi + 1 < today[1]) ? today[0] + 1 : today[0];
+        return {date: iso(y, mi + 1, day), phrase: m[0], exact: true};
+      }
+    }
+  }
+
+  for(var wi = 0; wi < DESK_WEEKDAYS.length; wi++){
+    var w = DESK_WEEKDAYS[wi];
+    if(new RegExp('\\b' + w + '\\b').test(t)){
+      var cur = deskWeekdayIn(now, tz);
+      var ahead = (wi - cur + 7) % 7;
+      /* Said ON that day, it is ambiguous -- "by Friday" on a Friday might be
+         today or a week away, and the rep knows which. */
+      if(ahead === 0){
+        return {date: null, phrase: w,
+                why: 'Today is ' + w.charAt(0).toUpperCase() + w.slice(1) +
+                     '. Did they mean today or next week?'};
+      }
+      return {date: shift(ahead), phrase: w, exact: true};
+    }
+  }
+  return {date: null, phrase: '', why: 'No date was mentioned.'};
+}
+
+/* How many minutes a zone is ahead of UTC at a given instant.
+ *
+ * The usual trick: format the instant in that zone, read the parts back as
+ * though they were UTC, and the difference is the offset. Done this way
+ * because it asks Intl, which knows the DST rules, rather than hard-coding
+ * them -- and the two reps are in different zones. */
+function zoneOffsetMinutes(date, tz){
+  try{
+    var parts = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false, year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).formatToParts(date).forEach(function(p){ parts[p.type] = p.value; });
+    var asUTC = Date.UTC(Number(parts.year), Number(parts.month) - 1,
+                         Number(parts.day), Number(parts.hour) % 24,
+                         Number(parts.minute), Number(parts.second));
+    return Math.round((asUTC - date.getTime()) / 60000);
+  }catch(e){ return 0; }
+}
+
+/* "Due on the 6th" as an instant, which is what a timestamptz column holds.
+ *
+ * A date is not a moment, and something has to choose. 9am in the REP's zone,
+ * because the task is theirs to do and a due date that lands at 7pm because
+ * the server is in UTC reads as a day late. Null in, null out: nobody said
+ * when, and midnight-today is not a safer guess than admitting it.
+ *
+ * Corrected twice. The offset depends on the instant, and the instant is what
+ * is being computed, so the first pass uses the offset at noon UTC on that
+ * date and the second re-reads it at the answer -- which is what makes this
+ * right on the two days a year when the offset changes. */
+function deskDueInstant(dateStr, tz, hour){
+  if(!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return null;
+  hour = (hour === undefined || hour === null) ? 9 : hour;
+  var p = String(dateStr).split('-');
+  var y = Number(p[0]), m = Number(p[1]), d = Number(p[2]);
+  var guess = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  var off = zoneOffsetMinutes(guess, tz || 'UTC');
+  var out = new Date(Date.UTC(y, m - 1, d, hour, 0, 0) - off * 60000);
+  var off2 = zoneOffsetMinutes(out, tz || 'UTC');
+  if(off2 !== off) out = new Date(Date.UTC(y, m - 1, d, hour, 0, 0) - off2 * 60000);
+  return out.toISOString();
+}
+
+/* Words that mean somebody owes somebody something. Used only to FIND the
+   clause worth proposing as a task -- never to decide that there is one. */
+var DESK_TASK_HINTS = ['wants', 'want', 'needs', 'need', 'asked for', 'asked',
+                       'send', 'sending', 'email', 'call', 'book', 'schedule',
+                       'follow up', 'follow-up', 'get back', 'share', 'draft',
+                       'quote', 'proposal', 'sample', 'script', 'invoice',
+                       'intro', 'introduce', 'check', 'confirm', 'by'];
+
+/* Whole-word containment, for a hint that may itself be two words.
+   Escaped because the list is data, and a future hint with a dot or a hyphen
+   in it should not quietly become a wildcard. */
+function deskHasWord(haystack, word){
+  var w = String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try{ return new RegExp('\\b' + w + '\\b').test(haystack); }
+  catch(e){ return haystack.indexOf(word) !== -1; }
+}
+
+/* A recap turned into one note and at most one proposed task.
+ *
+ * The NOTE IS THE RECAP, verbatim. It is the only part that is a record of
+ * what was said, so it is not summarised, rewritten or trimmed -- the rep can
+ * edit it, and whatever they approve is what gets stored.
+ *
+ * The task is a SUGGESTION built by cutting the date phrase out of the clause
+ * that mentions a deliverable. It is deliberately crude and deliberately
+ * editable: a cleverer extraction that was wrong would still have to be read
+ * and corrected, and a rep who stopped reading because it usually gets it
+ * right is the failure mode. */
+function deskParseRecap(text, now, tz){
+  now = now || new Date();
+  var raw = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  if(!raw) return null;
+
+  var when = deskParseDate(raw, now, tz);
+
+  /* The sentence that mentions a deliverable, else the last one -- a recap
+     usually ends with what happens next. */
+  var sentences = raw.split(/(?<=[.!?])\s+/).filter(function(x){ return x.trim(); });
+  if(!sentences.length) sentences = [raw];
+  var pick = null;
+  for(var i = sentences.length - 1; i >= 0 && !pick; i--){
+    var low = sentences[i].toLowerCase();
+    for(var h = 0; h < DESK_TASK_HINTS.length; h++){
+      /* WHOLE WORDS. A plain indexOf matched 'email' inside 'voicemail', so
+         "Left a voicemail, no answer. Try again next week." was reported as
+         containing a commitment and the wrong sentence was proposed as the
+         task. Found by running a real recap through it rather than by
+         reading the list. */
+      if(deskHasWord(low, DESK_TASK_HINTS[h])){ pick = sentences[i]; break; }
+    }
+  }
+  var hasAction = !!pick;
+  if(!pick) pick = sentences[sentences.length - 1];
+
+  /* Strip the date phrase so the task text does not carry a second, possibly
+     contradictory, copy of the date the field already holds. */
+  var taskText = pick;
+  if(when.phrase){
+    taskText = taskText.replace(new RegExp('\\b(?:by|on|before)?\\s*' +
+      when.phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'), ' ');
+  }
+  /* Cutting "by Friday" out of the middle leaves "...script ." behind, so the
+     gap and any punctuation now stranded next to it are closed up. A proposal
+     with a dangling full stop reads like a bug and invites the rep to stop
+     trusting the rest of it. */
+  taskText = taskText.replace(/\s+([.,;!?])/g, '$1')
+                     .replace(/\s+/g, ' ')
+                     .replace(/[\s,;]+$/, '')
+                     .trim();
+
+  return {
+    /* Verbatim. See above. */
+    note: raw,
+    task: {
+      text: taskText,
+      /* Null is a real answer and the UI must render it as an empty required
+         field, not as today. */
+      dueDate: when.date,
+      datePhrase: when.phrase || '',
+      dateNeedsRep: !when.date,
+      dateWhy: when.date ? '' : (when.why || ''),
+      /* False when nothing in the recap sounded like a commitment. The rep
+         may still want a task; they are told it was not found rather than
+         handed a confident guess. */
+      found: hasAction
+    },
+    timezone: tz || 'UTC'
+  };
+}
+
+/* ============================================================
    THEY SAID NO
    ============================================================
 
@@ -10901,6 +11517,12 @@ var __LOGIC_EXPORTS__ = {
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
   callBriefing: callBriefing,
+  deskAppointments: deskAppointments, deskCheatSheet: deskCheatSheet,
+  deskScript: deskScript, deskParseRecap: deskParseRecap,
+  deskParseDate: deskParseDate, deskResearch: deskResearch,
+  deskLocalTime: deskLocalTime, DESK_RESEARCH_CHARS: DESK_RESEARCH_CHARS,
+  deskDueInstant: deskDueInstant, zoneOffsetMinutes: zoneOffsetMinutes,
+  DESK_VAGUE: DESK_VAGUE,
   hasDeclined: hasDeclined, declineState: declineState, declineLabel: declineLabel,
   looksLikeDecline: looksLikeDecline, declineSuggestions: declineSuggestions,
   setDeclined: setDeclined, DECLINE_HINTS: DECLINE_HINTS,
