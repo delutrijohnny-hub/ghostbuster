@@ -713,6 +713,27 @@ table.client-table tr.clickable:hover{background:var(--bg);cursor:pointer;}
 .od-chip.warn{background:var(--red-soft);border-color:#eeb3ac;color:var(--red-dark);}
 .od-note{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:12.5px;color:var(--ink-soft);margin-bottom:10px;}
 .od-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+/* They said no. Stated plainly rather than styled as an alarm: this is a
+   settled outcome, not a problem to fix, and the only action on it is undo. */
+.said-no{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:0 0 10px;padding:7px 10px;border:1px solid var(--ink-faint);border-radius:var(--radius-sm);background:var(--bg);color:var(--ink-soft);font-size:12.5px;}
+.said-no strong{color:var(--ink);}
+.msgx-sayno{margin-top:8px;text-align:center;}
+.msgx-sayno .linkish{font-size:11.5px;color:var(--ink-faint);}
+
+/* A contact who may have said no, at the top of the queue they are clogging.
+   Their message is quoted in full, because reading the sentence IS the check
+   -- one of the five on the live book is a confirmation. */
+.maybe-no{border:1px solid var(--ink-faint);border-radius:var(--radius-sm);background:var(--card);margin:0 0 10px;padding:9px 11px;}
+.mn-head{font-weight:700;font-size:12px;color:var(--ink);letter-spacing:.02em;display:flex;flex-direction:column;gap:2px;margin-bottom:6px;}
+.mn-sub{font-weight:400;font-size:11px;color:var(--ink-faint);letter-spacing:0;}
+.mn-row{border-top:1px solid var(--border);padding:7px 0;}
+.mn-row:first-of-type{border-top:0;}
+.mn-who{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12.5px;color:var(--ink);}
+.mn-when{color:var(--ink-faint);font-size:11px;}
+.mn-said{margin:3px 0 5px;color:var(--ink-soft);font-size:12.5px;line-height:1.4;border-left:2px solid var(--border);padding-left:8px;}
+.mn-since{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg);border:1px solid var(--ink-faint);color:var(--ink);}
+.mn-acts{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+.mn-acts .linkish{font-size:11.5px;}
 /* What we know, in the thread. Quiet by default: this sits above the
    composer and must not compete with it for attention. A fact that disagrees
    with another, or one waiting to be accepted, is the only thing here allowed
@@ -1815,7 +1836,7 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
   .container{padding:10px;}
 }
 </style>
-<link rel="stylesheet" href="assistant.css?v=20261103-knownfacts">
+<link rel="stylesheet" href="assistant.css?v=20261103-saidno">
 </head>
 <body>
 
@@ -2206,10 +2227,10 @@ table.variant-table th,table.variant-table td{text-align:left;padding:6px 8px;fo
      Bump BUILD_STAMP below whenever the JS changes. The stamp is also shown
      at the bottom of Business settings, so "what does yours say?" answers in
      one question what this cost two rounds of guessing. -->
-<script src="logic.js?v=20261103-knownfacts"></script>
-<script src="data.js?v=20261103-knownfacts"></script>
-<script src="app.js?v=20261103-knownfacts"></script>
-<script src="assistant.js?v=20261103-knownfacts"></script>
-<script src="auth.js?v=20261103-knownfacts"></script>
+<script src="logic.js?v=20261103-saidno"></script>
+<script src="data.js?v=20261103-saidno"></script>
+<script src="app.js?v=20261103-saidno"></script>
+<script src="assistant.js?v=20261103-saidno"></script>
+<script src="auth.js?v=20261103-saidno"></script>
 </body>
 </html>

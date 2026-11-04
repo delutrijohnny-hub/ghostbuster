@@ -81,7 +81,12 @@ Deno.serve(async (req) => {
     const cRes = await db(
       `/clients?id=eq.${encodeURIComponent(row.client_id)}` +
       `&select=id,name,phone,phone_key,timezone,status,ignored,sms_status,` +
-      `automation_paused_until,org_id,user_id`);
+      /* declined_at travels with the pause, and the two lines below it in
+         the sanitizeClient call travel with this one. A column missing from
+         THIS select is the whole bug: scheduledSendCheck would read
+         undefined, hasDeclined would answer false, and a message queued
+         before somebody said no would go out after they said it. */
+      `automation_paused_until,declined_at,declined_reason,org_id,user_id`);
     const c = (await cRes.json().catch(() => []))?.[0];
     if (!c) { await resolve(row.id, { status: 'cancelled', reason: 'the contact no longer exists' }); cancelled++; continue; }
 
@@ -96,6 +101,8 @@ Deno.serve(async (req) => {
       id: c.id, name: c.name, phone: c.phone || '', timezone: c.timezone,
       status: c.status, ignored: !!c.ignored, smsStatus: c.sms_status || 'ok',
       automationPausedUntil: c.automation_paused_until || null,
+      declinedAt: c.declined_at || null,
+      declinedReason: c.declined_reason || '',
       messageLog: (Array.isArray(msgs) ? msgs : []).map((m: any) => ({
         id: m.id, stage: 'welcome', variantId: 'custom', channel: m.channel || 'sms',
         text: '', sentAt: m.sent_at, responded: !!m.responded,

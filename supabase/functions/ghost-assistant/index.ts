@@ -102,6 +102,11 @@ Deno.serve(async (req) => {
       `notes,recap,ignored,close_outcome,sms_status,automation_paused_until,snoozed_until,` +
       `skipped_stages,reschedules,reschedule_count,stalled_since,manually_added,google_event_id,` +
       `conversation_summary,conversation_summary_at,conversation_summary_through,` +
+      /* A column missing HERE is the bug, not one missing from the
+         mapping: assistantStateFromRows would read undefined, every
+         declined contact would look active, and the assistant would
+         report follow-ups due for people who said no. */
+      `declined_at,declined_reason,declined_by,` +
       `message_log(id,channel,stage,variant_key,text,sent_at,responded,responded_at,reviewed,delivery_status,provider_id)` +
       `&order=id&limit=1001`);
 

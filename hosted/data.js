@@ -684,6 +684,18 @@ async function loadState(){
       conversationSummary: row.conversation_summary || '',
       conversationSummaryAt: row.conversation_summary_at || null,
       conversationSummaryThrough: row.conversation_summary_through || null,
+      /* They said no. Null means nobody has recorded a decline, which is not
+         the same as knowing they are interested.
+
+         Named here even though the select is `*`: these rows are assembled by
+         hand, so a default on sanitizeClient never reaches them, and
+         scheduledSendCheck reading undefined would let the send through. */
+      declinedAt: row.declined_at || null,
+      declinedReason: row.declined_reason || '',
+      declinedBy: row.declined_by || '',
+      /* What is known about them, filled below from client_facts. Declared
+         for the same reason as replies and threadNotes. */
+      facts: [],
       // Filled below from sms_events. Declared here because loadState builds
       // these rows by hand rather than through sanitizeClient, so a default
       // on the sanitizer does not reach them.
@@ -1235,6 +1247,12 @@ function rowClient(c, uid){
        told us. */
     automation_paused_until: c.automationPausedUntil || null,
     automation_paused_note: c.automationPausedNote || null,
+    /* Written back, like the pause above and unlike sms_status: a decline is
+       an instruction somebody gave this app, not something a provider told
+       us. Null clears it, which is how "they are back" works. */
+    declined_at: c.declinedAt || null,
+    declined_reason: c.declinedReason || null,
+    declined_by: c.declinedBy || null,
     conversation_summary: c.conversationSummary || null,
     conversation_summary_at: c.conversationSummaryAt || null,
     conversation_summary_through: c.conversationSummaryThrough || null,

@@ -245,6 +245,11 @@ Deno.serve(async (req) => {
       `automation_paused_note,snoozed_until,skipped_stages,reschedules,` +
       `reschedule_count,stalled_since,manually_added,conversation_summary,` +
       `conversation_summary_at,conversation_summary_through,` +
+      /* Without this the pre-call notification cannot say they said no,
+         which is the one thing on that notification that changes whether
+         the call should happen. Third time this column had to be added to
+         a select whose mapping already read it; there is a test now. */
+      `declined_at,declined_reason,declined_by,` +
       `message_log(id,channel,stage,variant_key,text,sent_at,responded,` +
       `responded_at,reviewed,delivery_status,provider_id)&order=call_date_time`);
     const clients = await rows.json().catch(() => []);

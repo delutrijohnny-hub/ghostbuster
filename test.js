@@ -2021,6 +2021,254 @@ test('the analytics that read reply data still work after an outcome', () => {
   console.log('  ok  - every stage the app can produce is accepted by the database');
 }
 
+{
+  /* They said no. The whole point is that this is ONE mark that reaches every
+     decision, so each gate is asserted separately -- a decline that stops the
+     cadence but leaves the contact in the queue would have fixed nothing. */
+  const said = extra => GB.sanitizeClient(Object.assign({
+    id: 'c1', name: 'Brandon Walsh', phone: '+15551234567', status: 'No-show',
+    declinedAt: '2026-08-19T14:00:00Z',
+    declinedReason: 'not interested at this time'
+  }, extra || {}));
+  const live = extra => GB.sanitizeClient(Object.assign({
+    id: 'c1', name: 'Brandon Walsh', phone: '+15551234567', status: 'No-show'
+  }, extra || {}));
+  const at = new Date('2026-11-03T15:00:00Z');
+
+  assert.strictEqual(GB.hasDeclined(said()), true);
+  assert.strictEqual(GB.hasDeclined(live()), false,
+    'a contact nobody has marked reads as declined');
+  /* Asked about a RAW object, not a sanitised one. sanitizeClient already
+     throws an unparseable date away, so asking it about a sanitised client
+     tested nothing -- the mutation that deleted the date check inside
+     hasDeclined survived. It matters because hasDeclined is also called on
+     rows assembled by hand: assistantStateFromRows and send-scheduled both
+     build a client from a REST row, and `declined_at: 'soon'` from a bad
+     write would otherwise stop that contact's cadence with nobody able to
+     see why. */
+  assert.strictEqual(GB.hasDeclined({declinedAt: 'soon'}), false,
+    'an unparseable date counts as a decline, which would silently stop a cadence');
+  assert.strictEqual(GB.hasDeclined({declinedAt: ''}), false);
+  assert.strictEqual(GB.hasDeclined({declinedAt: '2026-08-19T14:00:00Z'}), true,
+    'a real date on an unsanitised row is not recognised');
+
+  // The cadence stops, and nothing is exempt -- not even an appointment
+  // reminder. Somebody who said no does not need a text about a call they
+  // are not coming to.
+  assert.deepStrictEqual(GB.computeDue(said({callDateTime: at.toISOString()}), at), [],
+    'the cadence keeps firing at somebody who said no');
+
+  // The send-time gate, which is the one send-scheduled asks.
+  const gate = GB.scheduledSendCheck(said(), at);
+  assert.strictEqual(gate.ok, false, 'a queued message still goes out after they declined');
+  assert.ok(/not interested/.test(gate.reason), 'the refusal does not say why');
+  assert.ok(!gate.hold,
+    'a decline is reported as a hold, so the message waits instead of being dropped');
+
+  // A decline is more specific than the status it sits beside, and reads as
+  // such rather than as "Sequence finished -- status is No-show".
+  const auto = GB.automationState(said(), at);
+  assert.strictEqual(auto.running, false);
+  assert.strictEqual(auto.reason, 'declined',
+    'a declined contact is explained by their status instead of by their answer');
+
+  /* An answer, not a silence. The dead list exists to find contacts who
+     drifted off unnoticed.
+
+     This needs a contact who WOULD otherwise be dead, which the first
+     version of this test did not build: with no appointment and no recovery
+     send there is no reference date, so isDeadClient bailed out early and
+     returned false whether the decline was honoured or not. Deleting the
+     guard left the test passing. */
+  const deadish = extra => GB.sanitizeClient(Object.assign({
+    id: 'c1', name: 'Brandon Walsh', phone: '+15551234567', status: 'No-show',
+    callDateTime: '2026-08-01T14:00:00Z',
+    messageLog: [{id: 'm1', stage: 'recovery', text: 'still around?',
+                  sentAt: '2026-08-10T14:00:00Z', reviewed: true}]
+  }, extra || {}));
+  assert.strictEqual(GB.isDeadClient(deadish(), [deadish()], at, 14), true,
+    'the test case is not one the dead list would pick up, so the next '
+    + 'assertion proves nothing');
+  assert.strictEqual(GB.isDeadClient(
+    deadish({declinedAt: '2026-08-19T14:00:00Z', declinedReason: 'not interested'}),
+    [deadish()], at, 14), false,
+    'somebody who said no is listed as a contact nobody noticed going quiet');
+
+  // The status survives, which was the whole reason this is not an eighth
+  // pipeline value: Ursula stays a completed call, Brandon stays a no-show.
+  assert.strictEqual(said().status, 'No-show',
+    'recording a decline overwrote why they left');
+  console.log('  ok  - one decline reaches the cadence, the send gate, the queue and the dead list');
+}
+
+{
+  /* The queue stops asking. This is the row that kept Brandon at the top of
+     the action queue for ten weeks under "Reply waiting". */
+  function book(extra){
+    const c = GB.sanitizeClient(Object.assign({
+      id: 'c1', name: 'Brandon Walsh', phone: '+15551234567', status: 'No-show',
+      messageLog: [{id: 'm1', stage: 'welcome', text: 'checking in',
+                    sentAt: '2026-08-18T14:00:00Z', responded: true, reviewed: true}]
+    }, extra || {}));
+    c.replies = [{id: 'r1', text: 'not interested at this time',
+                  at: '2026-08-19T14:00:00Z', providerId: 'imsg:1'}];
+    return {clients: {c1: c}, todos: [], variants: {}, variantStats: {}, reads: {}};
+  }
+  const at = new Date('2026-11-03T15:00:00Z');
+
+  const waiting = GB.conversationList(book(), at).filter(r => r.clientId === 'c1')[0];
+  assert.ok(waiting, 'the contact vanished from the conversation list');
+  assert.strictEqual(waiting.awaitingReply, true,
+    'a real unanswered reply is not reported as waiting');
+
+  const done = GB.conversationList(book({
+    declinedAt: '2026-08-19T15:00:00Z', declinedReason: 'not interested at this time'
+  }), at).filter(r => r.clientId === 'c1')[0];
+  assert.ok(done, 'a declined contact disappears from the inbox entirely, so the thread '
+    + 'cannot be read any more');
+  assert.strictEqual(done.awaitingReply, false,
+    'the queue still demands a reply to a conversation that is over');
+  assert.strictEqual(done.declined, true);
+
+  // And the queue itself, which is what the user actually sees.
+  const rows = GB.actionQueue(book({
+    declinedAt: '2026-08-19T15:00:00Z', declinedReason: 'not interested at this time'
+  }), at);
+  assert.deepStrictEqual(rows.filter(r => r.group === 'needs_response'), [],
+    'a contact who said no is still in the action queue asking for a text');
+  console.log('  ok  - a finished conversation stops asking to be answered');
+}
+
+{
+  /* The suggestion, which is wrong about one message in five on the live
+     book -- and has to be, because the alternative is a classifier that is
+     wrong less often and cannot say when. */
+  assert.strictEqual(GB.looksLikeDecline('I am no longer interested. Thank you'), true);
+  assert.strictEqual(GB.looksLikeDecline('No thanks from me on this'), true);
+  assert.strictEqual(GB.looksLikeDecline('sounds great, see you then'), false);
+  assert.strictEqual(GB.looksLikeDecline(''), false);
+  assert.strictEqual(GB.looksLikeDecline(null), false);
+  /* THE FALSE POSITIVE, pinned deliberately. Jermey Gonzalez wrote "Oh shoot
+     sorry. We are on for tomorrow. Ok I am all set" -- a confirmation. This
+     asserts the suggester DOES flag it, because that is the honest state of
+     the rule, and the reason nothing acts on it without a person reading the
+     sentence. If this ever stops matching, the button is still the gate. */
+  assert.strictEqual(GB.looksLikeDecline('We are on for tomorrow. Ok I am all set'), true,
+    'the suggester is being trusted as though it were accurate');
+
+  function withLast(text, extra){
+    const c = GB.sanitizeClient(Object.assign({
+      id: 'c1', name: 'A', phone: '+15551234567', status: 'No-show',
+      messageLog: [{id: 'm1', stage: 'welcome', text: 'hi',
+                    sentAt: '2026-08-01T14:00:00Z', reviewed: true}]
+    }, extra || {}));
+    c.replies = [{id: 'r1', text: text, at: '2026-08-19T14:00:00Z', providerId: 'imsg:1'}];
+    return {clients: {c1: c}};
+  }
+  const at = new Date('2026-11-03T15:00:00Z');
+
+  assert.strictEqual(GB.declineSuggestions(withLast('not interested'), at).length, 1);
+  assert.strictEqual(GB.declineSuggestions(withLast('sounds good'), at).length, 0);
+
+  /* The NEWEST message, not any message. Somebody who said "no thanks" to
+     one thing in March and booked a call in April has not declined, and a
+     rule that scanned the whole thread would say they had -- then put a
+     button in front of somebody offering to stop texting a live lead.
+
+     The earlier test could not tell the two rules apart, because its thread
+     was one message long. */
+  const reopened = GB.sanitizeClient({
+    id: 'c1', name: 'A', phone: '+15551234567', status: 'Booked',
+    messageLog: [{id: 'm1', stage: 'welcome', text: 'hi',
+                  sentAt: '2026-03-01T14:00:00Z', reviewed: true}]
+  });
+  reopened.replies = [
+    {id: 'r1', text: 'no thanks, not right now', at: '2026-03-02T14:00:00Z', providerId: 'imsg:1'},
+    {id: 'r2', text: 'actually yes, can we talk Thursday?', at: '2026-04-02T14:00:00Z', providerId: 'imsg:2'}
+  ];
+  assert.deepStrictEqual(GB.declineSuggestions({clients: {c1: reopened}}, at), [],
+    'a contact who said no in March and came back in April is offered as a decline');
+  // Nothing to suggest about somebody already marked.
+  assert.strictEqual(GB.declineSuggestions(
+    withLast('not interested', {declinedAt: '2026-08-20T00:00:00Z'}), at).length, 0,
+    'a contact already marked is offered again');
+  // Or already archived, where the chase stopped by another route.
+  assert.strictEqual(GB.declineSuggestions(
+    withLast('not interested', {ignored: true}), at).length, 0);
+  /* THE CASE THAT PROMPTED ALL OF THIS, pinned so it cannot come back.
+     Brandon Walsh said "not interested at this time" on 19 August and was
+     texted again on 2 November. The first version of this suggester required
+     their message to be the newest thing in the thread, which excluded him
+     precisely because the bug had happened to him -- the newest item was
+     ours. Being texted after a decline is the aggravating factor. */
+  const texted_since = GB.sanitizeClient({
+    id: 'c1', name: 'Brandon Walsh', phone: '+15551234567', status: 'No-show',
+    messageLog: [
+      {id: 'm1', stage: 'welcome', text: 'hi', sentAt: '2026-08-01T14:00:00Z', reviewed: true},
+      {id: 'm2', stage: 'recovery', text: 'still interested?', sentAt: '2026-09-15T14:00:00Z', reviewed: true},
+      {id: 'm3', stage: 'revival', text: 'checking back', sentAt: '2026-11-02T14:00:00Z', reviewed: true}
+    ]
+  });
+  texted_since.replies = [{id: 'r1', text: 'I am not interested at this time. Thanks.',
+                           at: '2026-08-19T14:00:00Z', providerId: 'imsg:1'}];
+  const found = GB.declineSuggestions({clients: {c1: texted_since}}, at);
+  assert.strictEqual(found.length, 1,
+    'a contact who said no and was texted twice since is not offered, which is '
+    + 'the exact case this exists for');
+  assert.strictEqual(found[0].sentSince, 2,
+    'the count of messages sent after they answered is wrong: ' + found[0].sentSince);
+  assert.strictEqual(found[0].sent, 3, 'the total sent is wrong');
+
+  /* Ordered by how far past the answer the sequence has run, not by date.
+     Somebody who has had two messages since they said no is a worse problem
+     than somebody who said no a year ago and has been left alone since.
+
+     The two rules have to DISAGREE here or the assertion proves nothing: the
+     first version of this test used a fixture where the oldest decline also
+     had the most messages after it, so deleting the sentSince comparison
+     left the order unchanged and the mutation survived. c2 is older by every
+     measure and must still rank second. */
+  const longQuiet = GB.sanitizeClient({
+    id: 'c2', name: 'Left Alone Since', phone: '+15559876543', status: 'No-show',
+    messageLog: [{id: 'm1', stage: 'welcome', text: 'hi',
+                  sentAt: '2026-01-01T14:00:00Z', reviewed: true}]
+  });
+  longQuiet.replies = [{id: 'r2', text: 'no thanks', at: '2026-01-02T14:00:00Z',
+                        providerId: 'imsg:2'}];
+  const ranked = GB.declineSuggestions({clients: {c1: texted_since, c2: longQuiet}}, at);
+  assert.strictEqual(GB.declineSuggestions({clients: {c2: longQuiet}}, at)[0].sentSince, 0,
+    'the quiet contact has messages after their no, so the ordering test is not '
+    + 'comparing what it claims to');
+  assert.ok(ranked[0].daysAgo < ranked[1].daysAgo,
+    'the fixture no longer has the newer decline first, so date ordering and '
+    + 'overrun ordering agree and the assertion below cannot fail');
+  assert.deepStrictEqual(ranked.map(r => r.clientId), ['c1', 'c2'],
+    'the contact still being texted is not at the top of the list');
+
+  console.log('  ok  - a possible no is suggested, never applied, and says it may be wrong');
+}
+
+{
+  /* The brief and the notification. Walking into a call pitching somebody who
+     already said no is the failure these two exist to prevent. */
+  const c = GB.sanitizeClient({
+    id: 'c1', name: 'Ursula Russo', phone: '+15551234567', status: 'Completed',
+    callDateTime: '2026-11-03T15:10:00Z', timezone: 'America/New_York',
+    declinedAt: '2026-11-03T13:00:00Z', declinedReason: 'I am no longer interested'
+  });
+  const at = new Date('2026-11-03T15:00:00Z');
+  const b = GB.callBriefing({clients: {c1: c}}, c, at);
+  assert.ok(b.declined, 'the brief does not carry the decline');
+  assert.ok(/^They said no/.test(b.limits[0]),
+    'the decline is not the first thing the brief says: ' + JSON.stringify(b.limits));
+  assert.ok(/no longer interested/.test(b.limits[0]), 'their own words are not quoted back');
+
+  const r = GB.callReminder(b);
+  assert.ok(/SAID NO/.test(r.body),
+    'the notification does not warn that they said no: ' + r.body);
+  console.log('  ok  - the brief and the notification lead with a no');
+}
+
 /* The fact lists live in logic.js AND in a database CHECK, which is the exact
    shape of the 'revival' outage above: a kind logic.js can produce and the
    constraint refuses does not fail that row, it fails the whole batched save.
@@ -18452,6 +18700,35 @@ console.log('\n--- the private assistant, deterministic part ---');
     assert.deepStrictEqual(missing, [],
       'assistantStateFromRows drops ' + missing.join(', ') + ' \u2014 the assistant would ' +
       'be describing a different account from the one on screen');
+  });
+
+  test('every function that judges a send asks the database about a decline', () => {
+    /* A mapping that reads row.declined_at and a SELECT that never asks for
+       it is the same bug three times this session: the check passes, the
+       column arrives undefined, hasDeclined answers false, and the send goes
+       out. The mapping is the visible half and the select is the half that
+       actually decides, so this asserts the select.
+
+       send-scheduled decides whether a queued message still goes.
+       ghost-assistant decides what to tell somebody their day looks like.
+       Both would be wrong in the same direction: a contact who said no
+       reported as needing a follow-up. */
+    [['send-scheduled', 'a message queued before they declined would still go out'],
+     ['ghost-assistant', 'the assistant would report follow-ups due for people who said no'],
+     ['imessage-sync', 'the pre-call notification could not say they said no']]
+      .forEach(([fn, consequence]) => {
+        const src = fs.readFileSync(
+          path.join(__dirname, 'supabase', 'functions', fn, 'index.ts'), 'utf8');
+        /* Every backtick string in the file, joined. A single `&select=...`
+           run is not enough: both selects are built from several template
+           literals concatenated with +, so matching one stops at the first
+           backtick and reports a column missing that is in the next piece.
+           Joining the string literals also excludes comments, so a column
+           merely MENTIONED in a comment cannot satisfy this. */
+        const strings = (src.match(/`[^`]*`/g) || []).join(' ');
+        assert.ok(/\bdeclined_at\b/.test(strings),
+          fn + ' never asks for declined_at, so ' + consequence);
+      });
   });
 
   test('the assistant can tell the two silences apart from raw rows', () => {

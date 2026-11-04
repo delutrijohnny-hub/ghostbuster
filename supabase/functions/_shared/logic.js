@@ -2210,6 +2210,13 @@ function sanitizeClient(raw, fallbackId){
        is a different claim from "we never recorded it". */
     eventTitle: typeof raw.eventTitle === 'string' && raw.eventTitle ? raw.eventTitle : null,
     emailStatus: typeof raw.emailStatus === 'string' ? raw.emailStatus : 'ok',
+    /* They said no. Separate from status so a contact stays a Completed call
+       or a No-show -- see hasDeclined. Null means nobody has recorded a
+       decline, which is not the same as knowing they are interested. */
+    declinedAt: (typeof raw.declinedAt === 'string' &&
+      !isNaN(Date.parse(raw.declinedAt))) ? raw.declinedAt : null,
+    declinedReason: typeof raw.declinedReason === 'string' ? raw.declinedReason : '',
+    declinedBy: typeof raw.declinedBy === 'string' ? raw.declinedBy : '',
     /* Set by sms-webhook when a contact replies STOP, or when a carrier
        reports the number undeliverable. Never written back by the browser --
        see rowClient in data.js, which deliberately omits it -- because a save
@@ -2932,7 +2939,11 @@ function stepIsDue(step, client, now, ctx){
 
 function computeDue(client, now){
   now = now || new Date();
-  if(!client || client.ignored) return [];
+  /* A decline is checked FIRST and exempts nothing, not even appointment
+     reminders. The reply hold infers engagement and lets reminders through;
+     this is an instruction, and somebody who said no does not need a text
+     about a call they are not coming to. */
+  if(!client || client.ignored || hasDeclined(client)) return [];
   var due = [];
   var tz = client.timezone || 'America/New_York';
   var callDate = safeDate(client.callDateTime);
@@ -4070,8 +4081,18 @@ function conversationList(state, now){
       lastText: last.text,
       messages: thread.length,
       replies: inbound,
-      /* Their word was last and nothing has gone back. Someone is waiting. */
-      awaitingReply: last.dir === 'in',
+      /* Their word was last and nothing has gone back. Someone is waiting.
+
+         Unless they said no, in which case nobody is waiting: the last word
+         was theirs AND it ended the conversation. This is the row that kept
+         Brandon Walsh at the top of the action queue for ten weeks under
+         "Reply waiting" — a demand for a text nobody should send.
+
+         The thread still shows, and still shows their last message. It was
+         the DEMAND that was wrong, not the record. */
+      awaitingReply: last.dir === 'in' && !hasDeclined(c),
+      declined: hasDeclined(c),
+      declinedAt: c.declinedAt || null,
       // A touch can be due on a contact you are already mid-conversation
       // with; that is the common case, not the exception.
       dueStage: dueStages[0] || null
@@ -4712,7 +4733,10 @@ function actionQueue(state, now){
     if(isOthersLead(c, (state && state.myCalendars) || [])) return;
     var mins = minutesUntil(c.callDateTime, now);
     if(mins === null || mins <= 0 || mins > ACTION_RULES.callAtRiskMin) return;
-    if(appointmentConfirmed(c) || stopsCadence(c.status)) return;
+    /* An appointment somebody has declined is not at risk: it is over.
+       Chasing a confirmation for a call they already said no to is the
+       politest possible way of not having been listening. */
+    if(appointmentConfirmed(c) || stopsCadence(c.status) || hasDeclined(c)) return;
     push(cid, {
       group: 'call_at_risk',
       reason: 'Call in ' + waitedLabel(mins) + ' · Not confirmed',
@@ -5196,6 +5220,16 @@ function assistantStateFromRows(clientRows, inboundRows, viewerTz, myCalendars){
       conversationSummary: row.conversation_summary || '',
       conversationSummaryAt: row.conversation_summary_at || null,
       conversationSummaryThrough: row.conversation_summary_through || null,
+      /* They said no. Dropped here, the assistant would keep reporting a
+         declined contact as needing a follow-up -- describing a different
+         account from the one on screen, which is the one failure this
+         mapping exists to prevent. */
+      declinedAt: row.declined_at || null,
+      declinedReason: row.declined_reason || '',
+      declinedBy: row.declined_by || '',
+      /* Facts live in their own table and are read separately; the empty
+         array matters because clientFacts and factDigest read it. */
+      facts: [],
       replies: [],
       messageLog: (row.message_log || []).map(function(m){
         return {
@@ -5570,6 +5604,7 @@ function callBriefing(state, client, now){
   }).map(turn);
 
   var summary = summaryState(client);
+  var decline = declineState(client, now);
   var facts = factDigest(client, now);
   var due = computeDue(client, now) || [];
   /* automationState returns `running`, not `paused`, and a label that already
@@ -5585,6 +5620,15 @@ function callBriefing(state, client, now){
      briefing that looks complete is worse than one that names its gaps,
      because somebody walks into the call trusting it. */
   var limits = [];
+  /* FIRST, above every other caveat. Everything below is about what the
+     briefing does not know; this is about whether the call should happen at
+     all, and somebody skimming reads the first line. */
+  if(decline){
+    limits.push('They said no'
+      + (decline.daysAgo <= 0 ? ' today' : ' ' + decline.daysAgo + ' days ago')
+      + (decline.reason ? ' — “' + decline.reason + '”' : '')
+      + '. Follow-ups are stopped. Do not pitch unless they reopened it.');
+  }
   /* This used to open, unconditionally, with "objections, promises and
      budgets are not stored as separate facts yet". That was a limit of the
      PRODUCT. They are stored now, so the honest sentence is about this
@@ -5652,6 +5696,9 @@ function callBriefing(state, client, now){
       confirmed: appointmentConfirmed(client)
     } : null,
     rescheduled: Number(client.rescheduleCount) || 0,
+    /* Null when they have not declined, so a caller has to handle the
+       absence rather than read a falsy field and move on. */
+    declined: decline,
     /* What is on file, as somebody wrote it. */
     notes: client.notes || '',
     recap: client.recap || '',
@@ -5766,6 +5813,9 @@ function callReminder(brief){
   /* The flags that change the call, not every limit the brief carries. A
      notification that lists caveats is one nobody reads twice. */
   var flags = [];
+  /* First flag, and it outranks the rest: walking into a call pitching
+     somebody who already said no is worse than any of them. */
+  if(brief.declined) flags.push('SAID NO — do not pitch');
   if(brief.cadence.optedOut) flags.push('opted out — do not text');
   if(!brief.call.confirmed) flags.push('not confirmed');
   if(brief.rescheduled) flags.push('moved ' + brief.rescheduled + '×');
@@ -6423,6 +6473,170 @@ function canDraftReply(client){
    Ordered by what actually decides it, most final first. A contact who is
    archived is not merely paused, and saying "paused until Friday" about
    somebody whose status already ended the sequence would be wrong. */
+/* ============================================================
+   THEY SAID NO
+   ============================================================
+
+   A decline had nowhere to live, and the gap had a cost. Brandon Walsh said
+   "not interested at this time" on 19 August and was texted again on 2
+   November. Ursula Russo said "I am no longer interested" after fifteen
+   sends and got another one the same day. Both sat in the action queue under
+   "Reply waiting" -- the queue asking somebody to write back when the
+   conversation is over.
+
+   The only existing way to stop the chase was `ignored`, which means junk:
+   it is what the dedupe and the calendar-exclusion rules set, and every
+   stats path filters it out. Marking a real decline that way makes the
+   decline vanish from the numbers instead of counting as an outcome.
+
+   SEPARATE FROM STATUS, deliberately. Ursula is Completed -- she had a real
+   call -- and Brandon is a No-show. An eighth pipeline value would overwrite
+   both, and the funnel would lose the difference between a lost sale and a
+   lost appointment. A decline is a second fact about the same person.
+
+   NEVER SET AUTOMATICALLY. Of the five contacts on the live book whose words
+   match a decline, one is "We are on for tomorrow. Ok I am all set" -- a
+   confirmation. looksLikeDecline below exists to SUGGEST, and the suggestion
+   is wrong about one in five. */
+function hasDeclined(client){
+  return !!(client && client.declinedAt && !isNaN(Date.parse(client.declinedAt)));
+}
+
+/* The decline, arranged for a reader, or null if they have not said no.
+
+   Null rather than a record with declined:false, so every caller has to deal
+   with the absence explicitly instead of reading a falsy field and moving on. */
+function declineState(client, now){
+  if(!hasDeclined(client)) return null;
+  now = now || new Date();
+  var t = Date.parse(client.declinedAt);
+  return {
+    at: client.declinedAt,
+    daysAgo: Math.floor((now.getTime() - t) / 86400000),
+    /* Their own words where there are any. A decline that can be checked is
+       worth more than one taken on trust -- six months later the record
+       should say what was said, not that somebody once clicked a button. */
+    reason: client.declinedReason || '',
+    by: client.declinedBy || ''
+  };
+}
+
+function declineLabel(client, now){
+  var d = declineState(client, now);
+  if(!d) return '';
+  return 'Said no ' + fmtDate(new Date(Date.parse(d.at)), client.timezone || 'America/New_York');
+}
+
+/* Words that might mean "stop asking".
+ *
+ * A SUGGESTION, never an action. "I am all set" is on this list and means
+ * "I am confirmed for tomorrow" at least as often as it means no, which is
+ * why nothing here writes anything: it puts a button in front of a person
+ * who can read the whole message and decide.
+ *
+ * Deliberately not a model. A regex that is wrong one time in five, and says
+ * so, is more useful here than a classifier that is wrong one time in twenty
+ * and cannot say which -- because the cost of a false positive is cutting
+ * off a live lead, and the only defence is a human reading the sentence. */
+var DECLINE_HINTS = [
+  'not interested', 'no longer interested', 'not intrested', 'no thanks',
+  'no thank you', 'not a good fit', 'stop texting', 'take me off', 'remove me',
+  'unsubscribe', 'not looking', 'found someone', 'went with', 'went in another direction',
+  'changed my mind', 'please stop', 'do not contact', "don't contact", 'wrong number',
+  'all set', 'we are set', "we're set", 'pass on this', 'not at this time'
+];
+
+function looksLikeDecline(text){
+  var t = String(text == null ? '' : text).toLowerCase();
+  if(!t.trim()) return false;
+  for(var i = 0; i < DECLINE_HINTS.length; i++){
+    if(t.indexOf(DECLINE_HINTS[i]) !== -1) return true;
+  }
+  return false;
+}
+
+/* Contacts whose newest message to you might have been a no.
+ *
+ * THE NEWEST THING THEY SAID, not the newest thing in the thread. The first
+ * version of this required their message to be last overall, and that
+ * excluded exactly the people it was written for: Brandon Walsh said "not
+ * interested at this time" on 19 August and was texted again on 2 November,
+ * so the newest item in his thread is ours and he was never offered. Being
+ * texted after a decline is the aggravating factor, not a disqualifier.
+ *
+ * Still the NEWEST inbound rather than any. Somebody who said "no thanks" to
+ * one thing in March and wrote "actually yes, Thursday?" in April has not
+ * declined, and a rule that scanned the whole thread would say they had --
+ * then offer to stop texting a live lead.
+ *
+ * `sentSince` counts what went out after they said it, which is the number
+ * worth reading first: it is how far past the answer the sequence has run.
+ *
+ * Already-declined contacts are left out -- there is nothing to suggest --
+ * and so is anybody already archived or opted out, because the chase has
+ * stopped for them by another route and a second control to press is just
+ * another thing to press. */
+function declineSuggestions(state, now){
+  now = now || new Date();
+  var clients = (state && state.clients) || {};
+  var out = [];
+  Object.keys(clients).forEach(function(cid){
+    var c = clients[cid];
+    if(!c || c.ignored || hasDeclined(c)) return;
+    if((c.smsStatus || 'ok') === 'opted_out') return;
+    var thread = conversationThread(c).filter(function(it){ return it.dir !== 'note'; });
+    if(!thread.length) return;
+    var inbound = thread.filter(function(it){ return it.dir === 'in'; });
+    if(!inbound.length) return;
+    var last = inbound[inbound.length - 1];
+    if(!looksLikeDecline(last.text)) return;
+    out.push({
+      clientId: c.id, name: c.name, status: c.status,
+      text: last.text, at: last.at,
+      daysAgo: last.t ? Math.floor((now.getTime() - last.t) / 86400000) : null,
+      sent: thread.filter(function(it){ return it.dir === 'out'; }).length,
+      /* Sent AFTER they said it. The whole point of the banner: this is the
+         count that says the sequence is still running at somebody who has
+         already answered. */
+      sentSince: thread.filter(function(it){
+        return it.dir === 'out' && it.t > last.t;
+      }).length
+    });
+  });
+  /* Most-texted-since first, then oldest. Somebody who has had four
+     messages since they said no is a worse problem than somebody who said no
+     yesterday and has had none, and the list should not make that judgement
+     by date alone. */
+  out.sort(function(a, b){
+    if((b.sentSince || 0) !== (a.sentSince || 0)) return (b.sentSince || 0) - (a.sentSince || 0);
+    return (b.daysAgo || 0) - (a.daysAgo || 0);
+  });
+  return out;
+}
+
+/* Record it, or take it back.
+ *
+ * Reversible by design. People come back, and a decline that could only be
+ * undone by editing the database would make somebody hesitate to record a
+ * real one -- which is how you end up back where this started. */
+function setDeclined(state, clientId, at, reason, by){
+  var client = state && state.clients && state.clients[clientId];
+  if(!client) return null;
+  if(at){
+    client.declinedAt = at;
+    client.declinedReason = reason || '';
+    client.declinedBy = by || '';
+  } else {
+    /* Cleared together. A reason left behind on a contact who is active
+       again reads, on the next screen that shows it, as though they had
+       declined. */
+    client.declinedAt = null;
+    client.declinedReason = '';
+    client.declinedBy = '';
+  }
+  return client;
+}
+
 function automationState(client, now){
   now = now || new Date();
   if(!client) return {running: false, reason: 'none', label: 'No contact', until: null};
@@ -6430,6 +6644,16 @@ function automationState(client, now){
   if(client.ignored){
     return {running: false, reason: 'archived', until: null,
             label: 'Archived \u2014 no follow-ups at all'};
+  }
+  /* Before the status check, because it is the more specific answer. A
+     declined No-show would otherwise read "Sequence finished -- status is
+     No-show", which is true and tells you nothing about why nobody should
+     text them. */
+  if(hasDeclined(client)){
+    var dec = declineState(client, now);
+    return {running: false, reason: 'declined', until: null,
+            label: declineLabel(client, now) + ' \u2014 no follow-ups',
+            note: dec ? dec.reason : ''};
   }
   if(stopsCadence(client.status)){
     return {running: false, reason: 'status', until: null,
@@ -6483,6 +6707,13 @@ function scheduledSendCheck(client, now, opts){
 
   if((client.smsStatus || 'ok') === 'opted_out'){
     return {ok: false, reason: 'they replied STOP'};
+  }
+  /* Beside STOP rather than further down, because it is the same kind of
+     thing: an instruction from the person, not a rule of ours. Checked here
+     as well as in computeDue because this is the gate send-scheduled asks,
+     and a message queued before they declined must not go out after. */
+  if(hasDeclined(client)){
+    return {ok: false, reason: 'they said they are not interested'};
   }
   if((client.smsStatus || 'ok') !== 'ok'){
     return {ok: false, reason: 'the carrier could not reach that number'};
@@ -9670,6 +9901,11 @@ var DEAD_ELIGIBLE_ROLES = {missed: true, lost: true, stalled: true};
 function isDeadClient(client, allClients, now, deadAfterDays){
   deadAfterDays = deadAfterDays == null ? 14 : deadAfterDays;
   if(client.ignored) return false;
+  /* A decline is an answer, not a silence. "Dead" exists to find contacts
+     who drifted off with nobody noticing; somebody who said no has been
+     dealt with, and listing them as needing attention is the queue noise
+     this whole change is about. */
+  if(hasDeclined(client)) return false;
   var completedNotClosed = isWon(client.status) && client.closeOutcome !== 'Closed';
   if(!DEAD_ELIGIBLE_ROLES[stageRole(client.status)] && !completedNotClosed) return false;
 
@@ -10665,6 +10901,9 @@ var __LOGIC_EXPORTS__ = {
   priorityQueue: priorityQueue, priorityCounts: priorityCounts,
   upcomingCalls: upcomingCalls,
   callBriefing: callBriefing,
+  hasDeclined: hasDeclined, declineState: declineState, declineLabel: declineLabel,
+  looksLikeDecline: looksLikeDecline, declineSuggestions: declineSuggestions,
+  setDeclined: setDeclined, DECLINE_HINTS: DECLINE_HINTS,
   FACT_KINDS: FACT_KINDS, FACT_STATUSES: FACT_STATUSES,
   FACT_CONFIDENCE: FACT_CONFIDENCE, FACT_ORIGINS: FACT_ORIGINS,
   FACT_SOURCE_KINDS: FACT_SOURCE_KINDS, FACT_LIVE_STATUS: FACT_LIVE_STATUS,

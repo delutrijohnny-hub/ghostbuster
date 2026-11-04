@@ -2323,6 +2323,8 @@ function msgxQueueRows(f, queue){
 
 function renderLeftColumn(queue, rows, waiting){
   var f = UI.msgxFilter || 'action';
+  /* Rendered after whichever list below it draws, since each one replaces the
+     container the slot lives in. */
   if(f === 'action' || f === 'replies' || f === 'later'){
     renderPriorityQueue(filterConversations(msgxQueueRows(f, queue), UI.msgxQuery));
   } else if(f === 'upcoming'){
@@ -2335,10 +2337,68 @@ function renderLeftColumn(queue, rows, waiting){
   }
 }
 
+/* Contacts whose last message might have been a no, offered at the top of
+   the queue they are clogging.
+
+   This is the fix for the thing that prompted all of it: Brandon Walsh sat
+   under "Reply waiting" for ten weeks because nothing could record that he
+   had already answered. Rather than wait for somebody to notice him in a
+   list of fifty, the list says so.
+
+   EVERY ROW IS A GUESS, and says so in those words. One of the five on this
+   book is "We are on for tomorrow. Ok I am all set", which is a confirmation
+   -- so their own message is quoted in full rather than summarised, because
+   reading the sentence is the entire check and a paraphrase would defeat it.
+
+   Dismissable for the session, not forever. "Not a no" is a judgement about
+   this message, and a contact who says something similar next month deserves
+   asking again; a permanent dismissal would need a column to record a
+   negative, which is a lot of machinery for a banner. */
+function renderDeclineSuggestions(){
+  var slot = el('pq-maybe-no');
+  if(!slot) return;
+  var sug = declineSuggestions(STATE, new Date()).filter(function(s){
+    return !(UI.notANo || {})[s.clientId];
+  });
+  if(!sug.length){ slot.innerHTML = ''; return; }
+
+  slot.innerHTML = '<div class="maybe-no">' +
+    '<div class="mn-head">' + sug.length +
+      (sug.length === 1 ? ' contact may have said no' : ' contacts may have said no') +
+      '<span class="mn-sub">Their words, not ours \u2014 read before deciding.</span></div>' +
+    sug.map(function(s){
+      return '<div class="mn-row">' +
+        '<div class="mn-who"><strong>' + escapeHtml(s.name) + '</strong>' +
+          '<span class="mn-when">' + escapeHtml(briefAge(s.daysAgo)) + ' \u00b7 ' +
+            s.sent + (s.sent === 1 ? ' message sent' : ' messages sent') + '</span>' +
+          /* The damning number, and the reason to read this row first: how
+             many went out AFTER they said it. Shown only when there are any,
+             because zero is the normal case for somebody who answered
+             yesterday and is not a finding. */
+          (s.sentSince ? '<span class="mn-since">' + s.sentSince +
+            (s.sentSince === 1 ? ' sent since' : ' sent since') + '</span>' : '') +
+        '</div>' +
+        '<div class="mn-said">\u201c' + escapeHtml(s.text) + '\u201d</div>' +
+        '<div class="mn-acts">' +
+          '<button class="btn btn-sm" data-action="mark-declined" data-cid="' +
+            escapeHtml(s.clientId) + '">They said no</button>' +
+          '<button class="linkish" data-action="not-a-no" data-cid="' +
+            escapeHtml(s.clientId) + '">Not a no</button>' +
+          '<button class="linkish" data-action="msgx-open" data-cid="' +
+            escapeHtml(s.clientId) + '">Open thread</button>' +
+        '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+}
+
 function renderPriorityQueue(rows){
   var box = el('msgx-list'); if(!box) return;
+  /* The slot exists even when the queue is empty, because "nothing needs you"
+     is exactly the state a contact nobody has marked is hiding in. */
+  var head = '<div id="pq-maybe-no"></div>';
   if(!rows.length){
-    box.innerHTML = '<div class="msgx-empty">Nothing needs you right now.</div>';
+    box.innerHTML = head + '<div class="msgx-empty">Nothing needs you right now.</div>';
+    renderDeclineSuggestions();
     return;
   }
   var html = '', lastGroup = null;
@@ -2377,7 +2437,8 @@ function renderPriorityQueue(rows){
         (r.alsoCount ? '<span class="pq-also">+' + r.alsoCount + ' more</span>' : '') +
       '</span></button>';
   });
-  box.innerHTML = html;
+  box.innerHTML = head + html;
+  renderDeclineSuggestions();
 }
 
 function renderMsgxList(rows, waiting, total){
@@ -2891,12 +2952,23 @@ function renderMsgxThread(){
       '</div>' +
       '<button class="btn btn-sm" data-action="open-client" data-cid="' + escapeHtml(c.id) + '">Open contact</button>' +
     '</div>' +
+    /* Above the messages, not below them: somebody opening this thread needs
+       to know the conversation is over before they start reading it for a
+       way back in. */
+    declineBanner(c) +
     '<div class="msgx-msgs" id="msgx-msgs">' + bubbles + '</div>' +
     msgxTouchPanel(c, new Date()) +
     /* Above the composer, below the touch panel: what you know comes before
        what you are about to say about it. */
     msgxFactsPanel(c) +
     '<div class="msgx-compose' + (noteMode ? ' noting' : '') + '">' + modeTabs + composer + '</div>' +
+    /* Quiet, and below the composer rather than beside Send: this is the
+       thing you reach for after reading what they wrote, not a button to
+       hit by accident. Hidden once they are marked -- the banner at the top
+       owns the undo. */
+    (hasDeclined(c) ? '' :
+      '<div class="msgx-sayno"><button class="linkish" data-action="mark-declined" data-cid="' +
+      escapeHtml(c.id) + '">They said no \u2014 stop following up</button></div>') +
     /* Working the list is the point: deal with one, move to the next,
        without going back to hunt for where you were. */
     '<div class="msgx-next"><button class="linkish" data-action="msgx-next">Next client \u2192</button></div>';
@@ -5535,7 +5607,7 @@ function applyOnboarding(){
    Kept in step with the ?v= on the script tags in app.html. Shown at the
    bottom of Business settings so a stale cache can be identified by asking
    rather than inferred from "I still cannot see it". */
-var BUILD_STAMP = '20261103-knownfacts';
+var BUILD_STAMP = '20261103-saidno';
 
 /* Which settings section to scroll to once the modal is up.
 
@@ -7177,6 +7249,21 @@ document.addEventListener('click', function(ev){
       break;
     /* The facts panel. Each case is one write, except edit and cancel, which
        only change what is on screen. */
+    case 'mark-declined':
+      doMarkDeclined(cid, target);
+      break;
+    case 'not-a-no':
+      /* This session only. "Not a no" is a judgement about one message, and
+         a contact who says something similar next month deserves asking
+         again. Recording it permanently would mean a column for a negative,
+         which is a lot of machinery to stop a banner reappearing. */
+      UI.notANo = UI.notANo || {};
+      UI.notANo[cid] = true;
+      renderDeclineSuggestions();
+      break;
+    case 'undo-declined':
+      doUndoDeclined(cid);
+      break;
     case 'fact-add':
       doAddFact(cid, target);
       break;
@@ -8463,6 +8550,68 @@ function doDraftReply(cid, target){
 }
 
 /* ============================================================
+   THEY SAID NO
+   ============================================================
+
+   One mark, recorded by a person, that stops the cadence and takes the
+   contact out of the action queue without pretending they were never there.
+
+   NOT AUTOMATIC, and that is the whole design. Of the five contacts on this
+   book whose words match a decline, one is "We are on for tomorrow. Ok I am
+   all set" -- a confirmation. So looksLikeDecline puts a button in front of
+   somebody who can read the sentence, and nothing writes until they press
+   it. A classifier that was right four times out of five here would cut off
+   a live lead every fifth time and never say which. */
+function doMarkDeclined(cid, target){
+  var c = STATE.clients[cid];
+  if(!c) return;
+
+  /* Prefilled with their own words, because a decline that can be checked is
+     worth more than one taken on trust: in six months the record should say
+     what was said, not that somebody once clicked a button. Editable, since
+     the reason is sometimes "told me on the call" and there is no message to
+     quote. */
+  var thread = conversationThread(c).filter(function(it){ return it.dir === 'in'; });
+  var theirLast = thread.length ? thread[thread.length - 1].text : '';
+  var suggested = looksLikeDecline(theirLast) ? theirLast : '';
+  var reason = window.prompt(
+    'Record that ' + firstName(c.name) + ' said no.\n\n' +
+    'Follow-ups stop and they leave your queue. Nothing is deleted, and you '
+    + 'can undo this.\n\nWhat did they say?', suggested);
+  if(reason === null) return;
+
+  var snap = snapshot();
+  setDeclined(STATE, cid, nowISO(), String(reason).trim(), STATE.userId || '');
+  saveState(STATE);
+  renderAll();
+  showToast(firstName(c.name) + ' marked as not interested. No more follow-ups.', snap);
+}
+
+function doUndoDeclined(cid){
+  var c = STATE.clients[cid];
+  if(!c) return;
+  var snap = snapshot();
+  setDeclined(STATE, cid, null);
+  saveState(STATE);
+  renderAll();
+  showToast(firstName(c.name) + ' is back in the sequence.', snap);
+}
+
+/* One sentence for every screen that shows a contact. Empty when they have
+   not declined, so it can be concatenated without a conditional. */
+function declineBanner(c){
+  var d = declineState(c, new Date());
+  if(!d) return '';
+  return '<div class="said-no">' +
+    '<strong>' + escapeHtml(declineLabel(c, new Date())) + '</strong>' +
+    (d.reason ? ' \u201c' + escapeHtml(d.reason) + '\u201d' : '') +
+    ' \u00b7 follow-ups stopped' +
+    '<button class="linkish" data-action="undo-declined" data-cid="' +
+      escapeHtml(c.id) + '">They\u2019re back</button>' +
+  '</div>';
+}
+
+/* ============================================================
    WHAT WE KNOW, and the handful of things you can do to it
    ============================================================
 
@@ -8875,6 +9024,19 @@ function doSendReply(cid, target, textOverride, onDone){
   var text = textOverride || (box && box.value.trim());
   if(!text){ showToast('Nothing to send yet.'); return; }
 
+  /* Asked, not refused. Somebody who said no in August may have texted back
+     this morning, and a product that will not let you answer them is worse
+     than one that reminds you what they said. The decline is left in place:
+     clearing it because a message was sent would quietly undo a record
+     nobody asked to undo -- "They are back" is its own button. */
+  if(hasDeclined(client)){
+    var dec = declineState(client, new Date());
+    if(!window.confirm(firstName(client.name) + ' said no ' +
+        (dec.daysAgo <= 0 ? 'today' : dec.daysAgo + ' days ago') +
+        (dec.reason ? ':\n\u201c' + dec.reason + '\u201d' : '.') +
+        '\n\nSend this anyway?')) return;
+  }
+
   if(target){ target.disabled = true; target.textContent = 'Sending\u2026'; }
   var restore = function(){
     if(target){ target.disabled = false; target.textContent = 'Send reply'; }
@@ -8950,6 +9112,18 @@ function doSendText(cid, stage, target){
      looked while testing the sandbox, where nothing happened and nothing
      explained why. A guard that declines silently is indistinguishable from a
      bug. */
+  /* A sequence touch to somebody who said no is refused outright, not
+     confirmed. There is no version of "send the welcome text anyway" that is
+     a deliberate human act -- this button sends whatever the cadence wrote,
+     and the cadence has already been told to stop. A typed reply is the
+     other case, and doSendReply asks rather than refuses. */
+  if(hasDeclined(client)){
+    showToast(firstName(client.name) + ' said no \u2014 ' +
+      (declineState(client, new Date()).reason || 'follow-ups are stopped') +
+      '. Nothing was sent.');
+    return;
+  }
+
   /* Asked the way the cadence asks it. hasSentStage here meant "ever sent",
      which refused every rescheduled contact whose card the cadence had just
      offered. See touchAlreadySent. */
