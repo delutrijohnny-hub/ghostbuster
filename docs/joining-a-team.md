@@ -26,9 +26,19 @@ Two separate faults, stacked:
 
 ## The fix
 
-`supabase/migrations/20261104190000_signup_honours_invites.sql` — **not yet
-applied**. It changes no existing row. It changes what happens to the *next*
-person who signs up, and what `accept_org_invite` moves when next called.
+`supabase/migrations/20261106154241_signup_honours_invites.sql` — **applied
+2026-11-06**. It changed no existing row: it changes what happens to the
+*next* person who signs up, and what `accept_org_invite` moves when next
+called.
+
+Verified by inserting into `auth.users` inside a rolled-back transaction, so
+the trigger actually fired: an invited address lands in the team as a member
+with **no personal org** and the invite marked accepted; an uninvited address
+still gets its own org and its own trial; a revoked invite is ignored; the
+team gained a member and kept **zero** billing rows. `accept_org_invite` was
+run end to end — the note, the recorded fact, the per-contact wording and the
+inbound text all moved, four of the six tables the old list stranded, while
+the mover's trial row stayed behind.
 
 - **An outstanding invite to that address now wins at signup.** No personal
   organization is created, so no trial clock starts. Somebody with no invite
@@ -47,11 +57,6 @@ person who signs up, and what `accept_org_invite` moves when next called.
   belongs to the organization and moving a trial row into an established team
   puts everyone in it read-only at once; and `org_phone_numbers`, because a
   sending number is registered with the carrier against one organization.
-
-### Applying it
-
-`supabase db push` **does not work on this repo** — see
-`docs/desk-assistant.md`. Paste the file into the Supabase SQL editor.
 
 ## Adding somebody now
 

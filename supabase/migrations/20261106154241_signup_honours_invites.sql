@@ -1,8 +1,18 @@
 /* Signing up should not strand you in a company of one.
  *
- * NOT YET APPLIED -- see docs/joining-a-team.md. Applying it changes no
- * existing row; it only changes what happens to the next person who signs up,
- * and what accept_org_invite moves when it is next called.
+ * Applied to production 2026-11-06 as `signup_honours_invites`; the filename
+ * carries the remote version so the repo and the migration history agree
+ * about this one. It changed no existing row.
+ *
+ * Verified in rolled-back transactions, by inserting into auth.users so the
+ * trigger actually fired: an invited address lands in the team as a member
+ * with NO personal org and the invite marked accepted; an uninvited address
+ * still gets its own org and its own trial, so the product still works; a
+ * revoked invite is ignored; and the team org gained a member while keeping
+ * zero billing rows. accept_org_invite was exercised end to end -- the note,
+ * the recorded fact, the per-contact wording and the inbound text all moved,
+ * which are four of the six tables the old hand-written list left behind,
+ * while the mover's trial row stayed in the org they left.
  *
  * What happened to Celeste: she signed up on 13 October, the trigger below
  * made her an organization named after her email prefix and her its owner,
