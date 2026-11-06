@@ -60,12 +60,20 @@ async function yt(path: string, params: Record<string, string>) {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    /* The quota message is worth passing through: it is the one failure here
-       that is neither the rep's fault nor transient, and "try again" would be
-       wrong advice for it. */
+    /* Three failures here are about the PROJECT, not about this channel, and
+       all three would otherwise be cached against a contact as "could not
+       read that channel" -- sending a rep to fix a link that is fine.
+     *
+     * The invalid-key case is not hypothetical: the secret was once set to
+     * the literal placeholder text from the setup instructions, which is
+     * non-empty, so it sailed past the no-key check and failed here on every
+     * contact. An operator problem has to read as one. */
     const quota = /quota/i.test(detail);
+    const badKey = /api key not valid|API_KEY_INVALID|keyInvalid/i.test(detail);
+    const notEnabled = /accessNotConfigured|has not been used in project|SERVICE_DISABLED/i.test(detail);
     throw Object.assign(new Error(quota ? 'quota' : `youtube ${res.status}`), {
-      status: res.status, quota,
+      status: res.status, quota, badKey, notEnabled,
+      operator: quota || badKey || notEnabled,
     });
   }
   return await res.json();
@@ -249,16 +257,27 @@ Deno.serve(async (req) => {
     await remember(payload, null);
     return json({ ok: true, cached: false, channel: payload, fetchedAt: payload.fetchedAt });
   } catch (e) {
-    const quota = (e as any)?.quota === true;
-    const why = quota
+    const err = e as any;
+    const why = err?.quota
       ? 'The YouTube daily quota is spent. Channels will read again tomorrow; '
         + 'the brief still works from your own records.'
+      : err?.badKey
+      ? 'The YouTube key on this project is not valid, so no channel can be read. '
+        + 'That is a setup problem, not a problem with this contact.'
+      : err?.notEnabled
+      ? 'The YouTube Data API is not enabled for the key on this project. '
+        + 'That is a setup problem, not a problem with this contact.'
       : 'Could not read that channel just now.';
-    /* A quota failure is NOT cached: it is about today, not about this
-       channel, and remembering it would keep the contact blank until somebody
-       forced a refresh. */
-    if (!quota) await remember(null, why);
-    return json({ ok: false, error: why, code: quota ? 'quota' : 'fetch_failed' },
-                 quota ? 429 : 502);
+    /* NOTHING about the project is cached against a contact. A spent quota is
+       about today; an invalid key and a disabled API are about the project.
+       Remembering any of them here would leave every contact carrying an
+       error that blames their channel, and would keep doing so after the real
+       problem was fixed. Only a failure that is genuinely about THIS channel
+       is worth remembering. */
+    if (!err?.operator) await remember(null, why);
+    const code = err?.quota ? 'quota' : err?.badKey ? 'bad_key'
+               : err?.notEnabled ? 'api_disabled' : 'fetch_failed';
+    return json({ ok: false, error: why, code },
+                 err?.quota ? 429 : err?.operator ? 503 : 502);
   }
 });

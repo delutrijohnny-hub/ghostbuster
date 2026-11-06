@@ -6700,11 +6700,23 @@ console.log('\n--- channel research ---');
       fetches + ' fetches but only ' + signals + ' deadlines, so one can hang silently');
   });
 
-  test('a spent quota is not cached as a fact about the contact', () => {
-    /* Quota is about today, not about this channel. Remembering it against
-       the contact would leave them blank until somebody forced a refresh. */
-    assert.ok(/if \(!quota\) await remember\(/.test(src),
-      'a quota failure is written to the cache, so the contact stays blank tomorrow');
+  test('a problem with the project is never cached against a contact', () => {
+    /* Three failures are about the PROJECT: a spent quota, an invalid key and
+       a disabled API. Cached against a contact they read as "could not read
+       that channel", sending a rep to fix a link that is fine -- and they
+       keep reading that way after the real problem is fixed.
+
+       The invalid-key case is not hypothetical. The secret was once set to
+       the literal placeholder from the setup instructions, which is
+       non-empty, so it passed the no-key check and failed on every contact. */
+    assert.ok(/if \(!err\?\.operator\) await remember\(/.test(src),
+      'a project-level failure is written to the cache against the contact');
+    assert.ok(/badKey/.test(src) && /notEnabled/.test(src),
+      'an invalid key and a disabled API are not told apart from a bad channel link');
+    assert.ok(/'bad_key'/.test(src) && /'api_disabled'/.test(src),
+      'the caller cannot tell a setup problem from a broken contact');
+    assert.ok(/not a problem with this contact/.test(src),
+      'the message does not say whose problem it is');
   });
 
   test('it never scrapes, and never asks a model', () => {
