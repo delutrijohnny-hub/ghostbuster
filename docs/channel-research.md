@@ -93,9 +93,11 @@ forced a refresh.
    as the Calendar credentials is fine) and set it as the `YOUTUBE_API_KEY`
    secret on the Supabase project. Without it the function returns `no_key`
    and says so; the brief still works from your own records.
-2. **Apply `supabase/migrations/20261106190000_client_research.sql`** — the
-   cache table. Not yet applied. `supabase db push` does not work on this
-   repo; see `docs/desk-assistant.md`. Paste it into the SQL editor.
+2. ~~Apply the `client_research` migration.~~ **Done** — applied 2026-11-06
+   as remote version `20261106153651`. Verified in a rolled-back transaction:
+   RLS on with four policies, a refresh replaces rather than stacks, an
+   unknown source is refused, and an outsider reads zero rows and cannot
+   write.
 3. **Deploy `channel-research`**, and the functions that bundle `logic.js`,
    which changed.
 

@@ -1,6 +1,12 @@
 /* What was read about a contact from outside this app, and when.
  *
- * NOT YET APPLIED -- see docs/channel-research.md.
+ * Applied to production 2026-11-06 as `client_research`. The filename carries
+ * the REMOTE version number so the repo and
+ * supabase_migrations.schema_migrations agree about this change; most of the
+ * older pairs do not, which is why `supabase db push` cannot be used on this
+ * repo. Verified in a rolled-back transaction: RLS on with four policies, a
+ * refresh replaces rather than stacks, an unknown source is refused, and an
+ * outsider reads zero rows and cannot write.
  *
  * A cache, and the word is load-bearing. The YouTube Data API gives 10,000
  * units a day and a full channel read costs three, so re-reading 987 channels
