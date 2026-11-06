@@ -6474,6 +6474,297 @@ function canDraftReply(client){
    archived is not merely paused, and saying "paused until Friday" about
    somebody whose status already ended the sequence would be wrong. */
 /* ============================================================
+   WHAT THEIR CHANNEL SAYS
+   ============================================================
+
+   987 of 1,058 contacts on this book have a YouTube link and 2 have a note.
+   The CRM knows almost nothing written down about these people, and their
+   channel is sitting there saying a great deal -- which for a business that
+   sells YouTube help to realtors is not background colour, it IS the
+   qualifying conversation. Somebody who posted weekly until August and then
+   stopped has a different call from somebody shipping twice a week.
+
+   ARITHMETIC, NOT A MODEL. Every signal below is counted from the channel's
+   own public numbers and every question carries the number it came from, so
+   a rep can say it out loud and be right. "You were posting weekly until
+   August" can be checked on the channel in ten seconds; "they seem to be
+   losing momentum" cannot be checked at all.
+
+   The numbers are YouTube's and are not all exact. Subscriber counts are
+   rounded to three significant figures by the API itself and may be hidden
+   entirely, so `subscribersApprox` says so rather than printing a false
+   precision. */
+
+/* Below this, a channel is not "posting", it is dormant. Six weeks is long
+   enough that a fortnightly poster who slipped is not accused of stopping,
+   and short enough that it is still the thing worth asking about. */
+var CHANNEL_DORMANT_DAYS = 42;
+/* Short-form, by YouTube's current three-minute ceiling for Shorts. */
+var CHANNEL_SHORT_SECONDS = 180;
+/* How many recent uploads the cadence and the medians are read from. Enough
+   to see a pattern, few enough that a channel's ancient history does not
+   drown what it is doing now. */
+var CHANNEL_RECENT_VIDEOS = 20;
+
+/* The channel a link points at, in the two shapes this book actually holds:
+   679 @handles and 301 /channel/ ids. Returns what the API needs to look it
+   up, or null when the link is not a channel at all -- seven of them are
+   YouTube SEARCH RESULT urls, which name no channel and must not be
+   presented as one. */
+function youtubeChannelRef(link){
+  var url = String(link == null ? '' : link).trim();
+  if(!url) return null;
+  var handle = url.match(/youtube\.com\/@([A-Za-z0-9_.\-]+)/i);
+  if(handle) return {kind: 'handle', value: '@' + handle[1], url: url};
+  var id = url.match(/youtube\.com\/channel\/(UC[A-Za-z0-9_\-]{20,})/i);
+  if(id) return {kind: 'id', value: id[1], url: url};
+  var legacy = url.match(/youtube\.com\/(?:c|user)\/([A-Za-z0-9_.\-]+)/i);
+  if(legacy) return {kind: 'legacy', value: legacy[1], url: url};
+  return null;
+}
+
+/* ISO-8601 durations, which is how the API reports length. PT1M30S is 90
+   seconds. Null when it cannot be read, so a video of unknown length is
+   counted as neither short nor long rather than guessed into one. */
+function parseIsoDuration(iso){
+  var m = String(iso == null ? '' : iso)
+    .match(/^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);
+  if(!m) return null;
+  if(!m[1] && !m[2] && !m[3] && !m[4]) return null;
+  return (Number(m[1] || 0) * 86400) + (Number(m[2] || 0) * 3600) +
+         (Number(m[3] || 0) * 60) + Math.round(Number(m[4] || 0));
+}
+
+function sanitizeChannelResearch(raw){
+  if(!raw || typeof raw !== 'object') return null;
+  function num(v){
+    /* null, undefined and '' are ABSENT, not zero. Number(null) is 0, so the
+       obvious version reported a channel that hides its subscriber count as
+       having none -- a false statement about somebody's channel, printed as a
+       sourced fact, for a rep to repeat back to the person who owns it. */
+    if(v === null || v === undefined || v === '') return null;
+    var n = Number(v);
+    return isFinite(n) && n >= 0 ? n : null;
+  }
+  function stamp(v){
+    return (typeof v === 'string' && v && !isNaN(Date.parse(v))) ? v : null;
+  }
+  var videos = (Array.isArray(raw.videos) ? raw.videos : []).map(function(v){
+    if(!v || typeof v !== 'object') return null;
+    var at = stamp(v.publishedAt);
+    if(!at) return null;
+    var secs = (v.seconds === null || v.seconds === undefined)
+      ? parseIsoDuration(v.duration) : num(v.seconds);
+    return {
+      id: typeof v.id === 'string' ? v.id : '',
+      title: String(v.title == null ? '' : v.title).replace(/\s+/g, ' ').trim(),
+      publishedAt: at,
+      views: num(v.views),
+      seconds: secs,
+      /* Unknown length is neither, deliberately. */
+      isShort: secs === null ? null : secs <= CHANNEL_SHORT_SECONDS
+    };
+  }).filter(Boolean).sort(function(a, b){
+    return Date.parse(b.publishedAt) - Date.parse(a.publishedAt);
+  });
+
+  return {
+    source: 'youtube',
+    channelId: typeof raw.channelId === 'string' ? raw.channelId : '',
+    handle: typeof raw.handle === 'string' ? raw.handle : '',
+    title: String(raw.title == null ? '' : raw.title).trim(),
+    url: typeof raw.url === 'string' ? raw.url : '',
+    subscribers: num(raw.subscribers),
+    /* YouTube rounds subscriber counts to three significant figures and lets
+       a channel hide them outright. Saying which is the difference between a
+       fact and a figure somebody will repeat on a call. */
+    subscribersHidden: !!raw.subscribersHidden,
+    totalViews: num(raw.totalViews),
+    videoCount: num(raw.videoCount),
+    videos: videos,
+    fetchedAt: stamp(raw.fetchedAt) || nowISO()
+  };
+}
+
+function medianOf(nums){
+  var xs = (nums || []).filter(function(n){ return typeof n === 'number' && isFinite(n); })
+    .sort(function(a, b){ return a - b; });
+  if(!xs.length) return null;
+  var mid = Math.floor(xs.length / 2);
+  return xs.length % 2 ? xs[mid] : Math.round((xs[mid - 1] + xs[mid]) / 2);
+}
+
+/* What the channel is doing, counted rather than characterised. */
+function channelSignals(raw, now){
+  var ch = sanitizeChannelResearch(raw);
+  if(!ch) return null;
+  now = now || new Date();
+  var vids = ch.videos;
+  function daysSince(iso){
+    var t = Date.parse(iso);
+    return isNaN(t) ? null : Math.floor((now.getTime() - t) / 86400000);
+  }
+
+  var last = vids.length ? vids[0] : null;
+  var lastDays = last ? daysSince(last.publishedAt) : null;
+
+  /* The gap they actually keep, from the recent run rather than from the
+     channel's whole life -- a five-year-old channel that posts weekly now
+     would otherwise read as monthly. Median, not mean, so one four-month
+     holiday does not redefine the habit. */
+  var recent = vids.slice(0, CHANNEL_RECENT_VIDEOS);
+  var gaps = [];
+  for(var i = 0; i < recent.length - 1; i++){
+    var g = (Date.parse(recent[i].publishedAt) - Date.parse(recent[i + 1].publishedAt)) / 86400000;
+    if(isFinite(g) && g >= 0) gaps.push(g);
+  }
+  var cadenceDays = medianOf(gaps);
+  var cadenceLabel = null;
+  if(cadenceDays !== null){
+    cadenceLabel = cadenceDays <= 3 ? 'every few days'
+                 : cadenceDays <= 10 ? 'weekly'
+                 : cadenceDays <= 18 ? 'fortnightly'
+                 : cadenceDays <= 45 ? 'monthly'
+                 : 'now and then';
+  }
+
+  function since(days){
+    return vids.filter(function(v){
+      var d = daysSince(v.publishedAt);
+      return d !== null && d < days;
+    }).length;
+  }
+  var last90 = since(90);
+  var prev90 = vids.filter(function(v){
+    var d = daysSince(v.publishedAt);
+    return d !== null && d >= 90 && d < 180;
+  }).length;
+  var trend = (last90 === 0 && prev90 === 0) ? null
+            : last90 > prev90 ? 'up'
+            : last90 < prev90 ? 'down' : 'steady';
+
+  var shorts = recent.filter(function(v){ return v.isShort === true; });
+  var longs  = recent.filter(function(v){ return v.isShort === false; });
+  var shortMed = medianOf(shorts.map(function(v){ return v.views; }));
+  var longMed  = medianOf(longs.map(function(v){ return v.views; }));
+  /* Only claimed when both sides have enough videos to mean anything. Two
+     shorts against eleven long videos is not a finding. */
+  var compare = (shorts.length >= 3 && longs.length >= 3 && shortMed && longMed)
+    ? Math.round((shortMed / longMed) * 10) / 10 : null;
+
+  var withViews = recent.filter(function(v){ return typeof v.views === 'number'; });
+  var medianViews = medianOf(withViews.map(function(v){ return v.views; }));
+  var top = null;
+  withViews.forEach(function(v){ if(!top || v.views > top.views) top = v; });
+  /* An outlier only counts as one if it actually stands out. */
+  var breakout = (top && medianViews && top.views >= medianViews * 3) ? top : null;
+
+  return {
+    ok: true,
+    title: ch.title, handle: ch.handle, channelId: ch.channelId, url: ch.url,
+    subscribers: ch.subscribers,
+    subscribersHidden: ch.subscribersHidden,
+    totalViews: ch.totalViews,
+    videoCount: ch.videoCount,
+    sampled: recent.length,
+    lastUpload: last ? {at: last.publishedAt, daysAgo: lastDays, title: last.title} : null,
+    dormant: lastDays !== null && lastDays >= CHANNEL_DORMANT_DAYS,
+    dormantDays: (lastDays !== null && lastDays >= CHANNEL_DORMANT_DAYS) ? lastDays : null,
+    cadenceDays: cadenceDays, cadenceLabel: cadenceLabel,
+    last90: last90, prev90: prev90, trend: trend,
+    shorts: {count: shorts.length, medianViews: shortMed},
+    longs: {count: longs.length, medianViews: longMed},
+    shortsVsLong: compare,
+    medianViews: medianViews,
+    breakout: breakout ? {title: breakout.title, views: breakout.views,
+                          at: breakout.publishedAt, daysAgo: daysSince(breakout.publishedAt)} : null,
+    fetchedAt: ch.fetchedAt,
+    fetchedDaysAgo: daysSince(ch.fetchedAt)
+  };
+}
+
+function plural(n, one, many){ return n + ' ' + (n === 1 ? one : many); }
+
+/* A rounded count, said the way a person would. */
+function roughCount(n){
+  if(n === null || n === undefined) return '';
+  if(n < 1000) return String(n);
+  if(n < 1000000) return (Math.round(n / 100) / 10) + 'k';
+  return (Math.round(n / 100000) / 10) + 'm';
+}
+
+/* Questions worth asking THIS person, each carrying the number behind it.
+ *
+ * Ordered by how much the answer would change the call. A channel that
+ * stopped is the first thing to ask about: it is the most likely reason they
+ * took the meeting, and getting it wrong -- congratulating somebody on
+ * momentum they lost in August -- is the worst opening available. */
+function channelQuestions(sig){
+  if(!sig || !sig.ok) return [];
+  var out = [];
+  function ask(text, from){ out.push({text: text, from: from}); }
+  var when = sig.lastUpload ? safeDate(sig.lastUpload.at) : null;
+  var month = when ? new Intl.DateTimeFormat('en-US', {month: 'long'}).format(when) : null;
+
+  if(sig.dormant && sig.cadenceLabel){
+    ask('You were posting ' + sig.cadenceLabel +
+        (month ? ' until ' + month : '') + ' \u2014 what got in the way?',
+        'last upload ' + plural(sig.dormantDays, 'day', 'days') + ' ago');
+  } else if(sig.dormant){
+    ask('Nothing new on the channel for ' + plural(sig.dormantDays, 'day', 'days') +
+        ' \u2014 is video still something you want working?',
+        'last upload ' + plural(sig.dormantDays, 'day', 'days') + ' ago');
+  } else if(sig.cadenceLabel){
+    ask('You are posting ' + sig.cadenceLabel + ' \u2014 what is that bringing you?',
+        'median gap of ' + plural(Math.round(sig.cadenceDays), 'day', 'days') +
+        ' across ' + plural(sig.sampled, 'upload', 'uploads'));
+  }
+
+  if(sig.trend === 'down' && !sig.dormant && sig.prev90 > sig.last90){
+    ask('Uploads are down from ' + sig.prev90 + ' to ' + sig.last90 +
+        ' over the last two quarters \u2014 deliberate?',
+        sig.prev90 + ' in the quarter before, ' + sig.last90 + ' since');
+  }
+  if(sig.trend === 'up' && sig.last90 > sig.prev90){
+    ask('You have stepped up to ' + plural(sig.last90, 'video', 'videos') +
+        ' this quarter \u2014 what changed?',
+        plural(sig.prev90, 'video', 'videos') + ' the quarter before');
+  }
+
+  if(sig.shortsVsLong !== null && sig.shortsVsLong >= 1.8){
+    ask('Your shorts are out-watching your long videos about ' + sig.shortsVsLong +
+        ' to 1 \u2014 is that on purpose?',
+        'median ' + roughCount(sig.shorts.medianViews) + ' views on ' +
+        plural(sig.shorts.count, 'short', 'shorts') + ' against ' +
+        roughCount(sig.longs.medianViews) + ' on ' +
+        plural(sig.longs.count, 'long video', 'long videos'));
+  } else if(sig.shortsVsLong !== null && sig.shortsVsLong <= 0.55){
+    ask('Your long videos out-watch your shorts \u2014 are the shorts earning their time?',
+        'median ' + roughCount(sig.longs.medianViews) + ' views on ' +
+        plural(sig.longs.count, 'long video', 'long videos') + ' against ' +
+        roughCount(sig.shorts.medianViews) + ' on ' +
+        plural(sig.shorts.count, 'short', 'shorts'));
+  }
+
+  if(sig.breakout){
+    ask('\u201c' + sig.breakout.title + '\u201d did far better than the rest \u2014 ' +
+        'did anything come of it?',
+        roughCount(sig.breakout.views) + ' views against a median of ' +
+        roughCount(sig.medianViews));
+  }
+
+  if(sig.subscribers !== null && !sig.subscribersHidden && sig.medianViews &&
+     sig.subscribers > 0 && sig.medianViews > sig.subscribers){
+    ask('Your videos are reaching well past your subscriber count \u2014 ' +
+        'where are those viewers coming from?',
+        roughCount(sig.medianViews) + ' median views on ' +
+        roughCount(sig.subscribers) + ' subscribers');
+  }
+
+  return out;
+}
+
+/* ============================================================
    THE DESK ASSISTANT
    ============================================================
 
@@ -6597,6 +6888,10 @@ function deskCheatSheet(state, client, now, opts){
   if(!client) return null;
   opts = opts || {};
   var research = deskResearch(opts.research);
+  /* Their channel, from the cache. Null when nothing has been fetched, which
+     is a different thing from a channel with nothing on it -- see gaps. */
+  var chan = channelSignals(opts.channel, now);
+  var chanRef = youtubeChannelRef(client.youtubeLink);
   var brief = callBriefing(state, client, now);
   var facts = brief.facts;
 
@@ -6661,9 +6956,39 @@ function deskCheatSheet(state, client, now, opts){
     source('Research', research.excerpt,
       'rep-provided' + (research.url ? ', from ' + research.url : ', source not given'), null);
   }
+  /* The channel's own numbers, as facts with the date they were read. These
+     are public and checkable in ten seconds, which is the only reason a rep
+     should repeat one on a call. */
+  if(chan){
+    var stats = [];
+    if(chan.subscribers !== null && !chan.subscribersHidden){
+      stats.push(roughCount(chan.subscribers) + ' subscribers');
+    }
+    if(chan.videoCount !== null) stats.push(plural(chan.videoCount, 'video', 'videos'));
+    if(chan.totalViews !== null) stats.push(roughCount(chan.totalViews) + ' views all told');
+    if(stats.length){
+      source('Their channel', stats.join(' \u00b7 '),
+        'youtube.com, read ' + (chan.fetchedDaysAgo ? chan.fetchedDaysAgo + 'd ago' : 'today'),
+        chan.fetchedAt);
+    }
+    if(chan.lastUpload){
+      source('Last posted',
+        '\u201c' + chan.lastUpload.title + '\u201d' +
+          (chan.lastUpload.daysAgo === null ? '' : ', ' +
+            plural(chan.lastUpload.daysAgo, 'day', 'days') + ' ago'),
+        'their channel', chan.lastUpload.at);
+    }
+    if(chan.cadenceLabel){
+      source('Posting', chan.dormant
+          ? 'was ' + chan.cadenceLabel + ', now stopped'
+          : chan.cadenceLabel,
+        'median gap across ' + plural(chan.sampled, 'upload', 'uploads'), null);
+    }
+  }
 
   /* ---- suggested: templates filled from the above, never confused with it ---- */
   var firstName_ = firstName(client.name);
+  var chanQs = channelQuestions(chan);
   var topObjection = facts.byKind.objection[0] || null;
   var topPromise = promises[0] || null;
   var openQ = brief.history.openQuestions.length
@@ -6685,6 +7010,15 @@ function deskCheatSheet(state, client, now, opts){
   } else if(lastIn && days(lastIn.t) !== null && days(lastIn.t) <= DESK_RECENT_DAYS){
     opener = 'Pick up where you left off \u2014 ' + (days(lastIn.t) <= 0 ? 'today' :
       days(lastIn.t) + ' days ago') + ' they said \u201c' + reminderQuote(lastIn.text) + '\u201d.';
+  } else if(kind === 'first' && chan && chan.dormant && chan.cadenceLabel){
+    /* The most likely reason they took the meeting, and the worst thing to
+       get wrong -- congratulating somebody on momentum they lost in August. */
+    opener = 'First call. They were posting ' + chan.cadenceLabel +
+      ' and stopped ' + plural(chan.dormantDays, 'day', 'days') +
+      ' ago \u2014 open there, not with a pitch.';
+  } else if(kind === 'first' && chan && chan.lastUpload && !chan.dormant){
+    opener = 'First call. They are still posting \u2014 newest is \u201c' +
+      chan.lastUpload.title + '\u201d. Lead with what is working.';
   } else if(kind === 'first'){
     opener = 'First call. Thank ' + firstName_ + ' for booking and ask what prompted it.';
   } else {
@@ -6702,6 +7036,24 @@ function deskCheatSheet(state, client, now, opts){
   } else if(facts.byKind.goal[0]){
     focus = {kind: 'opportunity', text: facts.byKind.goal[0].body,
              source: 'recorded goal (' + facts.byKind.goal[0].confidence + ')'};
+  } else if(chan && chan.dormant){
+    /* For this book -- realtors sold YouTube help -- a channel that stopped
+       IS the opportunity, and it is the most likely reason they booked. */
+    focus = {kind: 'opportunity',
+             text: 'They stopped posting ' + plural(chan.dormantDays, 'day', 'days') +
+                   ' ago, after ' + (chan.cadenceLabel || 'posting regularly') + '.',
+             source: 'their channel, last upload ' + plural(chan.dormantDays, 'day', 'days') + ' ago'};
+  } else if(chan && chan.shortsVsLong !== null && chan.shortsVsLong >= 1.8){
+    focus = {kind: 'opportunity',
+             text: 'Their shorts out-watch their long videos about ' +
+                   chan.shortsVsLong + ' to 1.',
+             source: 'their channel, median views across ' +
+                     plural(chan.sampled, 'upload', 'uploads')};
+  } else if(chan && chan.lastUpload && !chan.dormant){
+    focus = {kind: 'opportunity',
+             text: 'Still publishing \u2014 newest is \u201c' + chan.lastUpload.title + '\u201d.',
+             source: 'their channel, ' +
+                     plural(chan.lastUpload.daysAgo, 'day', 'days') + ' ago'};
   } else if(research){
     focus = {kind: 'opportunity', text: research.excerpt.slice(0, 180),
              source: 'rep-provided' + (research.url ? ', from ' + research.url : '')};
@@ -6736,6 +7088,11 @@ function deskCheatSheet(state, client, now, opts){
     '\u201d \u2014 what would have to change for this to work?');
   if(openQ) ask('You asked \u201c' + reminderQuote(openQ.text) +
     '\u201d \u2014 shall we start there?');
+  /* Their channel, after anything owed and before the generic fallbacks. On
+     a first call there is nothing owed, so these lead -- which is the whole
+     point: a question about what they actually published beats "what does
+     success look like" every time. */
+  chanQs.forEach(function(q){ ask(q.text); });
   if(!facts.byKind.goal.length) ask('What does a good outcome look like in ninety days?');
   if(!facts.byKind.timing.length) ask('When would you want this live?');
   if(!facts.byKind.budget.length) ask('What range were you expecting to spend?');
@@ -6756,22 +7113,54 @@ function deskCheatSheet(state, client, now, opts){
 
   /* ---- what it could not tell you ---- */
   var gaps = [];
-  if(!research) gaps.push('No outside research. There is no retrieval integration in '
-    + 'this app, so anything here came from your own records \u2014 paste a public '
-    + 'excerpt above if you have one.');
+  /* The channel's absences, each a different problem with a different fix. */
+  if(!chanRef && !chan){
+    gaps.push(client.youtubeLink
+      ? 'The YouTube link on this contact does not point at a channel, so nothing '
+        + 'could be read from it. Fix the link on the contact to get their numbers here.'
+      : 'No YouTube channel on file for them, so none of the questions below come '
+        + 'from what they actually publish.');
+  } else if(chanRef && !chan){
+    gaps.push('Their channel has not been read yet. Fetch it to get posting history '
+      + 'and questions built from it.');
+  } else if(chan && !chan.lastUpload){
+    gaps.push('Their channel exists but has no videos this could read, so there is no '
+      + 'posting history to go on.');
+  } else if(chan && chan.fetchedDaysAgo !== null && chan.fetchedDaysAgo >= 7){
+    gaps.push('Their channel numbers were read ' + plural(chan.fetchedDaysAgo, 'day', 'days')
+      + ' ago and may have moved since.');
+  }
+  if(chan && chan.subscribersHidden){
+    gaps.push('They hide their subscriber count, so anything below about reach is '
+      + 'based on views alone.');
+  }
+  if(!research) gaps.push('Nothing was pasted in beyond their channel. Anything else '
+    + 'here came from your own records \u2014 paste a public excerpt above if you have one.');
   if(research && research.urlRejected) gaps.push('That URL was not a plain http or https '
     + 'address, so it is not shown as the source. The excerpt is still here, '
     + 'labelled rep-provided.');
   if(research && research.truncated) gaps.push('The pasted excerpt was shortened to fit.');
-  if(!facts.counts.total) gaps.push('Nothing is recorded as a fact about them, so the '
-    + 'objection and goal lines below are guesses from the conversation, not from '
-    + 'anything they confirmed.');
+  /* Deliberately NOT repeated here: callBriefing's limits already say that
+     nothing is recorded as a fact, in better words, and they are carried in
+     below. Saying it twice is how a gaps list grows past the point anybody
+     reads it. */
   if(kind === 'follow_up' && !inbound.length) gaps.push('They have never written back, so '
     + 'nothing here is in their own words.');
   /* The brief's own caveats, which already name a stale summary, a thread this
      Mac cannot read, unconfirmed sends and an inferred timezone. Carried
      rather than restated, so the two can never drift apart. */
   brief.limits.forEach(function(l){ if(gaps.indexOf(l) === -1) gaps.push(l); });
+  /* "Nothing has been written down about this contact beyond their messages"
+     and "Nothing has been recorded as a fact about this contact" are the same
+     complaint from two different functions. Keep the first, drop the rest, so
+     the list is as long as the number of DISTINCT things wrong. */
+  var saidNothingRecorded = false;
+  gaps = gaps.filter(function(g){
+    if(!/^Nothing ha(s|ve) been (recorded|written down)/.test(g)) return true;
+    if(saidNothingRecorded) return false;
+    saidNothingRecorded = true;
+    return true;
+  });
 
   return {
     clientId: client.id,
@@ -6796,6 +7185,11 @@ function deskCheatSheet(state, client, now, opts){
     sourced: sourced,
     suggested: {opener: opener, focus: focus, questions: questions.slice(0, 2), goal: goal},
     research: research,
+    /* Null when nothing has been read. The full question list lives here
+       rather than in `suggested`, which stays short enough to read in thirty
+       seconds -- the rep can go deeper if they want to. */
+    channel: chan ? {signals: chan, questions: chanQs} : null,
+    channelRef: chanRef,
     gaps: gaps,
     asOf: now.toISOString()
   };
@@ -11520,6 +11914,11 @@ var __LOGIC_EXPORTS__ = {
   deskAppointments: deskAppointments, deskCheatSheet: deskCheatSheet,
   deskScript: deskScript, deskParseRecap: deskParseRecap,
   deskParseDate: deskParseDate, deskResearch: deskResearch,
+  youtubeChannelRef: youtubeChannelRef, parseIsoDuration: parseIsoDuration,
+  sanitizeChannelResearch: sanitizeChannelResearch, channelSignals: channelSignals,
+  channelQuestions: channelQuestions, roughCount: roughCount,
+  CHANNEL_DORMANT_DAYS: CHANNEL_DORMANT_DAYS,
+  CHANNEL_SHORT_SECONDS: CHANNEL_SHORT_SECONDS,
   deskLocalTime: deskLocalTime, DESK_RESEARCH_CHARS: DESK_RESEARCH_CHARS,
   deskDueInstant: deskDueInstant, zoneOffsetMinutes: zoneOffsetMinutes,
   DESK_VAGUE: DESK_VAGUE,

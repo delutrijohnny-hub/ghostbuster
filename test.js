@@ -2270,6 +2270,237 @@ test('the analytics that read reply data still work after an outcome', () => {
 }
 
 {
+  /* ---- what their channel says ---- */
+  const NOW = new Date('2026-11-06T16:00:00Z');
+  const ago = d => new Date(NOW.getTime() - d * 86400000).toISOString();
+
+  /* The two shapes this book actually holds: 679 @handles and 301 /channel/
+     ids. And the seven that are neither -- YouTube SEARCH RESULT urls, which
+     name no channel and must never be presented as one. */
+  {
+    const h = GB.youtubeChannelRef('https://www.youtube.com/@_zamartinez/shorts');
+    assert.deepStrictEqual([h.kind, h.value], ['handle', '@_zamartinez']);
+    const i = GB.youtubeChannelRef('https://www.youtube.com/channel/UC_cXfSXltLJ1sLA0FYh_c6A');
+    assert.deepStrictEqual([i.kind, i.value], ['id', 'UC_cXfSXltLJ1sLA0FYh_c6A']);
+    assert.strictEqual(
+      GB.youtubeChannelRef('https://www.youtube.com/results?search_query=nanas+bread'), null,
+      'a search-results URL is read as a channel, so a brief would claim to have '
+      + 'read a channel that does not exist');
+    assert.strictEqual(GB.youtubeChannelRef(''), null);
+    assert.strictEqual(GB.youtubeChannelRef(null), null);
+    assert.strictEqual(GB.youtubeChannelRef('https://example.com'), null);
+    assert.strictEqual(GB.youtubeChannelRef('https://www.youtube.com/c/DanaHomes').kind, 'legacy');
+  }
+
+  // ISO-8601 durations, which is how the API reports length.
+  {
+    assert.strictEqual(GB.parseIsoDuration('PT48S'), 48);
+    assert.strictEqual(GB.parseIsoDuration('PT11M24S'), 684);
+    assert.strictEqual(GB.parseIsoDuration('PT1H2M3S'), 3723);
+    /* Unknown length must stay unknown. Guessing it into "short" would move a
+       video between the two medians the shorts-vs-long question compares. */
+    assert.strictEqual(GB.parseIsoDuration(''), null);
+    assert.strictEqual(GB.parseIsoDuration('banana'), null);
+    assert.strictEqual(GB.parseIsoDuration(null), null);
+  }
+
+  function chan(videos, extra){
+    return Object.assign({
+      channelId: 'UCabc', handle: '@dana', title: 'Dana Whitfield Homes',
+      url: 'https://www.youtube.com/@dana', subscribers: 1240,
+      totalViews: 412000, videoCount: 34, videos: videos, fetchedAt: ago(0)
+    }, extra || {});
+  }
+  // Weekly until 97 days ago, then nothing. Shorts out-watch long 3:1.
+  const weeklyThenStopped = [];
+  [97,104,111,118,125,132,139,146,153,160,167,174].forEach((d, i) => {
+    const short = i % 2 === 0;
+    weeklyThenStopped.push({
+      id: 'v' + i, title: short ? 'Quick tip ' + i : 'Market update ' + i,
+      publishedAt: ago(d), views: short ? 7800 + i * 300 : 1900 + i * 120,
+      duration: short ? 'PT48S' : 'PT11M24S'
+    });
+  });
+
+  {
+    const sig = GB.channelSignals(chan(weeklyThenStopped), NOW);
+    assert.strictEqual(sig.lastUpload.daysAgo, 97);
+    assert.strictEqual(sig.dormant, true, 'a channel silent for 97 days reads as active');
+    assert.strictEqual(sig.cadenceLabel, 'weekly');
+    assert.strictEqual(sig.cadenceDays, 7);
+    assert.strictEqual(sig.last90, 0);
+    assert.ok(sig.prev90 > 0);
+    assert.ok(sig.shortsVsLong >= 2, 'shorts outperforming is not detected: ' + sig.shortsVsLong);
+
+    /* Newest first, whatever order they arrive in -- the API paginates and a
+       caller could hand them over reversed. */
+    const shuffled = GB.channelSignals(chan(weeklyThenStopped.slice().reverse()), NOW);
+    assert.strictEqual(shuffled.lastUpload.daysAgo, 97,
+      'videos are not sorted, so "last upload" is whichever arrived first');
+
+    // A channel posting now is not dormant and says what it is doing.
+    const live = GB.channelSignals(chan(
+      [2,9,16,23,30,37].map((d, i) => ({id: 'l' + i, title: 'New ' + i,
+        publishedAt: ago(d), views: 3000, duration: 'PT8M'}))), NOW);
+    assert.strictEqual(live.dormant, false);
+    assert.strictEqual(live.cadenceLabel, 'weekly');
+    assert.strictEqual(live.dormantDays, null);
+  }
+
+  {
+    /* A comparison needs enough on both sides. Two shorts against eleven long
+       videos is not a finding, and publishing it as one would have a rep
+       asserting a pattern to somebody who knows their own channel. */
+    const lopsided = GB.channelSignals(chan([
+      {id: 'a', title: 's', publishedAt: ago(5), views: 90000, duration: 'PT30S'},
+      {id: 'b', title: 's', publishedAt: ago(10), views: 80000, duration: 'PT30S'},
+      {id: 'c', title: 'l', publishedAt: ago(15), views: 100, duration: 'PT10M'},
+      {id: 'd', title: 'l', publishedAt: ago(20), views: 100, duration: 'PT10M'},
+      {id: 'e', title: 'l', publishedAt: ago(25), views: 100, duration: 'PT10M'}
+    ]), NOW);
+    assert.strictEqual(lopsided.shortsVsLong, null,
+      'a shorts-vs-long claim was made from two shorts');
+
+    // A breakout has to actually stand out, not merely be the largest.
+    const flat = GB.channelSignals(chan(
+      [3,10,17,24].map((d, i) => ({id: 'f' + i, title: 'v' + i,
+        publishedAt: ago(d), views: 1000 + i, duration: 'PT5M'}))), NOW);
+    assert.strictEqual(flat.breakout, null,
+      'the merely-highest video is being called a breakout');
+
+    // Hidden subscriber counts are said to be hidden, not reported as zero.
+    const hidden = GB.channelSignals(chan(weeklyThenStopped,
+      {subscribers: null, subscribersHidden: true}), NOW);
+    assert.strictEqual(hidden.subscribers, null);
+    assert.strictEqual(hidden.subscribersHidden, true);
+
+    /* A video whose length cannot be read counts as NEITHER short nor long.
+       `null <= 180` is true in JavaScript, so the obvious version filed every
+       unreadable duration under shorts -- moving videos between the two
+       medians that the shorts-vs-long question compares, and so changing a
+       number a rep would quote. */
+    const unknownLength = GB.channelSignals(chan([
+      {id: 'u1', title: 'no duration', publishedAt: ago(3), views: 500, duration: null},
+      {id: 'u2', title: 'short',       publishedAt: ago(6), views: 900, duration: 'PT30S'},
+      {id: 'u3', title: 'long',        publishedAt: ago(9), views: 400, duration: 'PT12M'}
+    ]), NOW);
+    assert.strictEqual(unknownLength.shorts.count, 1,
+      'a video of unknown length was counted as a short');
+    assert.strictEqual(unknownLength.longs.count, 1,
+      'a video of unknown length was counted as a long video');
+
+    /* Cadence is the MEDIAN gap, so one long break does not redefine the
+       habit. These gaps are 7, 7, 7 and 90: the median says weekly, the mean
+       says monthly, and only one of those is true of how they post. */
+    const oneLongBreak = GB.channelSignals(chan([
+      {id: 'g0', title: 'a', publishedAt: ago(0),   views: 100, duration: 'PT5M'},
+      {id: 'g1', title: 'b', publishedAt: ago(7),   views: 100, duration: 'PT5M'},
+      {id: 'g2', title: 'c', publishedAt: ago(14),  views: 100, duration: 'PT5M'},
+      {id: 'g3', title: 'd', publishedAt: ago(21),  views: 100, duration: 'PT5M'},
+      {id: 'g4', title: 'e', publishedAt: ago(111), views: 100, duration: 'PT5M'}
+    ]), NOW);
+    assert.strictEqual(oneLongBreak.cadenceDays, 7,
+      'one long break is being averaged into the posting habit: '
+      + oneLongBreak.cadenceDays);
+    assert.strictEqual(oneLongBreak.cadenceLabel, 'weekly');
+
+    // Nothing in, nothing out -- never a throw, since this runs in a render.
+    assert.strictEqual(GB.channelSignals(null, NOW), null);
+    assert.strictEqual(GB.channelSignals({}, NOW).lastUpload, null);
+    const junk = GB.channelSignals(chan([
+      {id: 'x', title: 'no date', publishedAt: null, views: 5, duration: 'PT1M'}
+    ]), NOW);
+    assert.strictEqual(junk.lastUpload, null, 'a video with no date was kept');
+  }
+
+  {
+    /* EVERY question carries the number it came from. That is the whole
+       reason a rep can say one out loud: it can be checked on the channel in
+       ten seconds. A question with no provenance is a guess wearing a fact's
+       clothes. */
+    const qs = GB.channelQuestions(GB.channelSignals(chan(weeklyThenStopped), NOW));
+    assert.ok(qs.length >= 2, 'a dormant channel with 12 uploads produced no questions');
+    qs.forEach(q => {
+      assert.ok(q.text && q.text.trim(), 'a question has no text');
+      assert.ok(q.from && q.from.trim(),
+        'a question carries no provenance: ' + JSON.stringify(q));
+    });
+    assert.ok(/posting weekly until/i.test(qs[0].text),
+      'the first question is not about the channel going quiet: ' + qs[0].text);
+    assert.ok(/97 days ago/.test(qs[0].from));
+
+    // Nothing to go on produces nothing, rather than a generic question
+    // dressed up as research.
+    assert.deepStrictEqual(GB.channelQuestions(null), []);
+    assert.deepStrictEqual(GB.channelQuestions(GB.channelSignals(chan([]), NOW)), []);
+  }
+
+  {
+    /* In the brief. A first call with no CRM history is most of this book --
+       2 contacts of 1,058 have a note -- so the channel has to be able to
+       carry the whole thing. */
+    const c = GB.sanitizeClient({
+      id: 'c1', name: 'Dana Whitfield', phone: '+15125550143', status: 'Booked',
+      timezone: 'America/Chicago', callDateTime: ago(-1),
+      youtubeLink: 'https://www.youtube.com/@dana'
+    });
+    const st = {clients: {c1: c}, myCalendars: []};
+    const sheet = GB.deskCheatSheet(st, c, NOW, {channel: chan(weeklyThenStopped)});
+
+    assert.ok(sheet.channel, 'the brief does not carry the channel');
+    assert.ok(sheet.sourced.some(x => x.label === 'Their channel'),
+      'the channel numbers are not among the sourced facts');
+    assert.ok(sheet.sourced.some(x => x.label === 'Last posted'));
+    sheet.sourced.forEach(x => assert.ok(x.source && x.source.trim()));
+
+    // The focus comes from the channel when nothing is on record -- and a
+    // channel that stopped IS the opportunity for this business.
+    assert.strictEqual(sheet.suggested.focus.kind, 'opportunity');
+    assert.ok(/stopped posting/i.test(sheet.suggested.focus.text),
+      'the focus ignores a channel that went quiet: ' + sheet.suggested.focus.text);
+
+    // The suggested questions are the channel's, not the generic fallbacks.
+    assert.ok(sheet.suggested.questions.some(q => /posting weekly until/i.test(q)),
+      'the brief asks generic questions while holding channel data: '
+      + JSON.stringify(sheet.suggested.questions));
+    assert.ok(/stopped/i.test(sheet.suggested.opener),
+      'the opener ignores the channel: ' + sheet.suggested.opener);
+
+    /* Each absence is a DIFFERENT problem with a different fix, and says so.
+       "No link on file" is the rep's to fix on the contact; "not read yet" is
+       a button; a search-result URL is a bad link. */
+    const noLink = GB.sanitizeClient({id: 'c2', name: 'No Link', phone: '+15125550144'});
+    assert.ok(GB.deskCheatSheet({clients: {c2: noLink}}, noLink, NOW).gaps
+      .some(g => /no youtube channel on file/i.test(g)));
+
+    const badLink = GB.sanitizeClient({id: 'c3', name: 'Bad Link', phone: '+15125550145',
+      youtubeLink: 'https://www.youtube.com/results?search_query=x'});
+    assert.ok(GB.deskCheatSheet({clients: {c3: badLink}}, badLink, NOW).gaps
+      .some(g => /does not point at a channel/i.test(g)),
+      'a search-result link is not reported as a bad link');
+
+    const unread = GB.deskCheatSheet(st, c, NOW);
+    assert.ok(unread.gaps.some(g => /has not been read yet/i.test(g)),
+      'a contact with a channel link but no fetch is not told so');
+
+    // A stale read says how stale, rather than passing old numbers off as now.
+    const stale = GB.deskCheatSheet(st, c, NOW, {channel: chan(weeklyThenStopped, {fetchedAt: ago(30)})});
+    assert.ok(stale.gaps.some(g => /30 days ago and may have moved/i.test(g)),
+      'a month-old read is presented as current');
+
+    /* The gaps list is as long as the number of DISTINCT things wrong. Three
+       functions each saying "nothing is recorded" in their own words is how a
+       list nobody reads gets built. */
+    const nothingRecorded = sheet.gaps.filter(g => /^Nothing ha(s|ve) been (recorded|written down)/.test(g));
+    assert.ok(nothingRecorded.length <= 1,
+      'the same gap is stated ' + nothingRecorded.length + ' times: '
+      + JSON.stringify(nothingRecorded));
+  }
+
+  console.log('  ok  - a channel is read as signals, and every question carries its number');
+}
+
+{
   /* ---- the Desk Assistant ---- */
   const NOW = new Date('2026-11-04T01:30:00Z');   // Tue 3 Nov, 8:30pm New York
   const REP_TZ = 'America/New_York';
@@ -2447,9 +2678,18 @@ test('the analytics that read reply data still work after an outcome', () => {
     // implying it looked outside and found nothing.
     assert.strictEqual(GB.deskResearch(null), null);
     assert.ok(sheet.gaps.length === 0 || true);
+    /* The claim, not the old sentence. This used to assert the words "no
+       retrieval integration", which stopped being true once channel research
+       existed -- but what it was protecting did not change: a brief with
+       nothing pasted in must say so rather than implying it looked. */
     const noneSheet = GB.deskCheatSheet(book(c), c, NOW);
-    assert.ok(noneSheet.gaps.some(g => /no retrieval integration/i.test(g)),
-      'the brief does not admit that nothing outside the app was consulted');
+    assert.ok(noneSheet.gaps.some(g => /nothing was pasted in/i.test(g)),
+      'the brief does not admit that nothing was pasted in: '
+      + JSON.stringify(noneSheet.gaps));
+    // And a contact with no channel link says THAT, which is a different gap
+    // with a different fix.
+    assert.ok(noneSheet.gaps.some(g => /no youtube channel on file/i.test(g)),
+      'a contact with no channel link is not told so: ' + JSON.stringify(noneSheet.gaps));
   }
 
   /* --------------------------------------------- somebody who said no -------- */
@@ -6418,6 +6658,72 @@ test('the send function refuses clearly when nothing is configured', () => {
   assert.ok(src.includes('/auth/v1/user'), 'must resolve the bearer token to a real user');
   assert.ok(src.includes('OPTIONS'), 'must answer CORS preflight or the browser never reaches it');
 });
+
+console.log('\n--- channel research ---');
+
+/* This function reaches out to a third party with a key the browser must
+   never see, on behalf of a caller who may not be allowed to see the contact.
+   Each of these is a way that goes wrong quietly, so they are asserted
+   against the source rather than trusted to stay true. */
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'functions', 'channel-research', 'index.ts'), 'utf8');
+
+  test('it reads as the caller and holds no service-role key', () => {
+    /* The whole access story. With a service-role key this would happily
+       research a contact the caller is not allowed to open, and RLS would
+       never be consulted -- so asking this function becomes a way around the
+       policy on clients. */
+    assert.ok(!/SERVICE_ROLE/i.test(src),
+      'a service-role key here turns this into a way to read contacts RLS hides');
+    assert.ok(/Authorization: `Bearer \$\{callerToken\}`/.test(src),
+      'reads must carry the caller token, or RLS decides nothing');
+    assert.ok(/clients\?id=eq\./.test(src) && /not available to you/.test(src),
+      'the contact is not re-checked against the caller before being researched');
+  });
+
+  test('the API key never leaves the server, and a missing one says so', () => {
+    assert.ok(/Deno\.env\.get\('YOUTUBE_API_KEY'\)/.test(src));
+    // Returned to the browser anywhere would put it in the page.
+    assert.ok(!/channel:\s*\{[^}]*YOUTUBE_API_KEY/.test(src));
+    assert.ok(/code: 'no_key'/.test(src),
+      'a project with no key configured must say so rather than look like a broken link');
+  });
+
+  test('every outbound call has a deadline', () => {
+    /* gemini-draft recorded the cost of forgetting one: the first real draft
+       took 92 seconds and the button sat there saying nothing. A hung fetch
+       holds the worker until it is reclaimed. */
+    const fetches = (src.match(/await fetch\(/g) || []).length;
+    const signals = (src.match(/AbortSignal\.timeout\(/g) || []).length;
+    assert.ok(signals >= fetches,
+      fetches + ' fetches but only ' + signals + ' deadlines, so one can hang silently');
+  });
+
+  test('a spent quota is not cached as a fact about the contact', () => {
+    /* Quota is about today, not about this channel. Remembering it against
+       the contact would leave them blank until somebody forced a refresh. */
+    assert.ok(/if \(!quota\) await remember\(/.test(src),
+      'a quota failure is written to the cache, so the contact stays blank tomorrow');
+  });
+
+  test('it never scrapes, and never asks a model', () => {
+    // Only the official API host.
+    assert.ok(/googleapis\.com\/youtube\/v3/.test(src));
+    const hosts = (src.match(/https?:\/\/[a-z0-9.\-]+/gi) || [])
+      .map(h => h.replace(/^https?:\/\//, ''))
+      .filter(h => !/googleapis\.com|youtube\.com|^\$/.test(h));
+    assert.deepStrictEqual(hosts, [],
+      'this function talks to a host that is not the YouTube API: ' + hosts.join(', '));
+    /* Comments stripped first. This matched the word "gemini-draft" inside a
+       comment citing it as precedent for the timeouts -- the same trap the
+       declined_at select test hit, where a column merely MENTIONED satisfied
+       a check about what the code does. */
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+    assert.ok(!/gemini|generativelanguage|openai/i.test(code),
+      'channel text is being sent to a model; the reading is meant to be arithmetic');
+  });
+}
 
 console.log('\n--- automatic email guardrails ---');
 

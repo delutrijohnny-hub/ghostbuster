@@ -26,6 +26,11 @@
   var root = null, launcher = null, cid = null, sheet = null,
       research = null, proposal = null, recog = null, listening = false,
       speaking = false, generation = 0;
+  /* What has been read about each contact's channel this session, keyed by
+     contact. Kept per contact rather than as one slot so flicking between
+     two appointments does not re-fetch either, and so one contact's numbers
+     can never be drawn under another's name. */
+  var channels = {};
 
   function sb() { return window.GB_SUPABASE; }
   function esc(s) { return escapeHtml(s == null ? '' : String(s)); }
@@ -200,17 +205,77 @@
     if (appt && window.STATE && window.STATE.clients[cid]) {
       try {
         sheet = deskCheatSheet(window.STATE, window.STATE.clients[cid], new Date(),
-                               {research: research});
+                               {research: research,
+                                channel: (channels[cid] || {}).channel || null});
       } catch (e) { sheet = null; }
+      /* Read once per contact per session, without being asked. The function
+         answers from its own cache when the read is less than a day old, so
+         the common case costs one request and no quota -- and a rep opening
+         a brief thirty seconds before a call should not have to know there
+         is a button. */
+      if (!channels[cid]) loadChannel(cid, false);
     }
 
     var body = document.getElementById('dk-body');
     if (!body) return;
-    body.innerHTML = appt ? (apptHtml(appt) + researchHtml() + playbackHtml() +
-                             briefHtml() + recapHtml()) : emptyHtml();
+    body.innerHTML = appt ? (apptHtml(appt) + channelHtml() + researchHtml() +
+                             playbackHtml() + briefHtml() + recapHtml()) : emptyHtml();
     paintSpeech();
     paintMic();
   });
+
+  /* Their channel, read through the Edge Function so the API key never
+     reaches the page.
+     
+     Failures are recorded against the contact rather than thrown: a channel
+     that cannot be read is a fact about that contact, and the brief says
+     which kind of failure it was, because "fix the link" and "the quota is
+     spent" need different actions from different people. */
+  function loadChannel(forCid, refresh) {
+    if (!forCid || !sb()) return;
+    var epoch = generation;
+    channels[forCid] = {loading: true};
+    paintChannel();
+    sb().functions.invoke('channel-research', {body: {clientId: forCid, refresh: !!refresh}})
+      .then(function (res) {
+        if (epoch !== generation) return;
+        var data = res && res.data;
+        /* invoke() puts a non-2xx in res.error and the function's own words
+           in the body, which is where the useful sentence lives -- the same
+           trap callGemini hit. */
+        if (!data && res && res.error && res.error.context &&
+            typeof res.error.context.json === 'function') {
+          return res.error.context.json().then(function (body) {
+            channels[forCid] = {error: (body && body.error) || 'Could not read that channel.'};
+            afterChannel(forCid);
+          }, function () {
+            channels[forCid] = {error: 'Could not read that channel.'};
+            afterChannel(forCid);
+          });
+        }
+        channels[forCid] = (data && data.ok && data.channel)
+          ? {channel: data.channel, cached: !!data.cached}
+          : {error: (data && data.error) || 'Could not read that channel.'};
+        afterChannel(forCid);
+      }, function () {
+        if (epoch !== generation) return;
+        channels[forCid] = {error: 'Could not reach the channel reader.'};
+        afterChannel(forCid);
+      });
+  }
+
+  function afterChannel(forCid) {
+    if (forCid !== cid) return;        // they moved on; keep the result, skip the redraw
+    render();
+  }
+
+  function paintChannel() {
+    var slot = document.getElementById('dk-chan');
+    if (slot && (channels[cid] || {}).loading) {
+      slot.innerHTML = '<div class="dk-k">Their channel</div>' +
+        '<div class="dk-note">Reading their channel\u2026</div>';
+    }
+  }
 
   /* No upcoming appointment is a normal state, not an error, and it says what
      would change it rather than leaving a blank panel. */
@@ -250,8 +315,9 @@
          rather than a second way to chase the same thing. */
       (!a.confirmed && a.confirmTouch
         ? '<button class="dk-btn dk-sub" data-action="send-text" data-cid="' + esc(a.clientId) +
-          '" data-stage="' + esc(a.confirmTouch) + '">Send the ' +
-          esc(touchLabel ? touchLabel(a.confirmTouch) : a.confirmTouch) + '</button>'
+          '" data-stage="' + esc(a.confirmTouch) + '">Send the confirmation \u00b7 ' +
+          esc(touchLabel ? touchLabel(a.confirmTouch).toLowerCase() : a.confirmTouch) +
+          '</button>'
         : (!a.confirmed
             ? '<div class="dk-note">No confirmation reminder is due right now. ' +
               'Open the contact to chase it.</div>' : '')) +
@@ -296,6 +362,62 @@
       '</section>';
   }
 
+  /* What their channel is doing, and the questions that come out of it.
+     Every line carries the number behind it, because that is the only reason
+     a rep can safely say one out loud thirty seconds into a call. */
+  function channelHtml() {
+    var st = channels[cid] || {};
+    var head = '<div class="dk-k">Their channel</div>';
+    var refresh = '<button class="dk-btn dk-sub" id="dk-chan-refresh">Read it again</button>';
+
+    if (st.loading) return '<section id="dk-chan">' + head +
+      '<div class="dk-note">Reading their channel\u2026</div></section>';
+
+    if (st.error) {
+      return '<section id="dk-chan">' + head +
+        '<div class="dk-note">' + esc(st.error) + '</div>' + refresh + '</section>';
+    }
+    if (!sheet || !sheet.channel) {
+      return '<section id="dk-chan">' + head +
+        '<div class="dk-note">Nothing read yet.</div>' + refresh + '</section>';
+    }
+
+    var g = sheet.channel.signals;
+    var bits = [];
+    if (g.subscribers !== null && !g.subscribersHidden) {
+      bits.push('<b>' + esc(roughCount(g.subscribers)) + '</b> subs');
+    } else if (g.subscribersHidden) {
+      bits.push('subs hidden');
+    }
+    if (g.videoCount !== null) bits.push('<b>' + g.videoCount + '</b> videos');
+    if (g.totalViews !== null) bits.push('<b>' + esc(roughCount(g.totalViews)) + '</b> views');
+
+    var line = g.lastUpload
+      ? (g.dormant
+          ? '<span class="dk-warn">Stopped ' + g.dormantDays + ' days ago</span>' +
+            (g.cadenceLabel ? ' \u00b7 was posting ' + esc(g.cadenceLabel) : '')
+          : 'Posting ' + esc(g.cadenceLabel || 'now and then') +
+            ' \u00b7 last ' + g.lastUpload.daysAgo + 'd ago')
+      : 'No videos found on it';
+
+    return '<section id="dk-chan">' + head +
+      '<div class="dk-chan-title">' + esc(g.title || g.handle) +
+        (g.url ? ' <a class="dk-chan-link" href="' + esc(g.url) +
+          '" target="_blank" rel="noopener noreferrer">open</a>' : '') + '</div>' +
+      '<div class="dk-chan-stats">' + bits.join('<span class="dk-sep">\u00b7</span>') + '</div>' +
+      '<div class="dk-chan-line">' + line + '</div>' +
+      (g.lastUpload ? '<div class="dk-src">newest: \u201c' +
+        esc(g.lastUpload.title) + '\u201d</div>' : '') +
+      (sheet.channel.questions.length
+        ? '<div class="dk-k dk-chan-qk">Worth asking</div>' +
+          sheet.channel.questions.map(function (q) {
+            return '<div class="dk-cq">' + esc(q.text) +
+              '<div class="dk-src">from ' + esc(q.from) + '</div></div>';
+          }).join('')
+        : '') +
+      refresh + '</section>';
+  }
+
   function briefHtml() {
     if (!sheet) return '<div class="dk-note">Could not build a brief for that contact.</div>';
     var out = [];
@@ -326,7 +448,15 @@
        sourced half carries provenance on every line. A rep who cannot tell
        "she said her budget is 20k" from "ask about budget" will eventually say
        the second as though it were the first, to the person who would know. */
-    var onRecord = sheet.sourced.filter(function (x) { return x.label !== 'Outstanding'; });
+    var CHANNEL_LABELS = {'Their channel': 1, 'Last posted': 1, 'Posting': 1};
+    var onRecord = sheet.sourced.filter(function (x) {
+      if (x.label === 'Outstanding') return false;
+      /* Shown already, bigger, in the channel block -- but left in `sourced`
+         because deskScript reads it for the spoken brief, where there is no
+         block to look at. */
+      if (sheet.channel && CHANNEL_LABELS[x.label]) return false;
+      return true;
+    });
     if (onRecord.length) {
       out.push('<section><div class="dk-k">On record</div>' +
         onRecord.map(function (x) {
@@ -552,6 +682,7 @@
       return;
     }
     if (t.id === 'dk-res-clear') { research = null; render(); return; }
+    if (t.id === 'dk-chan-refresh') { loadChannel(cid, true); return; }
     if (t.id === 'dk-make') {
       var box = document.getElementById('dk-recap');
       var text = box ? box.value.trim() : '';
@@ -586,6 +717,9 @@
          next brief. */
       research = null;
       proposal = null;
+      /* channels is keyed by contact and deliberately NOT cleared: the next
+         render reads the new contact's entry, and coming back to this one
+         costs nothing. */
       render();
     }
   });
